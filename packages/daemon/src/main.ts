@@ -38,15 +38,21 @@ function parseStartFlags(argv: string[]): StartFlags {
     const arg = argv[i];
     if (arg === '--no-open') flags.open = false;
     else if (arg === '--foreground') flags.foreground = true;
-    else if (arg === '--port') {
-      const value = Number(argv[++i]);
-      if (!Number.isInteger(value) || value < 1 || value > 65535) fail(`invalid --port value`);
-      flags.port = value;
-    } else fail(`unknown flag: ${arg}`);
+    else if (arg === '--port') flags.port = parsePort(argv[++i], '--port');
+    else fail(`unknown flag: ${arg}`);
   }
-  if (process.env.APM_PORT && flags.port === DEFAULT_PORT)
-    flags.port = Number(process.env.APM_PORT);
+  if (process.env.APM_PORT && flags.port === DEFAULT_PORT) {
+    flags.port = parsePort(process.env.APM_PORT, 'APM_PORT');
+  }
   return flags;
+}
+
+function parsePort(raw: string | undefined, sourceName: string): number {
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < 1 || value > 65535) {
+    fail(`invalid ${sourceName} value: ${raw ?? '(missing)'}`);
+  }
+  return value;
 }
 
 export function fail(message: string): never {
