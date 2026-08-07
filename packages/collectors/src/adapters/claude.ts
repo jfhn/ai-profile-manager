@@ -248,7 +248,24 @@ function fromRateLimits(
     ]),
     nowMs,
   );
-  const windows = [fiveHour, weekly].filter((window): window is UsageWindow => Boolean(window));
+  const fable = makeQuotaWindow(
+    'fable_weekly',
+    'Fable 5 weekly',
+    firstWindowValue(root, [
+      'seven_day_fable',
+      'sevenDayFable',
+      'fable_weekly',
+      'fableWeekly',
+      'seven_day_scoped',
+      'scoped_weekly',
+      'scopedWeekly',
+      'fable',
+    ]),
+    nowMs,
+  );
+  const windows = [fiveHour, weekly, fable].filter(
+    (window): window is UsageWindow => Boolean(window),
+  );
   const updatedMs = Date.parse(updatedAt ?? '');
   const stale =
     Number.isFinite(updatedMs) && nowMs - updatedMs > STALE_MS && !hasFutureReset(windows, nowMs);
@@ -312,7 +329,9 @@ function appendFable(
   _nowMs: number,
 ): CollectResult {
   if (!fable || (result.failureKind === 'auth' && !result.windows.length)) return result;
-  const windows = [...result.windows.filter((window) => window.id !== fable.id), fable];
+  // The scoped-weekly cache is a fallback: per-profile OAuth data wins when present.
+  if (result.windows.some((window) => window.id === fable.id)) return result;
+  const windows = [...result.windows, fable];
   if (result.windows.length)
     return { ...result, windows, source: `${result.source}; Fable scoped weekly cache` };
   return {

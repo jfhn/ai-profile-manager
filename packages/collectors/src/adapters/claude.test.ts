@@ -110,6 +110,65 @@ describe('claude adapter', () => {
     expect(rejected.windows).toEqual([]);
   });
 
+  it('parses a Fable scoped weekly window from the OAuth payload for non-default profiles', async () => {
+    const { home, cache, global } = setup();
+    writeJson(path.join(home, '.credentials.json'), {
+      claudeAiOauth: { accessToken: 'secret', expiresAt: '2025-01-11T00:00:00Z' },
+    });
+    const result = await claudeAdapter.collectUsage({
+      home,
+      defaultHome: path.join(home, 'different'),
+      cacheDir: cache,
+      globalCacheDir: global,
+      allowNetwork: true,
+      now,
+      fetchImpl: async () =>
+        new Response(
+          JSON.stringify({
+            rate_limits: {
+              primary: { used_percent: 25, reset_at: '2025-01-10T01:00:00Z' },
+              secondary: { used_percent: 60, reset_at: '2025-01-15T00:00:00Z' },
+              seven_day_fable: { used_percent: 40, reset_at: '2025-01-16T00:00:00Z' },
+            },
+          }),
+          { status: 200 },
+        ),
+    });
+    expect(result.cacheStatus).toBe('live');
+    expect(result.windows).toEqual([
+      expect.objectContaining({ id: 'five_hour' }),
+      expect.objectContaining({ id: 'weekly' }),
+      expect.objectContaining({ id: 'fable_weekly', label: 'Fable 5 weekly', usedPercent: 40 }),
+    ]);
+  });
+
+  it('prefers per-profile Fable data over the scoped weekly cache on the default home', async () => {
+    const { home, cache, global } = setup();
+    writeJson(path.join(global, 'claude-rate-limits.json'), {
+      updatedAt: '2025-01-09T23:55:00Z',
+      rate_limits: {
+        primary: { used_percent: 25, reset_at: '2025-01-10T01:00:00Z' },
+        seven_day_fable: { used_percent: 40, reset_at: '2025-01-16T00:00:00Z' },
+      },
+    });
+    const fableFile = path.join(global, 'claude-scoped-weekly.json');
+    writeJson(fableFile, { model: 'fable', percent: 10, resets_at: '2025-01-16T00:00:00Z' });
+    fs.utimesSync(fableFile, now / 1000, now / 1000);
+    const result = await claudeAdapter.collectUsage({
+      home,
+      defaultHome: home,
+      cacheDir: cache,
+      globalCacheDir: global,
+      allowNetwork: false,
+      now,
+    });
+    expect(result.windows).toEqual([
+      expect.objectContaining({ id: 'five_hour' }),
+      expect.objectContaining({ id: 'fable_weekly', usedPercent: 40 }),
+    ]);
+    expect(result.source).not.toContain('Fable scoped weekly cache');
+  });
+
   it('uses OAuth, blanks stale cache after auth failure, and cools down after timeout', async () => {
     const { home, cache, global } = setup();
     writeJson(path.join(home, '.credentials.json'), {
