@@ -1,0 +1,100 @@
+import { describe, expect, it } from 'vitest';
+import type { Profile } from '@apm/shared';
+import { CliError, parseRunArgv, resolveProfile } from './parse.js';
+
+function makeProfile(overrides: Partial<Profile> = {}): Profile {
+  return {
+    id: 'claude-work',
+    provider: 'claude',
+    label: 'work',
+    home: '/tmp/home',
+    homeKind: 'external',
+    identity: null,
+    status: 'active',
+    statusReason: null,
+    enabled: true,
+    createdAt: '2026-01-01T00:00:00.000Z',
+    ...overrides,
+  };
+}
+
+describe('parseRunArgv', () => {
+  it('takes both positionals and passes the rest verbatim', () => {
+    expect(parseRunArgv(['work', 'claude'])).toEqual({ profile: 'work', app: 'claude', args: [] });
+    expect(parseRunArgv(['work', 'claude', '--resume', '-p', 'hi'])).toEqual({
+      profile: 'work',
+      app: 'claude',
+      args: ['--resume', '-p', 'hi'],
+    });
+  });
+
+  it('accepts `--` after the profile and after the app', () => {
+    expect(parseRunArgv(['work', '--', 'claude', '--resume'])).toEqual({
+      profile: 'work',
+      app: 'claude',
+      args: ['--resume'],
+    });
+    expect(parseRunArgv(['work', 'claude', '--', '--resume'])).toEqual({
+      profile: 'work',
+      app: 'claude',
+      args: ['--resume'],
+    });
+    expect(parseRunArgv(['work', '--', 'claude', '--', '--resume'])).toEqual({
+      profile: 'work',
+      app: 'claude',
+      args: ['--resume'],
+    });
+  });
+
+  it('leaves any further `--` to the app', () => {
+    expect(parseRunArgv(['work', 'bash', '--', '-c', '--', 'echo hi']).args).toEqual([
+      '-c',
+      '--',
+      'echo hi',
+    ]);
+  });
+
+  it('requires both positionals', () => {
+    expect(() => parseRunArgv([])).toThrow(CliError);
+    expect(() => parseRunArgv(['work'])).toThrow(/requires <app>/);
+    expect(() => parseRunArgv(['work', '--'])).toThrow(/requires <app>/);
+  });
+
+  it('rejects flags in positional slots unless escaped', () => {
+    expect(() => parseRunArgv(['--port', '1', 'claude'])).toThrow(/unknown flag: --port/);
+    expect(() => parseRunArgv(['work', '--resume'])).toThrow(/unknown flag: --resume/);
+    expect(parseRunArgv(['work', '--', '--weird-app']).app).toBe('--weird-app');
+  });
+});
+
+describe('resolveProfile', () => {
+  const profiles = [
+    makeProfile(),
+    makeProfile({ id: 'codex-work', provider: 'codex' }),
+    makeProfile({ id: 'claude-personal', label: 'personal' }),
+  ];
+
+  it('scopes known provider apps to their provider', () => {
+    expect(resolveProfile(profiles, 'work', 'claude').id).toBe('claude-work');
+    expect(resolveProfile(profiles, 'work', 'codex').id).toBe('codex-work');
+  });
+
+  it('matches across providers for arbitrary apps when unambiguous', () => {
+    expect(resolveProfile(profiles, 'personal', 'bash').id).toBe('claude-personal');
+  });
+
+  it('refuses to guess when a label exists for several providers', () => {
+    expect(() => resolveProfile(profiles, 'work', 'bash')).toThrow(/ambiguous/);
+    expect(() => resolveProfile(profiles, 'work', 'bash')).toThrow(/claude, codex/);
+  });
+
+  it('accepts a profile id and is case-insensitive on labels', () => {
+    expect(resolveProfile(profiles, 'codex-work', 'bash').id).toBe('codex-work');
+    expect(resolveProfile(profiles, 'PERSONAL', 'bash').id).toBe('claude-personal');
+  });
+
+  it('lists the known profiles when nothing matches', () => {
+    expect(() => resolveProfile(profiles, 'nope', 'claude')).toThrow(/no profile named "nope"/);
+    expect(() => resolveProfile(profiles, 'nope', 'claude')).toThrow(/personal, work/);
+  });
+});
