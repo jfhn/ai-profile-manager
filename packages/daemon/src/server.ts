@@ -6,6 +6,7 @@ import fastifyStatic from '@fastify/static';
 import type { ApiError, OverviewResponse, StatusResponse } from '@apm/shared';
 import { ensureDirs, removeRunFile, writeRunFile, type DaemonConfig } from './config.js';
 import { ApiFailure, type AppContext } from './context.js';
+import { originAllowed } from './security.js';
 import { createEventBus } from './core/events.js';
 import { createProfileService } from './core/profiles.js';
 import { createUsageService } from './core/usage.js';
@@ -21,29 +22,6 @@ export interface DaemonHandle {
   url: string;
   app: FastifyInstance;
   close(): Promise<void>;
-}
-
-function isLocalOrigin(origin: string): boolean {
-  try {
-    const url = new URL(origin);
-    return (
-      (url.protocol === 'http:' || url.protocol === 'https:') &&
-      (url.hostname === '127.0.0.1' || url.hostname === 'localhost' || url.hostname === '::1')
-    );
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Origin gate for browser-initiated requests. Non-browser clients (no Origin
- * header) pass; browsers must come from a localhost origin. This blocks
- * cross-site requests from arbitrary websites even though we also require the
- * bearer token.
- */
-export function originAllowed(origin: string | undefined): boolean {
-  if (origin === undefined || origin === 'null') return origin === undefined;
-  return isLocalOrigin(origin);
 }
 
 function findWebDist(): string | null {
