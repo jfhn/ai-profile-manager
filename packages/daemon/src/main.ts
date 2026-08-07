@@ -44,7 +44,8 @@ function parseStartFlags(argv: string[]): StartFlags {
       flags.port = value;
     } else fail(`unknown flag: ${arg}`);
   }
-  if (process.env.APM_PORT && flags.port === DEFAULT_PORT) flags.port = Number(process.env.APM_PORT);
+  if (process.env.APM_PORT && flags.port === DEFAULT_PORT)
+    flags.port = Number(process.env.APM_PORT);
   return flags;
 }
 
@@ -54,10 +55,14 @@ export function fail(message: string): never {
 }
 
 function openBrowser(url: string): void {
-  const child = spawn('sh', ['-c', `xdg-open "$1" 2>/dev/null || wslview "$1" 2>/dev/null`, '_', url], {
-    detached: true,
-    stdio: 'ignore',
-  });
+  const child = spawn(
+    'sh',
+    ['-c', `xdg-open "$1" 2>/dev/null || wslview "$1" 2>/dev/null`, '_', url],
+    {
+      detached: true,
+      stdio: 'ignore',
+    },
+  );
   child.unref();
 }
 

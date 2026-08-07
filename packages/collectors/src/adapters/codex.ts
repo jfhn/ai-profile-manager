@@ -24,7 +24,8 @@ export const codexAdapter: ProviderAdapter = {
     usageSources: ['local-files'],
     identity: true,
     windows: ['weekly'],
-    notes: 'Usage is read from bounded session rate_limit events; the five-hour limit is temporarily hidden during OpenAI rollout.',
+    notes:
+      'Usage is read from bounded session rate_limit events; the five-hour limit is temporarily hidden during OpenAI rollout.',
   },
   hasCredentials: (home) => isRecord(readJsonSync(path.join(home, 'auth.json'))),
   detectIdentity: (home) => codexIdentity(readJsonSync(path.join(home, 'auth.json'))),
@@ -42,7 +43,9 @@ async function collectCodexUsage(ctx: CollectContext): Promise<CollectResult> {
       newestFirst: true,
       maxFiles: 512,
     });
-    const entries = await Promise.all(files.map(async (file) => ({ file, stat: await statOrNull(file) })));
+    const entries = await Promise.all(
+      files.map(async (file) => ({ file, stat: await statOrNull(file) })),
+    );
     const recent = entries
       .filter((entry) => entry.stat && Number(entry.stat.mtimeMs) >= nowMs - CODEX_SCAN_AGE_MS)
       .sort((a, b) => Number(b.stat?.mtimeMs ?? 0) - Number(a.stat?.mtimeMs ?? 0))
@@ -66,9 +69,26 @@ async function collectCodexUsage(ctx: CollectContext): Promise<CollectResult> {
       }
       return unavailable();
     }
-    const primary = makeQuotaWindow('five_hour', '5h', latest.rateLimits.primary, nowMs);
-    const secondary = makeQuotaWindow('weekly', '7d', latest.rateLimits.secondary, nowMs);
-    const windows = [SHOW_CODEX_FIVE_HOUR ? primary : null, secondary].filter((window): window is UsageWindow => Boolean(window));
+    // Newer Codex builds put the weekly limit in `primary` (window_minutes
+    // 10080) with `secondary: null`, so windows are classified by their
+    // window_minutes, falling back to the historical positional meaning.
+    const primary = makeQuotaWindow(
+      ...classifyCodexWindow(latest.rateLimits.primary, 'five_hour', '5h'),
+      latest.rateLimits.primary,
+      nowMs,
+    );
+    const secondary = makeQuotaWindow(
+      ...classifyCodexWindow(latest.rateLimits.secondary, 'weekly', '7d'),
+      latest.rateLimits.secondary,
+      nowMs,
+    );
+    const seen = new Set<string>();
+    const windows = [primary, secondary].filter((window): window is UsageWindow => {
+      if (!window || seen.has(window.id)) return false;
+      if (!SHOW_CODEX_FIVE_HOUR && window.id === 'five_hour') return false;
+      seen.add(window.id);
+      return true;
+    });
     if (!windows.length) {
       return unavailable();
     }
@@ -79,7 +99,9 @@ async function collectCodexUsage(ctx: CollectContext): Promise<CollectResult> {
       cacheStatus: stale ? 'stale-cache' : 'live',
       dataUpdatedAt: latest.timestamp,
       stale,
-      staleReason: stale ? 'Codex quota data is older than 24 hours and has no active reset window' : null,
+      staleReason: stale
+        ? 'Codex quota data is older than 24 hours and has no active reset window'
+        : null,
       failureKind: null,
       error: null,
       planType: readString(latest.rateLimits.plan_type),
@@ -111,18 +133,46 @@ export function latestCodexRateLimitsFromJsonl(text: string | null): LatestRateL
   return latest;
 }
 
+/** Window identity from window_minutes; positional fallback when absent. */
+function classifyCodexWindow(
+  input: unknown,
+  fallbackId: string,
+  fallbackLabel: string,
+): [string, string] {
+  const minutes = isRecord(input) ? Number(input.window_minutes) : NaN;
+  if (!Number.isFinite(minutes) || minutes <= 0) return [fallbackId, fallbackLabel];
+  if (minutes >= 40_000) return ['monthly', '30d'];
+  if (minutes >= 9_000) return ['weekly', '7d'];
+  return ['five_hour', '5h'];
+}
+
 function unavailable(): CollectResult {
   return {
-    windows: [], source: 'codex session rate_limits', cacheStatus: 'live', dataUpdatedAt: null,
-    stale: false, staleReason: 'Codex rate limits appear after Codex records a token_count event',
-    failureKind: null, error: null, planType: null, retryAfterSeconds: null,
+    windows: [],
+    source: 'codex session rate_limits',
+    cacheStatus: 'live',
+    dataUpdatedAt: null,
+    stale: false,
+    staleReason: 'Codex rate limits appear after Codex records a token_count event',
+    failureKind: null,
+    error: null,
+    planType: null,
+    retryAfterSeconds: null,
   };
 }
 
 function failed(reason: string): CollectResult {
   return {
-    windows: [], source: 'codex session rate_limits', cacheStatus: 'error', dataUpdatedAt: null,
-    stale: true, staleReason: reason, failureKind: 'error', error: safeReason(reason), planType: null, retryAfterSeconds: null,
+    windows: [],
+    source: 'codex session rate_limits',
+    cacheStatus: 'error',
+    dataUpdatedAt: null,
+    stale: true,
+    staleReason: reason,
+    failureKind: 'error',
+    error: safeReason(reason),
+    planType: null,
+    retryAfterSeconds: null,
   };
 }
 
@@ -131,11 +181,19 @@ function codexIdentity(value: unknown): ProviderIdentity | null {
   const tokens = isRecord(value.tokens) ? value.tokens : value;
   const claims = jwtClaims(readString(tokens.id_token));
   if (!claims) return null;
-  const auth = isRecord(claims['https://api.openai.com/auth']) ? claims['https://api.openai.com/auth'] : claims;
+  const auth = isRecord(claims['https://api.openai.com/auth'])
+    ? claims['https://api.openai.com/auth']
+    : claims;
   return {
     account: readString(claims.email) ?? readString(auth.email),
-    organization: readString(auth.organization) ?? readString(auth.organization_name) ?? readString(claims.organization),
-    plan: readString(auth.chatgpt_plan_type) ?? readString(claims.chatgpt_plan_type) ?? readString(auth.plan_type),
+    organization:
+      readString(auth.organization) ??
+      readString(auth.organization_name) ??
+      readString(claims.organization),
+    plan:
+      readString(auth.chatgpt_plan_type) ??
+      readString(claims.chatgpt_plan_type) ??
+      readString(auth.plan_type),
   };
 }
 
@@ -144,7 +202,9 @@ function jwtClaims(token: string | null): Record<string, unknown> | null {
   try {
     const part = token.split('.')[1];
     if (!part) return null;
-    const decoded = Buffer.from(part.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8');
+    const decoded = Buffer.from(part.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString(
+      'utf8',
+    );
     const claims: unknown = JSON.parse(decoded);
     return isRecord(claims) ? claims : null;
   } catch {

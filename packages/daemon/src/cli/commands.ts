@@ -61,8 +61,8 @@ export async function runCommand(argv: string[]): Promise<void> {
     app: invocation.app,
     args: invocation.args,
     cwd: process.cwd(),
-    cols: process.stdout.columns ?? 80,
-    rows: process.stdout.rows ?? 24,
+    cols: terminalSize().cols,
+    rows: terminalSize().rows,
   });
 
   await attachSession(run, session);
@@ -176,8 +176,8 @@ async function attachSession(run: RunFileData, session: TerminalSession): Promis
   const onResize = (): void => {
     send({
       type: 'resize',
-      cols: process.stdout.columns ?? session.cols,
-      rows: process.stdout.rows ?? session.rows,
+      cols: positiveOr(process.stdout.columns, session.cols),
+      rows: positiveOr(process.stdout.rows, session.rows),
     });
   };
 
@@ -298,7 +298,12 @@ async function daemonOrStart(): Promise<RunFileData> {
   fail(`daemon did not come up within ${DAEMON_START_TIMEOUT_MS / 1000}s — see ${logFile}`);
 }
 
-async function api<T>(run: RunFileData, method: string, endpoint: string, body?: unknown): Promise<T> {
+async function api<T>(
+  run: RunFileData,
+  method: string,
+  endpoint: string,
+  body?: unknown,
+): Promise<T> {
   let response: Response;
   try {
     response = await fetch(`http://${run.host}:${run.port}${endpoint}`, {
@@ -331,6 +336,18 @@ async function api<T>(run: RunFileData, method: string, endpoint: string, body?:
 }
 
 // ------------------------------------------------------------------ output --
+
+/** Terminal size with sane fallbacks — non-TTY stdio reports 0 or undefined. */
+function terminalSize(): { cols: number; rows: number } {
+  return {
+    cols: positiveOr(process.stdout.columns, 80),
+    rows: positiveOr(process.stdout.rows, 24),
+  };
+}
+
+function positiveOr(value: number | undefined, fallback: number): number {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 2 ? value : fallback;
+}
 
 function printTable(headers: string[], rows: string[][]): void {
   const widths = headers.map((header, column) =>

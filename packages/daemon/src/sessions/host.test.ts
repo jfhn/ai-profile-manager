@@ -103,7 +103,11 @@ describe('session host', () => {
   it('names sessions per app+profile with an increasing counter', async () => {
     const host = makeHost([makeProfile({ label: 'Work Account' })]);
     const first = await host.create({ profileId: 'profile-1', app: 'sh', args: ['-c', 'sleep 5'] });
-    const second = await host.create({ profileId: 'profile-1', app: 'sh', args: ['-c', 'sleep 5'] });
+    const second = await host.create({
+      profileId: 'profile-1',
+      app: 'sh',
+      args: ['-c', 'sleep 5'],
+    });
     expect(first.name).toBe('sh-work-account-1');
     expect(second.name).toBe('sh-work-account-2');
   });
@@ -176,7 +180,11 @@ describe('session host', () => {
     const host = createSessionHost(config, bus, fakeProfiles([makeProfile()]));
     hosts.push(host);
 
-    const session = await host.create({ profileId: 'profile-1', app: 'sh', args: ['-c', 'exit 0'] });
+    const session = await host.create({
+      profileId: 'profile-1',
+      app: 'sh',
+      args: ['-c', 'exit 0'],
+    });
     expect(events.filter((event) => event.type === 'sessions-changed')).toHaveLength(1);
 
     await waitFor(() => host.streams(session.id)?.session().status === 'exited');

@@ -240,7 +240,11 @@ export function createSessionHost(
     dispose(id) {
       const entry = requireRecord(id);
       if (entry.session.status !== 'exited') {
-        throw new ApiFailure(400, 'session-running', `Session ${entry.session.name} is still running`);
+        throw new ApiFailure(
+          400,
+          'session-running',
+          `Session ${entry.session.name} is still running`,
+        );
       }
       sessions.delete(id);
       changed();
@@ -334,7 +338,9 @@ function readRecentDirs(file: string): string[] {
   try {
     const parsed = JSON.parse(fs.readFileSync(file, 'utf8')) as { dirs?: unknown };
     if (!Array.isArray(parsed.dirs)) return [];
-    return parsed.dirs.filter((dir): dir is string => typeof dir === 'string').slice(0, RECENT_DIRS_LIMIT);
+    return parsed.dirs
+      .filter((dir): dir is string => typeof dir === 'string')
+      .slice(0, RECENT_DIRS_LIMIT);
   } catch {
     return [];
   }

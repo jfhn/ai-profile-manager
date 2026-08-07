@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { clampPercent, failureKind, makeQuotaWindow, normalizeTimestamp, safeReason } from './normalize.js';
+import {
+  clampPercent,
+  failureKind,
+  makeQuotaWindow,
+  normalizeTimestamp,
+  safeReason,
+} from './normalize.js';
 
 describe('normalize helpers', () => {
   it('normalizes Unix seconds and millisecond timestamps', () => {
@@ -10,7 +16,12 @@ describe('normalize helpers', () => {
 
   it('clamps usage and treats a past reset as a fresh window', () => {
     const now = Date.parse('2025-01-02T00:00:00Z');
-    const window = makeQuotaWindow('weekly', '7d', { used_percent: 140, reset_at: '2025-01-01T00:00:00Z' }, now);
+    const window = makeQuotaWindow(
+      'weekly',
+      '7d',
+      { used_percent: 140, reset_at: '2025-01-01T00:00:00Z' },
+      now,
+    );
     expect(clampPercent(-1)).toBe(0);
     expect(window).toMatchObject({ usedPercent: 0, remainingPercent: 100, resetAt: null });
   });

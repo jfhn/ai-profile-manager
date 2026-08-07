@@ -13,16 +13,25 @@ export interface WalkFilesOptions {
 }
 
 /** Read a provider-owned text file without loading an unbounded payload. */
-export async function readTextBounded(file: string, maxBytes = 4 * 1024 * 1024): Promise<BoundedText | null> {
+export async function readTextBounded(
+  file: string,
+  maxBytes = 4 * 1024 * 1024,
+): Promise<BoundedText | null> {
   return readWindow(file, maxBytes, false);
 }
 
 /** Read the trailing section of an append-only provider-owned file. */
-export async function readTailBounded(file: string, maxBytes = 4 * 1024 * 1024): Promise<BoundedText | null> {
+export async function readTailBounded(
+  file: string,
+  maxBytes = 4 * 1024 * 1024,
+): Promise<BoundedText | null> {
   return readWindow(file, maxBytes, true);
 }
 
-export async function readJsonBounded(file: string, maxBytes = 4 * 1024 * 1024): Promise<unknown | null> {
+export async function readJsonBounded(
+  file: string,
+  maxBytes = 4 * 1024 * 1024,
+): Promise<unknown | null> {
   const text = await readTextBounded(file, maxBytes);
   if (!text || text.truncated || !text.text) {
     return null;
@@ -35,7 +44,10 @@ export async function readJsonBounded(file: string, maxBytes = 4 * 1024 * 1024):
 }
 
 /** Bounded depth-first walk. Descending names keep timestamped session trees recent-first. */
-export async function walkFilesBounded(root: string, options: WalkFilesOptions = {}): Promise<string[]> {
+export async function walkFilesBounded(
+  root: string,
+  options: WalkFilesOptions = {},
+): Promise<string[]> {
   const accept = options.accept ?? (() => true);
   const maxFiles = positiveInt(options.maxFiles, 5_000);
   const files: string[] = [];
@@ -48,7 +60,9 @@ export async function walkFilesBounded(root: string, options: WalkFilesOptions =
     if (!entries) {
       return;
     }
-    entries.sort((a, b) => options.newestFirst ? b.name.localeCompare(a.name) : a.name.localeCompare(b.name));
+    entries.sort((a, b) =>
+      options.newestFirst ? b.name.localeCompare(a.name) : a.name.localeCompare(b.name),
+    );
     for (const entry of entries.slice(0, 10_000)) {
       if (files.length >= maxFiles) {
         return;
@@ -66,11 +80,17 @@ export async function walkFilesBounded(root: string, options: WalkFilesOptions =
   return files;
 }
 
-export async function statOrNull(file: string): Promise<Awaited<ReturnType<typeof fs.stat>> | null> {
+export async function statOrNull(
+  file: string,
+): Promise<Awaited<ReturnType<typeof fs.stat>> | null> {
   return fs.stat(file).catch(() => null);
 }
 
-async function readWindow(file: string, maxBytes: number, tail: boolean): Promise<BoundedText | null> {
+async function readWindow(
+  file: string,
+  maxBytes: number,
+  tail: boolean,
+): Promise<BoundedText | null> {
   let handle: Awaited<ReturnType<typeof fs.open>> | null = null;
   try {
     handle = await fs.open(file, 'r');
@@ -92,5 +112,7 @@ async function readWindow(file: string, maxBytes: number, tail: boolean): Promis
 }
 
 function positiveInt(value: number | undefined, fallback: number): number {
-  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.floor(value) : fallback;
+  return typeof value === 'number' && Number.isFinite(value) && value > 0
+    ? Math.floor(value)
+    : fallback;
 }

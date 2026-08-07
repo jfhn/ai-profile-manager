@@ -31,7 +31,9 @@ export function parseRunArgv(argv: string[]): RunInvocation {
   const profile = rest.shift();
   if (profile === undefined) throw new CliError(`run requires <profile> and <app>\n${RUN_USAGE}`);
   if (profile.startsWith('-')) {
-    throw new CliError(`unknown flag: ${profile} (apm flags go before the positionals)\n${RUN_USAGE}`);
+    throw new CliError(
+      `unknown flag: ${profile} (apm flags go before the positionals)\n${RUN_USAGE}`,
+    );
   }
 
   let escaped = false;

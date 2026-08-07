@@ -133,11 +133,7 @@ export function createT3Manager(
         );
       }
       if (profile.status !== 'active' || !profile.enabled) {
-        throw new ApiFailure(
-          409,
-          'profile-not-active',
-          `Profile ${profile.label} is not active`,
-        );
+        throw new ApiFailure(409, 'profile-not-active', `Profile ${profile.label} is not active`);
       }
       Object.assign(env, profiles.envFor(profile.id));
     }
@@ -216,7 +212,11 @@ export function createT3Manager(
     async start(id: string): Promise<T3Instance> {
       const instance = mustGet(id);
       if (instance.status === 'running' || instance.status === 'starting') {
-        throw new ApiFailure(409, 'already-running', `${instance.label} is already ${instance.status}`);
+        throw new ApiFailure(
+          409,
+          'already-running',
+          `${instance.label} is already ${instance.status}`,
+        );
       }
 
       const profileEnv = validateProfiles(instance.profiles);
@@ -295,7 +295,11 @@ export function createT3Manager(
     async remove(id: string): Promise<void> {
       const instance = mustGet(id);
       if (instance.status !== 'stopped') {
-        throw new ApiFailure(400, 'instance-not-stopped', `Stop ${instance.label} before removing it`);
+        throw new ApiFailure(
+          400,
+          'instance-not-stopped',
+          `Stop ${instance.label} before removing it`,
+        );
       }
       instances.delete(id);
       try {

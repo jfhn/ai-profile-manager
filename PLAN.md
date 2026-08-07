@@ -214,7 +214,7 @@ Add a T3 adapter or small upstreamable change that exposes the selected profile 
   1. Create a fresh profile home and register it as pending.
   2. Show the exact login command to run in a normal terminal, per provider:
      `CODEX_HOME=<home> codex login`; for Claude, `CLAUDE_CONFIG_DIR=<home>
-     claude` — a fresh home triggers the login flow on first start.
+claude` — a fresh home triggers the login flow on first start.
   3. Wait for the login: lightweight polling while the wizard is open and/or an
      explicit "I'm done" button. If no credentials are found on "I'm done",
      say so and keep waiting.
@@ -250,7 +250,7 @@ Add a T3 adapter or small upstreamable change that exposes the selected profile 
 ### Phase 4 — T3 integration
 
 - Multi-instance T3 is **validated** (2026-08-07): `t3 serve --port <p>
-  --base-dir <dir>` runs concurrently with another instance; separate base
+--base-dir <dir>` runs concurrently with another instance; separate base
   dirs are required because `~/.t3` (server-runtime.json, provider caches)
   assumes a single runtime. Launch recipe:
   `CLAUDE_CONFIG_DIR=<home> CODEX_HOME=<home> t3 serve --port <p> --base-dir <t3 home>`.

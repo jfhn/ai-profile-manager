@@ -38,11 +38,14 @@ export interface RunFileData {
 
 export const DEFAULT_PORT = 4747;
 
-export function resolveConfig(overrides: Partial<Pick<DaemonConfig, 'dataDir' | 'port'>> = {}): DaemonConfig {
+export function resolveConfig(
+  overrides: Partial<Pick<DaemonConfig, 'dataDir' | 'port'>> = {},
+): DaemonConfig {
   const home = os.homedir();
   const xdgData = process.env.XDG_DATA_HOME || path.join(home, '.local', 'share');
   const dataDir = overrides.dataDir || process.env.APM_DATA_DIR || path.join(xdgData, 'apm');
-  const port = overrides.port ?? (process.env.APM_PORT ? Number(process.env.APM_PORT) : DEFAULT_PORT);
+  const port =
+    overrides.port ?? (process.env.APM_PORT ? Number(process.env.APM_PORT) : DEFAULT_PORT);
   const runDir = path.join(dataDir, 'run');
 
   return {

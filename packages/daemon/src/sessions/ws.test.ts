@@ -75,7 +75,9 @@ describe('terminal websocket', () => {
   });
 
   function connect(sessionId: string, query = `token=${TOKEN}`, headers?: Record<string, string>) {
-    const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/terminal/${sessionId}?${query}`, { headers });
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/terminal/${sessionId}?${query}`, {
+      headers,
+    });
     const messages: TerminalServerMessage[] = [];
     ws.on('message', (raw) => messages.push(JSON.parse(raw.toString()) as TerminalServerMessage));
     return { ws, messages };

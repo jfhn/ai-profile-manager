@@ -17,26 +17,71 @@ function home(): string {
 function writeSession(homeDir: string, timestamp: string, limits: unknown): void {
   const file = path.join(homeDir, 'sessions', '2025', '01', 'x.jsonl');
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, `partial\n${JSON.stringify({ timestamp, payload: { rate_limits: limits } })}\n`);
+  fs.writeFileSync(
+    file,
+    `partial\n${JSON.stringify({ timestamp, payload: { rate_limits: limits } })}\n`,
+  );
   fs.utimesSync(file, now / 1000, now / 1000);
 }
 
 describe('codex adapter', () => {
   it('uses the newest parseable record and emits only weekly during rollout', async () => {
     const dir = home();
-    writeSession(dir, '2025-01-09T23:00:00Z', { primary: { used_percent: 20 }, secondary: { used_percent: 40, reset_at: '2025-01-12T00:00:00Z' }, plan_type: 'plus' });
-    const result = await codexAdapter.collectUsage({ home: dir, cacheDir: path.join(dir, 'cache'), allowNetwork: false, now });
+    writeSession(dir, '2025-01-09T23:00:00Z', {
+      primary: { used_percent: 20 },
+      secondary: { used_percent: 40, reset_at: '2025-01-12T00:00:00Z' },
+      plan_type: 'plus',
+    });
+    const result = await codexAdapter.collectUsage({
+      home: dir,
+      cacheDir: path.join(dir, 'cache'),
+      allowNetwork: false,
+      now,
+    });
     expect(result.windows).toEqual([expect.objectContaining({ id: 'weekly', usedPercent: 40 })]);
     expect(result.planType).toBe('plus');
     expect(result.cacheStatus).toBe('live');
   });
 
+  it('classifies the 2026 format where primary carries the weekly window', async () => {
+    const dir = home();
+    writeSession(dir, '2025-01-09T23:00:00Z', {
+      limit_id: 'codex',
+      primary: { used_percent: 3, window_minutes: 10080, resets_at: 1736726400 },
+      secondary: null,
+      plan_type: 'plus',
+    });
+    const result = await codexAdapter.collectUsage({
+      home: dir,
+      cacheDir: path.join(dir, 'cache'),
+      allowNetwork: false,
+      now,
+    });
+    expect(result.windows).toEqual([
+      expect.objectContaining({ id: 'weekly', label: '7d', usedPercent: 3, remainingPercent: 97 }),
+    ]);
+    expect(result.windows[0]?.resetAt).toBe(new Date(1736726400 * 1000).toISOString());
+  });
+
   it('marks old records without future resets stale and handles absent data', async () => {
     const dir = home();
-    writeSession(dir, '2025-01-01T00:00:00Z', { primary: { used_percent: 20 }, secondary: { used_percent: 40 } });
-    const stale = await codexAdapter.collectUsage({ home: dir, cacheDir: path.join(dir, 'cache'), allowNetwork: false, now });
+    writeSession(dir, '2025-01-01T00:00:00Z', {
+      primary: { used_percent: 20 },
+      secondary: { used_percent: 40 },
+    });
+    const stale = await codexAdapter.collectUsage({
+      home: dir,
+      cacheDir: path.join(dir, 'cache'),
+      allowNetwork: false,
+      now,
+    });
     expect(stale).toMatchObject({ cacheStatus: 'stale-cache', stale: true });
-    const absent = await codexAdapter.collectUsage({ home: path.join(dir, 'missing'), cacheDir: path.join(dir, 'cache'), allowNetwork: false, now });
+    const absent = await codexAdapter.collectUsage({
+      home: path.join(dir, 'missing'),
+      cacheDir: path.join(dir, 'cache'),
+      allowNetwork: false,
+      now,
+    });
     expect(absent).toMatchObject({ windows: [], cacheStatus: 'live', stale: false, error: null });
   });
 });

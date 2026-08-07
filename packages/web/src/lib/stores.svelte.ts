@@ -149,7 +149,9 @@ export function connectEvents(): void {
   stream.onopen = () => {
     app.connection = 'live';
     backoff = 1000;
-    if (hadConnection) void refreshAll();
+    // Always resync: any event emitted between the initial overview fetch and
+    // this stream opening (e.g. our own terminal attaching) was lost.
+    void refreshAll();
     hadConnection = true;
   };
 

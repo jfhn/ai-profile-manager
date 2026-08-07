@@ -26,14 +26,12 @@ export function registerT3Routes(app: FastifyInstance, ctx: AppContext): void {
     return instance;
   });
 
-  app.post<{ Params: { id: string } }>(
-    '/api/t3/:id/start',
-    async (req): Promise<T3Instance> => ctx.t3.start(req.params.id),
+  app.post<{ Params: { id: string } }>('/api/t3/:id/start', async (req): Promise<T3Instance> =>
+    ctx.t3.start(req.params.id),
   );
 
-  app.post<{ Params: { id: string } }>(
-    '/api/t3/:id/stop',
-    async (req): Promise<T3Instance> => ctx.t3.stop(req.params.id),
+  app.post<{ Params: { id: string } }>('/api/t3/:id/stop', async (req): Promise<T3Instance> =>
+    ctx.t3.stop(req.params.id),
   );
 
   app.delete<{ Params: { id: string } }>('/api/t3/:id', async (req, reply) => {
@@ -44,6 +42,8 @@ export function registerT3Routes(app: FastifyInstance, ctx: AppContext): void {
 
 function formatIssues(error: z.ZodError): string {
   return error.issues
-    .map((issue) => (issue.path.length ? `${issue.path.join('.')}: ${issue.message}` : issue.message))
+    .map((issue) =>
+      issue.path.length ? `${issue.path.join('.')}: ${issue.message}` : issue.message,
+    )
     .join('; ');
 }

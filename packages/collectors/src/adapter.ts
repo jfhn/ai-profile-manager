@@ -1,9 +1,4 @@
-import type {
-  AdapterCapabilities,
-  CollectResult,
-  ProviderId,
-  ProviderIdentity,
-} from '@apm/shared';
+import type { AdapterCapabilities, CollectResult, ProviderId, ProviderIdentity } from '@apm/shared';
 
 /** Everything an adapter may use for one collection run. */
 export interface CollectContext {

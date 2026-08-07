@@ -126,7 +126,9 @@ export async function startDaemon(config: DaemonConfig): Promise<DaemonHandle> {
   // ---- static web app -----------------------------------------------------
   const webDist = findWebDist();
   if (webDist) {
-    await app.register(fastifyStatic, { root: webDist, wildcard: false });
+    // wildcard:true resolves files from disk per request — a rebuilt web
+    // bundle (new asset hashes) must not require a daemon restart.
+    await app.register(fastifyStatic, { root: webDist, wildcard: true });
     app.setNotFoundHandler((req, reply) => {
       if (req.url.startsWith('/api') || req.url.startsWith('/ws')) {
         return reply.code(404).send(err('not-found', 'No such endpoint'));

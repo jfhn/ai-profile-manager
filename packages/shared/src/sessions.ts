@@ -28,8 +28,7 @@ export interface TerminalSession {
 
 /** Client -> server messages on the terminal WebSocket (JSON text frames). */
 export type TerminalClientMessage =
-  | { type: 'input'; data: string }
-  | { type: 'resize'; cols: number; rows: number };
+  { type: 'input'; data: string } | { type: 'resize'; cols: number; rows: number };
 
 /**
  * Server -> client messages. After the socket opens the server first sends

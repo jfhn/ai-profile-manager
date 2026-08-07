@@ -6,7 +6,12 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { Profile, ServerEvent } from '@apm/shared';
 import { resolveConfig, type DaemonConfig } from '../config.js';
 import { ApiFailure, type EventBus, type ProfileService, type T3Manager } from '../context.js';
-import { createT3Manager, findFreePort, type T3ManagerDeps, type T3SpawnRequest } from './manager.js';
+import {
+  createT3Manager,
+  findFreePort,
+  type T3ManagerDeps,
+  type T3SpawnRequest,
+} from './manager.js';
 
 function makeProfile(overrides: Partial<Profile> = {}): Profile {
   return {
@@ -118,7 +123,9 @@ describe('t3 manager', () => {
 
   it('rejects instances bound to unknown, mismatched or inactive profiles', async () => {
     const { manager } = harness([makeProfile({ status: 'pending', id: 'pending-1' })]);
-    await expect(manager.create({ label: 'a', profiles: { claude: 'nope' } })).rejects.toMatchObject({
+    await expect(
+      manager.create({ label: 'a', profiles: { claude: 'nope' } }),
+    ).rejects.toMatchObject({
       statusCode: 404,
     });
     await expect(

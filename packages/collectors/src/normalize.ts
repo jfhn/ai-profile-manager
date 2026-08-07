@@ -25,7 +25,10 @@ export function firstValue(record: Record<string, unknown>, keys: readonly strin
   return null;
 }
 
-export function firstNumber(record: Record<string, unknown>, keys: readonly string[]): number | null {
+export function firstNumber(
+  record: Record<string, unknown>,
+  keys: readonly string[],
+): number | null {
   for (const key of keys) {
     const value = toNumber(record[key]);
     if (value !== null) {
@@ -44,7 +47,10 @@ export function safeReason(value: unknown): string {
     .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, '[redacted credential]')
     .replace(/WorkosCursorSessionToken=([^;\s]+)/gi, 'WorkosCursorSessionToken=[redacted]')
     .replace(/auth=([^;\s]+)/gi, 'auth=[redacted]')
-    .replace(/(accessToken|refreshToken|authCookie|Authorization|Cookie)["':=\s]+[^,\s}]+/gi, 'credential=[redacted]')
+    .replace(
+      /(accessToken|refreshToken|authCookie|Authorization|Cookie)["':=\s]+[^,\s}]+/gi,
+      'credential=[redacted]',
+    )
     .replace(/\s+/g, ' ')
     .trim()
     .slice(0, 180);
@@ -54,27 +60,64 @@ export function normalizeTimestamp(value: unknown): string | null {
   if (value === null || value === undefined || value === '') {
     return null;
   }
-  const numeric = typeof value === 'number'
-    ? value
-    : typeof value === 'string' && /^\d+$/.test(value) ? Number(value) : null;
-  const parsed = numeric === null ? Date.parse(String(value)) : numeric > 100_000_000_000 ? numeric : numeric * 1000;
+  const numeric =
+    typeof value === 'number'
+      ? value
+      : typeof value === 'string' && /^\d+$/.test(value)
+        ? Number(value)
+        : null;
+  const parsed =
+    numeric === null
+      ? Date.parse(String(value))
+      : numeric > 100_000_000_000
+        ? numeric
+        : numeric * 1000;
   const date = new Date(parsed);
   return Number.isFinite(date.valueOf()) ? date.toISOString() : null;
 }
 
-export function normalizeQuotaWindow(input: unknown, nowMs: number): Omit<UsageWindow, 'id' | 'label'> | null {
+export function normalizeQuotaWindow(
+  input: unknown,
+  nowMs: number,
+): Omit<UsageWindow, 'id' | 'label'> | null {
   if (!isRecord(input)) {
     return null;
   }
-  let usedPercent = firstNumber(input, ['used_percent', 'used_percentage', 'usedPercent', 'usagePercent', 'utilization', 'percent_used', 'used']);
-  let remainingPercent = firstNumber(input, ['remaining_percent', 'remaining_percentage', 'remainingPercent', 'percentRemaining', 'percent_remaining', 'remaining']);
+  let usedPercent = firstNumber(input, [
+    'used_percent',
+    'used_percentage',
+    'usedPercent',
+    'usagePercent',
+    'utilization',
+    'percent_used',
+    'used',
+  ]);
+  let remainingPercent = firstNumber(input, [
+    'remaining_percent',
+    'remaining_percentage',
+    'remainingPercent',
+    'percentRemaining',
+    'percent_remaining',
+    'remaining',
+  ]);
   if (remainingPercent === null && usedPercent !== null) {
     remainingPercent = 100 - usedPercent;
   }
   if (usedPercent === null && remainingPercent !== null) {
     usedPercent = 100 - remainingPercent;
   }
-  const resetAt = normalizeTimestamp(firstValue(input, ['reset_at', 'resetAt', 'resets_at', 'resetsAt', 'resetTimeIso', 'reset_time_iso', 'window_reset_at', 'next_reset_at']));
+  const resetAt = normalizeTimestamp(
+    firstValue(input, [
+      'reset_at',
+      'resetAt',
+      'resets_at',
+      'resetsAt',
+      'resetTimeIso',
+      'reset_time_iso',
+      'window_reset_at',
+      'next_reset_at',
+    ]),
+  );
   const resetMs = Date.parse(resetAt ?? '');
   if (Number.isFinite(resetMs) && resetMs <= nowMs && remainingPercent !== null) {
     usedPercent = 0;
@@ -87,7 +130,12 @@ export function normalizeQuotaWindow(input: unknown, nowMs: number): Omit<UsageW
   };
 }
 
-export function makeQuotaWindow(id: string, label: string, input: unknown, nowMs: number): UsageWindow | null {
+export function makeQuotaWindow(
+  id: string,
+  label: string,
+  input: unknown,
+  nowMs: number,
+): UsageWindow | null {
   const normalized = normalizeQuotaWindow(input, nowMs);
   return normalized && normalized.remainingPercent !== null ? { id, label, ...normalized } : null;
 }
@@ -96,7 +144,9 @@ export function rateLimitRoot(data: unknown): unknown {
   if (!isRecord(data)) {
     return null;
   }
-  return data.rate_limits ?? data.rateLimits ?? data.usage ?? data.oauth_usage ?? data.oauthUsage ?? data;
+  return (
+    data.rate_limits ?? data.rateLimits ?? data.usage ?? data.oauth_usage ?? data.oauthUsage ?? data
+  );
 }
 
 export function firstWindowValue(root: unknown, keys: readonly string[]): unknown {
@@ -118,11 +168,20 @@ export function hasFutureReset(windows: readonly UsageWindow[], nowMs: number): 
   });
 }
 
-export function failureKind(reason: string | null | undefined): 'auth' | 'timeout' | 'rate-limited' | 'error' | null {
+export function failureKind(
+  reason: string | null | undefined,
+): 'auth' | 'timeout' | 'rate-limited' | 'error' | null {
   const text = (reason ?? '').toLowerCase();
   if (!text) return null;
   if (text.includes('timeout') || text.includes('timed out')) return 'timeout';
   if (text.includes('429') || text.includes('rate')) return 'rate-limited';
-  if (text.includes('credential') || text.includes('token') || text.includes('unauthorized') || text.includes('401') || text.includes('403')) return 'auth';
+  if (
+    text.includes('credential') ||
+    text.includes('token') ||
+    text.includes('unauthorized') ||
+    text.includes('401') ||
+    text.includes('403')
+  )
+    return 'auth';
   return 'error';
 }

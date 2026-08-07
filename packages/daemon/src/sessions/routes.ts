@@ -64,6 +64,8 @@ function parse<S extends z.ZodTypeAny>(schema: S, body: unknown): z.infer<S> {
 
 function formatIssues(error: z.ZodError): string {
   return error.issues
-    .map((issue) => (issue.path.length ? `${issue.path.join('.')}: ${issue.message}` : issue.message))
+    .map((issue) =>
+      issue.path.length ? `${issue.path.join('.')}: ${issue.message}` : issue.message,
+    )
     .join('; ');
 }
