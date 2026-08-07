@@ -92,15 +92,16 @@ export async function startDaemon(config: DaemonConfig): Promise<DaemonHandle> {
     }
   });
 
-  app.setErrorHandler((error, _req, reply) => {
+  app.setErrorHandler((error: unknown, _req, reply) => {
     if (error instanceof ApiFailure) {
       return reply.code(error.statusCode).send(err(error.code, error.message));
     }
-    if ('validation' in error && error.validation) {
-      return reply.code(400).send(err('bad-request', error.message));
+    const anyError = error as { validation?: unknown; message?: string };
+    if (anyError.validation) {
+      return reply.code(400).send(err('bad-request', anyError.message ?? 'Invalid request'));
     }
     // Never leak internals; message only.
-    return reply.code(500).send(err('internal', error.message || 'Internal error'));
+    return reply.code(500).send(err('internal', anyError.message || 'Internal error'));
   });
 
   // ---- built-in routes ----------------------------------------------------
