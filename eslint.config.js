@@ -12,6 +12,9 @@ export default tseslint.config(
     languageOptions: {
       parserOptions: { parser: tseslint.parser },
     },
+    // Browser globals in .svelte files; typescript-eslint only disables
+    // no-undef for *.ts, and TypeScript itself already checks undefined names.
+    rules: { 'no-undef': 'off' },
   },
   {
     rules: {
