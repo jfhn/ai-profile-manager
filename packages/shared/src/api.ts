@@ -90,6 +90,16 @@ export interface ConfirmWizardRequest {
   label: string;
 }
 
+/** GET /api/sessions */
+export interface SessionsResponse {
+  sessions: TerminalSession[];
+}
+
+/** GET /api/t3 */
+export interface T3ListResponse {
+  instances: T3Instance[];
+}
+
 /** POST /api/sessions */
 export interface CreateSessionRequest {
   profileId: string;

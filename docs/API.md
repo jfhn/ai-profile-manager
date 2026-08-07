@@ -30,12 +30,12 @@ Type definitions for every payload live in `packages/shared/src/api.ts`.
 | POST | `/api/wizard` | Start prepare-login flow (`StartWizardRequest`) |
 | GET | `/api/wizard/:profileId` | Wizard state: login command, credentials found, identity |
 | POST | `/api/wizard/:profileId/confirm` | Name + activate the pending profile |
-| GET | `/api/sessions` | List terminal sessions |
+| GET | `/api/sessions` | List terminal sessions (`SessionsResponse`) |
 | POST | `/api/sessions` | Spawn a PTY session (`CreateSessionRequest`) |
 | POST | `/api/sessions/:id/resize` | Resize (`{cols, rows}`) |
 | DELETE | `/api/sessions/:id` | Kill (running) or dispose (exited) |
 | GET | `/api/recent-dirs` | Recent working directories for the cwd picker |
-| GET | `/api/t3` | List managed T3 instances |
+| GET | `/api/t3` | List managed T3 instances (`T3ListResponse`) |
 | POST | `/api/t3` | Create instance (`CreateT3InstanceRequest`) |
 | POST | `/api/t3/:id/start` | Start instance |
 | POST | `/api/t3/:id/stop` | Stop instance |
