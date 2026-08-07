@@ -1,7 +1,393 @@
-// STUB — implemented by the daemon-core module.
+import crypto from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
+import { adapters as defaultAdapters, type ProviderAdapter } from '@apm/collectors';
+import {
+  profileStoreFileSchema,
+  type CreateProfileRequest,
+  type Profile,
+  type ProviderId,
+  type ProviderIdentity,
+  type UpdateProfileRequest,
+  type WizardStateResponse,
+} from '@apm/shared';
 import type { DaemonConfig } from '../config.js';
-import type { EventBus, ProfileService } from '../context.js';
+import { ApiFailure, type EventBus, type ProfileService } from '../context.js';
 
-export function createProfileService(_config: DaemonConfig, _events: EventBus): ProfileService {
-  throw new Error('not implemented');
+export type AdapterRegistry = Readonly<Record<ProviderId, ProviderAdapter>>;
+
+interface ProfileStoreFile {
+  version: 1;
+  profiles: Profile[];
+}
+
+export function createProfileService(
+  config: DaemonConfig,
+  events: EventBus,
+  adapterRegistry: AdapterRegistry = defaultAdapters,
+): ProfileService {
+  let profiles = loadStore(config.profilesFile);
+
+  function persist(): void {
+    writeStore(config.profilesFile, { version: 1, profiles });
+  }
+
+  function adapterFor(provider: ProviderId): ProviderAdapter {
+    const adapter = adapterRegistry[provider];
+    if (!adapter) {
+      throw new ApiFailure(400, 'bad-request', `Unsupported provider: ${provider}`);
+    }
+    return adapter;
+  }
+
+  function findProfile(id: string): Profile {
+    const profile = profiles.find((candidate) => candidate.id === id);
+    if (!profile) throw new ApiFailure(404, 'not-found', 'Profile not found');
+    return profile;
+  }
+
+  function assertUniqueLabel(provider: ProviderId, label: string, exceptId?: string): void {
+    const normalized = label.toLocaleLowerCase();
+    if (
+      profiles.some(
+        (profile) =>
+          profile.id !== exceptId &&
+          profile.provider === provider &&
+          profile.label.toLocaleLowerCase() === normalized,
+      )
+    ) {
+      throw new ApiFailure(409, 'label-taken', `Label "${label}" is already in use`);
+    }
+  }
+
+  function uniqueLabel(provider: ProviderId, base: string, separator = '-'): string {
+    if (!labelExists(provider, base)) return base;
+    let suffix = 2;
+    while (labelExists(provider, `${base}${separator}${suffix}`)) suffix += 1;
+    return `${base}${separator}${suffix}`;
+  }
+
+  function labelExists(provider: ProviderId, label: string): boolean {
+    const normalized = label.toLocaleLowerCase();
+    return profiles.some(
+      (profile) =>
+        profile.provider === provider && profile.label.toLocaleLowerCase() === normalized,
+    );
+  }
+
+  function wizardResponse(profile: Profile): WizardStateResponse {
+    const adapter = adapterFor(profile.provider);
+    const credentialsFound = safelyHasCredentials(adapter, profile.home);
+    const identity = credentialsFound ? safelyDetectIdentity(adapter, profile.home) : null;
+    return {
+      profile,
+      loginCommand: adapter.loginCommand(profile.home),
+      credentialsFound,
+      identity,
+      suggestedLabel: suggestedLabel(profile.provider, identity),
+    };
+  }
+
+  function suggestedLabel(provider: ProviderId, identity: ProviderIdentity | null): string {
+    const account = identity?.account;
+    if (account) {
+      const at = account.indexOf('@');
+      if (at > 0) return account.slice(0, at);
+    }
+    let suffix = 1;
+    while (labelExists(provider, `${provider}-${suffix}`)) suffix += 1;
+    return `${provider}-${suffix}`;
+  }
+
+  return {
+    list() {
+      return [...profiles].sort(
+        (left, right) =>
+          left.provider.localeCompare(right.provider) || left.label.localeCompare(right.label),
+      );
+    },
+
+    get(id) {
+      return profiles.find((profile) => profile.id === id) ?? null;
+    },
+
+    providers() {
+      return Object.values(adapterRegistry)
+        .map((adapter) => ({
+          id: adapter.provider,
+          label: adapter.displayName,
+          capabilities: adapter.capabilities,
+        }))
+        .sort((left, right) => left.id.localeCompare(right.id));
+    },
+
+    async create(req: CreateProfileRequest) {
+      const label = validLabel(req.label);
+      assertUniqueLabel(req.provider, label);
+      const home = existingDirectory(req.home);
+      if (
+        profiles.some(
+          (profile) => profile.provider === req.provider && samePath(profile.home, home),
+        )
+      ) {
+        throw new ApiFailure(409, 'home-taken', 'This provider home is already in use');
+      }
+
+      const adapter = adapterFor(req.provider);
+      const hasCredentials = safelyHasCredentials(adapter, home);
+      const profile: Profile = {
+        id: crypto.randomUUID(),
+        provider: req.provider,
+        label,
+        home,
+        homeKind: isChildPath(config.homesDir, home) ? 'managed' : 'external',
+        identity: safelyDetectIdentity(adapter, home),
+        status: hasCredentials ? 'active' : 'error',
+        statusReason: hasCredentials ? null : 'no credentials found',
+        enabled: true,
+        createdAt: new Date().toISOString(),
+      };
+      profiles = [...profiles, profile];
+      persist();
+      events.emit({ type: 'profiles-changed' });
+      return profile;
+    },
+
+    update(id: string, req: UpdateProfileRequest) {
+      const current = findProfile(id);
+      const label = req.label === undefined ? undefined : validLabel(req.label);
+      if (label !== undefined) assertUniqueLabel(current.provider, label, id);
+      const updated: Profile = {
+        ...current,
+        ...(label !== undefined ? { label } : {}),
+        ...(req.enabled !== undefined ? { enabled: req.enabled } : {}),
+      };
+      profiles = profiles.map((profile) => (profile.id === id ? updated : profile));
+      persist();
+      events.emit({ type: 'profiles-changed' });
+      return updated;
+    },
+
+    async remove(id: string, purge: boolean) {
+      const profile = findProfile(id);
+      if (purge && profile.homeKind !== 'managed') {
+        throw new ApiFailure(400, 'external-home', 'External profile homes cannot be purged');
+      }
+      if (purge) {
+        if (!isChildPath(config.homesDir, profile.home)) {
+          throw new ApiFailure(
+            400,
+            'unsafe-home',
+            'Managed profile home is outside the homes directory',
+          );
+        }
+        fs.rmSync(profile.home, { recursive: true, force: true });
+      }
+      const cachePath = safeChildPath(config.cacheDir, profile.id);
+      if (cachePath) fs.rmSync(cachePath, { recursive: true, force: true });
+      profiles = profiles.filter((candidate) => candidate.id !== id);
+      persist();
+      events.emit({ type: 'profiles-changed' });
+    },
+
+    async discovery() {
+      const candidates = [];
+      for (const adapter of Object.values(adapterRegistry)) {
+        let home: string;
+        try {
+          home = existingDirectory(adapter.defaultHome());
+        } catch {
+          continue;
+        }
+        if (
+          profiles.some(
+            (profile) => profile.provider === adapter.provider && samePath(profile.home, home),
+          )
+        ) {
+          continue;
+        }
+        const hasCredentials = safelyHasCredentials(adapter, home);
+        candidates.push({
+          provider: adapter.provider,
+          home,
+          isDefault: true,
+          hasCredentials,
+          identity: safelyDetectIdentity(adapter, home),
+        });
+      }
+      return candidates;
+    },
+
+    async startWizard(provider: ProviderId) {
+      const adapter = adapterFor(provider);
+      const id = crypto.randomUUID();
+      const home = path.join(config.homesDir, id);
+      fs.mkdirSync(config.homesDir, { recursive: true, mode: 0o700 });
+      fs.mkdirSync(home, { recursive: false, mode: 0o700 });
+      const profile: Profile = {
+        id,
+        provider,
+        label: uniqueLabel(provider, `new-${provider}`),
+        home,
+        homeKind: 'managed',
+        identity: null,
+        status: 'pending',
+        statusReason: null,
+        enabled: true,
+        createdAt: new Date().toISOString(),
+      };
+      profiles = [...profiles, profile];
+      try {
+        persist();
+      } catch (error) {
+        profiles = profiles.filter((candidate) => candidate.id !== id);
+        fs.rmSync(home, { recursive: true, force: true });
+        throw error;
+      }
+      events.emit({ type: 'profiles-changed' });
+      return {
+        profile,
+        loginCommand: adapter.loginCommand(home),
+        credentialsFound: false,
+        identity: null,
+        suggestedLabel: '',
+      };
+    },
+
+    async wizardState(profileId: string) {
+      const profile = findProfile(profileId);
+      if (profile.status !== 'pending') {
+        throw new ApiFailure(409, 'not-pending', 'Profile is not pending login');
+      }
+      return wizardResponse(profile);
+    },
+
+    async confirmWizard(profileId: string, requestedLabel: string) {
+      const profile = findProfile(profileId);
+      if (profile.status !== 'pending') {
+        throw new ApiFailure(409, 'not-pending', 'Profile is not pending login');
+      }
+      const adapter = adapterFor(profile.provider);
+      if (!safelyHasCredentials(adapter, profile.home)) {
+        throw new ApiFailure(409, 'no-credentials', 'No credentials found');
+      }
+      const label = validLabel(requestedLabel);
+      assertUniqueLabel(profile.provider, label, profile.id);
+      const updated: Profile = {
+        ...profile,
+        label,
+        identity: safelyDetectIdentity(adapter, profile.home),
+        status: 'active',
+        statusReason: null,
+      };
+      profiles = profiles.map((candidate) => (candidate.id === profileId ? updated : candidate));
+      persist();
+      events.emit({ type: 'profiles-changed' });
+      return updated;
+    },
+
+    envFor(profileId: string) {
+      const profile = findProfile(profileId);
+      return adapterFor(profile.provider).env(profile.home);
+    },
+  };
+}
+
+function loadStore(file: string): Profile[] {
+  if (!fs.existsSync(file)) return [];
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`Invalid profile store at ${file}: ${message}`);
+  }
+  const result = profileStoreFileSchema.safeParse(parsed);
+  if (!result.success) {
+    const issues = result.error.issues.map((issue) => issue.message).join('; ');
+    throw new Error(`Invalid profile store at ${file}: ${issues}`);
+  }
+  return result.data.profiles;
+}
+
+function writeStore(file: string, store: ProfileStoreFile): void {
+  const directory = path.dirname(file);
+  fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+  const temporary = path.join(directory, `.${path.basename(file)}.${crypto.randomUUID()}.tmp`);
+  try {
+    fs.writeFileSync(temporary, `${JSON.stringify(store, null, 2)}\n`, { mode: 0o600 });
+    fs.renameSync(temporary, file);
+  } catch (error) {
+    try {
+      fs.unlinkSync(temporary);
+    } catch {
+      // The temporary file may not have been created.
+    }
+    throw error;
+  }
+}
+
+function existingDirectory(input: string): string {
+  const resolved = path.resolve(input);
+  let stat: fs.Stats;
+  try {
+    stat = fs.statSync(resolved);
+  } catch {
+    throw new ApiFailure(400, 'invalid-home', 'Profile home must be an existing directory');
+  }
+  if (!stat.isDirectory()) {
+    throw new ApiFailure(400, 'invalid-home', 'Profile home must be an existing directory');
+  }
+  return fs.realpathSync(resolved);
+}
+
+function samePath(left: string, right: string): boolean {
+  return canonicalPath(left) === canonicalPath(right);
+}
+
+function canonicalPath(value: string): string {
+  try {
+    return fs.realpathSync(path.resolve(value));
+  } catch {
+    return path.resolve(value);
+  }
+}
+
+function isChildPath(parent: string, candidate: string): boolean {
+  const relative = path.relative(path.resolve(parent), path.resolve(candidate));
+  return (
+    relative !== '' &&
+    relative !== '..' &&
+    !relative.startsWith(`..${path.sep}`) &&
+    !path.isAbsolute(relative)
+  );
+}
+
+function safeChildPath(parent: string, child: string): string | null {
+  const candidate = path.resolve(parent, child);
+  return isChildPath(parent, candidate) ? candidate : null;
+}
+
+function validLabel(input: string): string {
+  const label = input.trim();
+  if (label.length === 0 || label.length > 64) {
+    throw new ApiFailure(400, 'bad-request', 'Label must contain between 1 and 64 characters');
+  }
+  return label;
+}
+
+function safelyHasCredentials(adapter: ProviderAdapter, home: string): boolean {
+  try {
+    return adapter.hasCredentials(home);
+  } catch {
+    return false;
+  }
+}
+
+function safelyDetectIdentity(adapter: ProviderAdapter, home: string): ProviderIdentity | null {
+  try {
+    return adapter.detectIdentity(home);
+  } catch {
+    return null;
+  }
 }
