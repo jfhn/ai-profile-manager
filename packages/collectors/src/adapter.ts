@@ -21,6 +21,12 @@ export interface CollectContext {
    * discovery mode). Network fetches are opt-in per call.
    */
   allowNetwork: boolean;
+  /** Injectable fetch implementation for deterministic, network-free tests. */
+  fetchImpl?: typeof fetch;
+  /** Override the global statusline cache directory (tests only). */
+  globalCacheDir?: string;
+  /** Override the provider's default home when testing global-cache attribution. */
+  defaultHome?: string;
 }
 
 /**
