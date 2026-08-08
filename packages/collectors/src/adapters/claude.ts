@@ -152,37 +152,49 @@ async function collectClaudeUsage(ctx: CollectContext): Promise<CollectResult> {
     const reason = fetched.reason ?? 'Claude OAuth usage endpoint unavailable';
     await writeOauthError(oauthFile, oauthCache, reason, nowMs);
     const kind = failureKind(reason);
-    if (oauthCache.usage) {
-      const fallback = fromRateLimits(
-        oauthCache.usage,
-        oauthCache.updatedAt,
-        'Claude OAuth usage endpoint cache',
-        'stale-cache',
+    const oauthFallback = oauthCache.usage
+      ? fromRateLimits(
+          oauthCache.usage,
+          oauthCache.updatedAt,
+          'Claude OAuth usage endpoint cache',
+          'stale-cache',
+          nowMs,
+        )
+      : null;
+    // Prefer whichever fallback still carries numbers, so a failed refresh
+    // never blanks usage the user can already see. An auth failure is the
+    // exception: those cached OAuth numbers belong to a session the endpoint
+    // just rejected, so they stay hidden and only the statusline may show.
+    if (oauthFallback?.windows.length && kind !== 'auth') {
+      return appendFable(
+        {
+          ...oauthFallback,
+          stale: true,
+          staleReason: reason,
+          failureKind: kind,
+          error: safeReason(reason),
+        },
+        fable,
         nowMs,
       );
-      const result =
-        kind === 'auth'
-          ? {
-              ...fallback,
-              windows: [],
-              source: 'Claude OAuth usage endpoint',
-              stale: true,
-              staleReason: reason,
-              failureKind: kind,
-              error: safeReason(reason),
-            }
-          : {
-              ...fallback,
-              stale: true,
-              staleReason: reason,
-              failureKind: kind,
-              error: safeReason(reason),
-            };
-      return appendFable(result, fable, nowMs);
     }
     if (statusline?.usable) {
       return appendFable(
         { ...asStale(statusline.result, reason), failureKind: kind, error: safeReason(reason) },
+        fable,
+        nowMs,
+      );
+    }
+    if (oauthFallback) {
+      return appendFable(
+        {
+          ...oauthFallback,
+          ...(kind === 'auth' ? { windows: [], source: 'Claude OAuth usage endpoint' } : {}),
+          stale: true,
+          staleReason: reason,
+          failureKind: kind,
+          error: safeReason(reason),
+        },
         fable,
         nowMs,
       );

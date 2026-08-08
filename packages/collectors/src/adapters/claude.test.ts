@@ -328,6 +328,64 @@ describe('claude adapter', () => {
     expect(failedForce.staleReason).toContain('HTTP 500');
   });
 
+  it('keeps statusline windows when a forced fetch fails and the OAuth cache is unusable', async () => {
+    const { home, cache, global } = setup();
+    writeCredentials(home, now - 60_000);
+    writeJson(path.join(global, 'claude-rate-limits.json'), {
+      updatedAt: '2025-01-09T23:59:00Z',
+      rate_limits: { primary: { used_percent: 5, reset_at: '2025-01-10T01:00:00Z' } },
+    });
+    // A 200 response with an unexpected body shape: truthy, but no windows.
+    writeJson(path.join(cache, 'claude-oauth-usage.json'), {
+      updatedAt: '2025-01-09T23:59:00Z',
+      usage: {},
+    });
+
+    const result = await claudeAdapter.collectUsage({
+      home,
+      defaultHome: home,
+      cacheDir: cache,
+      globalCacheDir: global,
+      allowNetwork: true,
+      now,
+      force: true,
+      fetchImpl: async () => new Response('', { status: 500 }),
+    });
+    expect(result.windows).toEqual([expect.objectContaining({ id: 'five_hour', usedPercent: 5 })]);
+    expect(result).toMatchObject({ cacheStatus: 'stale-cache', stale: true });
+    expect(result.staleReason).toContain('HTTP 500');
+    expect(result.error).toContain('HTTP 500');
+  });
+
+  it('shows statusline data instead of rejected OAuth cache on an auth failure', async () => {
+    const { home, cache, global } = setup();
+    writeCredentials(home, now - 60_000);
+    writeJson(path.join(global, 'claude-rate-limits.json'), {
+      updatedAt: '2025-01-09T23:59:00Z',
+      rate_limits: { primary: { used_percent: 5, reset_at: '2025-01-10T01:00:00Z' } },
+    });
+    writeJson(path.join(cache, 'claude-oauth-usage.json'), {
+      updatedAt: '2025-01-09T23:59:00Z',
+      usage: rateLimits(),
+    });
+
+    const result = await claudeAdapter.collectUsage({
+      home,
+      defaultHome: home,
+      cacheDir: cache,
+      globalCacheDir: global,
+      allowNetwork: true,
+      now,
+      force: true,
+      fetchImpl: async () => new Response('', { status: 401 }),
+    });
+    // The rejected session's own cached numbers stay hidden; the statusline
+    // cache describes the same default-home account and is shown stale.
+    expect(result.source).toBe('claude statusLine rate_limits');
+    expect(result.windows).toEqual([expect.objectContaining({ id: 'five_hour', usedPercent: 5 })]);
+    expect(result).toMatchObject({ cacheStatus: 'stale-cache', stale: true, failureKind: 'auth' });
+  });
+
   it('keeps the cooldown when the credentials mtime is in the future', async () => {
     const { home, cache, global } = setup();
     writeCredentials(home, now - 60_000);
