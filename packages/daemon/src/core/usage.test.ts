@@ -125,6 +125,15 @@ describe('usage service', () => {
     await usage.refresh(undefined, { force: true });
 
     expect(collect.mock.calls.map(([ctx]) => ctx?.force)).toEqual([false, true, true]);
+
+    // The scheduler's own runs must stay unforced so cooldowns keep throttling.
+    usage.start();
+    try {
+      await vi.waitFor(() => expect(collect).toHaveBeenCalledTimes(4));
+    } finally {
+      usage.stop();
+    }
+    expect(collect.mock.calls.at(-1)?.[0].force).toBe(false);
   });
 });
 

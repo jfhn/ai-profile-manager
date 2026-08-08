@@ -268,6 +268,96 @@ describe('claude adapter', () => {
     expect(forced.windows.map((window) => window.id)).toEqual(['five_hour', 'weekly']);
   });
 
+  it('ignores fresh caches on a forced refresh and still falls back when the fetch fails', async () => {
+    const { home, cache, global } = setup();
+    writeCredentials(home, now - 60_000);
+    writeJson(path.join(global, 'claude-rate-limits.json'), {
+      updatedAt: '2025-01-09T23:59:00Z',
+      rate_limits: { primary: { used_percent: 5, reset_at: '2025-01-10T01:00:00Z' } },
+    });
+    writeJson(path.join(cache, 'claude-oauth-usage.json'), {
+      updatedAt: '2025-01-09T23:59:00Z',
+      usage: rateLimits(),
+    });
+
+    const cached = await claudeAdapter.collectUsage({
+      home,
+      defaultHome: home,
+      cacheDir: cache,
+      globalCacheDir: global,
+      allowNetwork: true,
+      now,
+      fetchImpl: async () => {
+        throw new Error('should not fetch');
+      },
+    });
+    expect(cached.cacheStatus).toBe('cache');
+    expect(cached.windows).toEqual([expect.objectContaining({ id: 'five_hour', usedPercent: 5 })]);
+
+    const forced = await claudeAdapter.collectUsage({
+      home,
+      defaultHome: home,
+      cacheDir: cache,
+      globalCacheDir: global,
+      allowNetwork: true,
+      now,
+      force: true,
+      fetchImpl: async () =>
+        new Response(
+          JSON.stringify({ rate_limits: { primary: { used_percent: 80, reset_at: null } } }),
+          { status: 200 },
+        ),
+    });
+    expect(forced.cacheStatus).toBe('live');
+    expect(forced.windows).toEqual([expect.objectContaining({ id: 'five_hour', usedPercent: 80 })]);
+
+    const failedForce = await claudeAdapter.collectUsage({
+      home,
+      defaultHome: home,
+      cacheDir: cache,
+      globalCacheDir: global,
+      allowNetwork: true,
+      now: now + 1_000,
+      force: true,
+      fetchImpl: async () => new Response('', { status: 500 }),
+    });
+    expect(failedForce).toMatchObject({ cacheStatus: 'stale-cache', stale: true });
+    expect(failedForce.windows).toEqual([
+      expect.objectContaining({ id: 'five_hour', usedPercent: 80 }),
+    ]);
+    expect(failedForce.staleReason).toContain('HTTP 500');
+  });
+
+  it('keeps the cooldown when the credentials mtime is in the future', async () => {
+    const { home, cache, global } = setup();
+    writeCredentials(home, now - 60_000);
+    const failed = await claudeAdapter.collectUsage({
+      home,
+      defaultHome: home,
+      cacheDir: cache,
+      globalCacheDir: global,
+      allowNetwork: true,
+      now,
+      fetchImpl: async () => new Response('', { status: 500 }),
+    });
+    expect(failed.cacheStatus).toBe('error');
+
+    // Clock skew or a restored backup must not disable the cooldown forever.
+    writeCredentials(home, now + 60 * 60 * 1000);
+    const cooldown = await claudeAdapter.collectUsage({
+      home,
+      defaultHome: home,
+      cacheDir: cache,
+      globalCacheDir: global,
+      allowNetwork: true,
+      now: now + 60_000,
+      fetchImpl: async () => {
+        throw new Error('should not fetch');
+      },
+    });
+    expect(cooldown.cacheStatus).toBe('cooldown');
+  });
+
   it('retries during the cooldown when credentials changed after the error', async () => {
     const { home, cache, global } = setup();
     const credentials = path.join(home, '.credentials.json');

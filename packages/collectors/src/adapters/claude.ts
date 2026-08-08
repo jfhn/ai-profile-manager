@@ -20,6 +20,7 @@ import {
 const CACHE_FRESH_MS = 10 * 60 * 1000;
 const OAUTH_TTL_MS = 5 * 60 * 1000;
 const OAUTH_COOLDOWN_MS = 5 * 60 * 1000;
+const CREDENTIAL_SKEW_MS = 60 * 1000;
 const STALE_MS = 24 * 60 * 60 * 1000;
 const FABLE_MAX_BYTES = 16 * 1024;
 
@@ -64,13 +65,17 @@ async function collectClaudeUsage(ctx: CollectContext): Promise<CollectResult> {
           nowMs,
         )
       : null;
-    if (statusline?.usable && statusline.ageMs <= CACHE_FRESH_MS) {
+    // A user-initiated refresh means "check again now": it skips the fresh
+    // caches and the error cooldown alike. Without network access there is
+    // nothing to skip to, so the caches still win there.
+    const forceFetch = ctx.force === true && ctx.allowNetwork;
+    if (!forceFetch && statusline?.usable && statusline.ageMs <= CACHE_FRESH_MS) {
       return appendFable(statusline.result, fable, nowMs);
     }
 
     const oauthFile = path.join(ctx.cacheDir, 'claude-oauth-usage.json');
     const oauthCache = await readOauthCache(oauthFile, nowMs);
-    if (oauthCache.usage && oauthCache.ageMs <= OAUTH_TTL_MS) {
+    if (!forceFetch && oauthCache.usage && oauthCache.ageMs <= OAUTH_TTL_MS) {
       return appendFable(
         fromRateLimits(
           oauthCache.usage,
@@ -85,8 +90,8 @@ async function collectClaudeUsage(ctx: CollectContext): Promise<CollectResult> {
     }
     if (
       oauthCache.errorAgeMs <= OAUTH_COOLDOWN_MS &&
-      !ctx.force &&
-      !(await credentialsChangedSince(ctx.home, oauthCache.errorAt))
+      !forceFetch &&
+      !(await credentialsChangedSince(ctx.home, oauthCache.errorAt, nowMs))
     ) {
       return appendFable(cooldownResult(oauthCache, nowMs), fable, nowMs);
     }
@@ -379,13 +384,23 @@ async function readOauthCache(file: string, nowMs: number): Promise<OAuthCache> 
 /**
  * True when the profile logged in (or refreshed its token) after the recorded
  * error, which makes the cached failure obsolete and worth retrying at once.
+ *
+ * A future-dated mtime is ignored: clock skew or a restored backup would
+ * otherwise satisfy the comparison on every run and turn the cooldown off
+ * permanently. The tolerance covers ordinary skew between the writer's clock
+ * and ours without opening that loop.
  */
-async function credentialsChangedSince(home: string, errorAt: string | null): Promise<boolean> {
+async function credentialsChangedSince(
+  home: string,
+  errorAt: string | null,
+  nowMs: number,
+): Promise<boolean> {
   const errorMs = Date.parse(errorAt ?? '');
   if (!Number.isFinite(errorMs)) return false;
   const stat = await statOrNull(path.join(home, '.credentials.json'));
   const mtimeMs = Number(stat?.mtimeMs ?? NaN);
-  return Number.isFinite(mtimeMs) && mtimeMs > errorMs;
+  if (!Number.isFinite(mtimeMs)) return false;
+  return mtimeMs > errorMs && mtimeMs <= nowMs + CREDENTIAL_SKEW_MS;
 }
 
 function cooldownResult(cache: OAuthCache, _nowMs: number): CollectResult {
