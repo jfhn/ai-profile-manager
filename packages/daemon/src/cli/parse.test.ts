@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Profile } from '@apm/shared';
-import { CliError, parseRunArgv, resolveProfile } from './parse.js';
+import { CliError, parseCommand, parseRunArgv, resolveProfile } from './parse.js';
 
 function makeProfile(overrides: Partial<Profile> = {}): Profile {
   return {
@@ -96,5 +96,41 @@ describe('resolveProfile', () => {
   it('lists the known profiles when nothing matches', () => {
     expect(() => resolveProfile(profiles, 'nope', 'claude')).toThrow(/no profile named "nope"/);
     expect(() => resolveProfile(profiles, 'nope', 'claude')).toThrow(/personal, work/);
+  });
+});
+
+describe('parseCommand', () => {
+  it('defaults to start for a bare invocation and for leading flags', () => {
+    expect(parseCommand([])).toEqual({ command: 'start', argv: [] });
+    expect(parseCommand(['--no-open'])).toEqual({ command: 'start', argv: ['--no-open'] });
+    expect(parseCommand(['--port', '5000'])).toEqual({
+      command: 'start',
+      argv: ['--port', '5000'],
+    });
+  });
+
+  it('splits the command word off its arguments', () => {
+    expect(parseCommand(['start', '--foreground'])).toEqual({
+      command: 'start',
+      argv: ['--foreground'],
+    });
+    expect(parseCommand(['run', 'work', 'claude'])).toEqual({
+      command: 'run',
+      argv: ['work', 'claude'],
+    });
+    expect(parseCommand(['url'])).toEqual({ command: 'url', argv: [] });
+    expect(parseCommand(['status'])).toEqual({ command: 'status', argv: [] });
+  });
+
+  it('keeps help flags as commands rather than start flags', () => {
+    expect(parseCommand(['-h']).command).toBe('-h');
+    expect(parseCommand(['--help']).command).toBe('--help');
+    expect(parseCommand(['help']).command).toBe('help');
+  });
+
+  it('rejects unknown commands with the usage text', () => {
+    expect(() => parseCommand(['nope'])).toThrow(CliError);
+    expect(() => parseCommand(['nope'])).toThrow(/unknown command: nope/);
+    expect(() => parseCommand(['nope'])).toThrow(/apm url/);
   });
 });

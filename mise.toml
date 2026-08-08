@@ -1,0 +1,30 @@
+# Optional convenience: mise pins the toolchain this repo is developed against
+# and wraps the same scripts as the pnpm ones. Nothing here is needed at
+# runtime — once the launcher is installed, `apm` runs without mise.
+#
+#   mise install        # get node + pnpm at the pinned versions
+#   mise run install    # same as `pnpm install:cli`
+
+[tools]
+node = "24"
+pnpm = "11.3.0"
+
+[tasks.install]
+description = "Install dependencies, build everything, put `apm` on PATH"
+run = "sh scripts/install-cli.sh"
+
+[tasks.uninstall]
+description = "Remove the installed apm launcher"
+run = "sh scripts/install-cli.sh --uninstall"
+
+[tasks.smoke]
+description = "End-to-end check of the installed apm command"
+run = "sh scripts/smoke-cli.sh"
+
+[tasks.build]
+description = "Build all workspace packages"
+run = "pnpm build"
+
+[tasks.dev]
+description = "Daemon on :4747 plus the Vite dev server on :5173"
+run = "pnpm dev"
