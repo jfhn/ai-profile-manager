@@ -11,6 +11,50 @@ import type { Profile, ProviderId } from '@apm/shared';
 /** An error meant for the user, printed as `apm: <message>`. */
 export class CliError extends Error {}
 
+export const USAGE =
+  `usage: apm [start|run|attach|sessions|status|url|stop]\n` +
+  `  apm [start] [--port N] [--no-open] [--foreground]   start or reuse the daemon, open the UI\n` +
+  `  apm url                                             print the authenticated URL, open nothing\n` +
+  `  apm run <profile> <app> [args...]                   run an app bound to a profile\n` +
+  `  apm attach <session>                                attach to a running session\n` +
+  `  apm sessions | status | stop`;
+
+/** Everything `main` dispatches on; `__daemon` is the internal detached start. */
+const COMMANDS = new Set([
+  'start',
+  '__daemon',
+  'run',
+  'attach',
+  'sessions',
+  'status',
+  'url',
+  'stop',
+  'help',
+  '--help',
+  '-h',
+]);
+
+export interface CommandInvocation {
+  command: string;
+  /** Arguments for the command, with the command word removed. */
+  argv: string[];
+}
+
+/**
+ * Split `process.argv` into a command and its arguments. `start` is the
+ * default, so a bare `apm` and a leading flag (`apm --no-open`) both mean
+ * "start or reuse the daemon".
+ */
+export function parseCommand(argv: string[]): CommandInvocation {
+  const first = argv[0];
+  const isHelpFlag = first === '-h' || first === '--help';
+  if (first === undefined || (first.startsWith('-') && !isHelpFlag)) {
+    return { command: 'start', argv };
+  }
+  if (!COMMANDS.has(first)) throw new CliError(`unknown command: ${first}\n${USAGE}`);
+  return { command: first, argv: argv.slice(1) };
+}
+
 export interface RunInvocation {
   profile: string;
   app: string;

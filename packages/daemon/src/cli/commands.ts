@@ -119,6 +119,16 @@ export async function statusCommand(_argv: string[]): Promise<void> {
   console.log(`  started:  ${status.startedAt}`);
 }
 
+/**
+ * Print the authenticated dashboard URL and nothing else, so it can be piped
+ * (`xdg-open "$(apm url)"`). This is the deliberate counterpart to `apm status`,
+ * which keeps the token out of its output.
+ */
+export async function urlCommand(_argv: string[]): Promise<void> {
+  const run = await daemonOrStart();
+  console.log(run.url);
+}
+
 export async function stopCommand(_argv: string[]): Promise<void> {
   const run = readLiveRunFile(resolveConfig());
   if (!run) {

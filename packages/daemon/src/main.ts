@@ -3,6 +3,7 @@
  * apm — AI profile manager CLI.
  *
  *   apm [start] [--port N] [--no-open] [--foreground]   start or reuse the daemon, open the UI
+ *   apm url                                             print the authenticated URL, open nothing
  *   apm run <profile> <app> [args...]                   run an app bound to a profile
  *   apm attach <session>                                attach to a running session
  *   apm sessions                                        list sessions
@@ -24,7 +25,9 @@ import {
   sessionsCommand,
   statusCommand,
   stopCommand,
+  urlCommand,
 } from './cli/commands.js';
+import { parseCommand, USAGE } from './cli/parse.js';
 
 interface StartFlags {
   port: number;
@@ -123,34 +126,28 @@ async function daemonMain(argv: string[]): Promise<void> {
 }
 
 async function main(): Promise<void> {
-  const [command = 'start', ...rest] = process.argv.slice(2);
+  const { command, argv } = parseCommand(process.argv.slice(2));
   switch (command) {
     case 'start':
-      return startCommand(rest);
+      return startCommand(argv);
     case '__daemon':
-      return daemonMain(rest);
+      return daemonMain(argv);
     case 'run':
-      return runCommand(rest);
+      return runCommand(argv);
     case 'attach':
-      return attachCommand(rest);
+      return attachCommand(argv);
     case 'sessions':
-      return sessionsCommand(rest);
+      return sessionsCommand(argv);
     case 'status':
-      return statusCommand(rest);
+      return statusCommand(argv);
+    case 'url':
+      return urlCommand(argv);
     case 'stop':
-      return stopCommand(rest);
-    case '--help':
-    case '-h':
-    case 'help':
-      console.log(
-        `usage: apm [start|run|attach|sessions|status|stop]\n` +
-          `  apm start [--port N] [--no-open] [--foreground]\n` +
-          `  apm run <profile> <app> [args...]\n` +
-          `  apm attach <session>\n`,
-      );
-      return;
+      return stopCommand(argv);
+    // help, and nothing else: parseCommand already rejected unknown commands.
     default:
-      fail(`unknown command: ${command}`);
+      console.log(USAGE);
+      return;
   }
 }
 
