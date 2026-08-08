@@ -168,7 +168,7 @@
   }
 
   .card:hover {
-    border-color: rgba(255, 255, 255, 0.1);
+    border-color: var(--border-hover);
   }
 
   .head {
@@ -217,7 +217,7 @@
   .reason {
     margin-top: 12px;
     font-size: 12px;
-    color: color-mix(in oklab, var(--destructive) 82%, white);
+    color: color-mix(in oklab, var(--destructive) 82%, var(--tint-contrast));
   }
 
   .foot {

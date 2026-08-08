@@ -195,7 +195,7 @@
     display: inline-flex;
     align-self: flex-start;
     padding: 2px;
-    background: rgba(255, 255, 255, 0.04);
+    background: var(--fill-4);
     border: 1px solid var(--border);
     border-radius: 8px;
   }
@@ -216,7 +216,7 @@
   }
 
   .segment.active {
-    background: rgba(255, 255, 255, 0.08);
+    background: var(--fill-8);
     color: var(--fg);
   }
 

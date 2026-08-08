@@ -40,7 +40,7 @@
   }
 
   .muted {
-    background: #5a5a5e;
+    background: var(--dot-muted);
   }
 
   .pulse {

@@ -1,8 +1,12 @@
 <script lang="ts">
+  import { untrack } from 'svelte';
   import { Terminal } from '@xterm/xterm';
+  import type { ITheme } from '@xterm/xterm';
   import { FitAddon } from '@xterm/addon-fit';
   import type { TerminalClientMessage, TerminalServerMessage } from '@apm/shared';
   import { terminalSocketUrl } from './api';
+  import { theme as appTheme } from './theme.svelte';
+  import type { ColorScheme } from './theme';
 
   interface Props {
     sessionId: string;
@@ -12,12 +16,61 @@
 
   let { sessionId, onexit }: Props = $props();
 
-  // xterm parses these itself, so the oklch token can't be used directly;
-  // these mirror --card / --primary from app.css.
-  const CARD = '#1c1c1c';
+  // xterm parses these itself, so the CSS tokens can't be used directly; the
+  // surface colors mirror --card / --primary from app.css per scheme.
   const PRIMARY = '#4a7ef8';
 
+  const TERMINAL_THEMES: Record<ColorScheme, ITheme> = {
+    dark: {
+      background: '#1c1c1c',
+      foreground: '#e6e6e6',
+      cursor: PRIMARY,
+      cursorAccent: '#1c1c1c',
+      selectionBackground: 'rgba(74, 126, 248, 0.3)',
+      black: '#2a2a2a',
+      red: '#f26d6d',
+      green: '#10b981',
+      yellow: '#f59e0b',
+      blue: '#6c9cf8',
+      magenta: '#c084fc',
+      cyan: '#22d3ee',
+      white: '#d4d4d8',
+      brightBlack: '#6b6b70',
+      brightRed: '#ff8f8f',
+      brightGreen: '#34d399',
+      brightYellow: '#fbbf24',
+      brightMagenta: '#d8b4fe',
+      brightCyan: '#67e8f9',
+      brightWhite: '#fafafa',
+    },
+    light: {
+      background: '#ffffff',
+      foreground: '#27272a',
+      cursor: PRIMARY,
+      cursorAccent: '#ffffff',
+      selectionBackground: 'rgba(74, 126, 248, 0.22)',
+      black: '#3f3f46',
+      red: '#c23b3b',
+      green: '#0f8a5f',
+      yellow: '#a1670a',
+      blue: '#2f5fd0',
+      magenta: '#8b3fc7',
+      cyan: '#0e7490',
+      // The light scheme inverts the neutral ramp: ANSI white has to stay
+      // legible on a white background, so it lands in the grays.
+      white: '#52525b',
+      brightBlack: '#71717a',
+      brightRed: '#d94f4f',
+      brightGreen: '#12a978',
+      brightYellow: '#bd7f14',
+      brightMagenta: '#a855f7',
+      brightCyan: '#0891b2',
+      brightWhite: '#27272a',
+    },
+  };
+
   let host = $state<HTMLDivElement | null>(null);
+  let term = $state<Terminal | null>(null);
   let exited = $state<{ code: number | null } | null>(null);
   let connection = $state<'connecting' | 'open' | 'lost'>('connecting');
 
@@ -29,7 +82,7 @@
     exited = null;
     connection = 'connecting';
 
-    const term = new Terminal({
+    const instance = new Terminal({
       allowProposedApi: true,
       convertEol: false,
       cursorBlink: true,
@@ -38,33 +91,15 @@
       lineHeight: 1.25,
       scrollback: 5000,
       macOptionIsMeta: true,
-      theme: {
-        background: CARD,
-        foreground: '#e6e6e6',
-        cursor: PRIMARY,
-        cursorAccent: CARD,
-        selectionBackground: 'rgba(74, 126, 248, 0.3)',
-        black: '#2a2a2a',
-        red: '#f26d6d',
-        green: '#10b981',
-        yellow: '#f59e0b',
-        blue: '#6c9cf8',
-        magenta: '#c084fc',
-        cyan: '#22d3ee',
-        white: '#d4d4d8',
-        brightBlack: '#6b6b70',
-        brightRed: '#ff8f8f',
-        brightGreen: '#34d399',
-        brightYellow: '#fbbf24',
-        brightMagenta: '#d8b4fe',
-        brightCyan: '#67e8f9',
-        brightWhite: '#fafafa',
-      },
+      // Untracked: a theme switch restyles the live terminal (effect below)
+      // instead of tearing the session down and reconnecting.
+      theme: TERMINAL_THEMES[untrack(() => appTheme.scheme)],
     });
+    term = instance;
 
     const fit = new FitAddon();
-    term.loadAddon(fit);
-    term.open(element);
+    instance.loadAddon(fit);
+    instance.open(element);
 
     let socket: WebSocket | null = null;
     let disposed = false;
@@ -92,8 +127,8 @@
       ws.onopen = () => {
         connection = 'open';
         safeFit();
-        send({ type: 'resize', cols: term.cols, rows: term.rows });
-        term.focus();
+        send({ type: 'resize', cols: instance.cols, rows: instance.rows });
+        instance.focus();
       };
 
       ws.onmessage = (event: MessageEvent<string>) => {
@@ -105,18 +140,18 @@
         }
         switch (message.type) {
           case 'scrollback':
-            term.reset();
-            term.write(message.data);
+            instance.reset();
+            instance.write(message.data);
             break;
           case 'data':
-            term.write(message.data);
+            instance.write(message.data);
             break;
           case 'exit':
             exited = { code: message.exitCode };
             onexit?.(message.exitCode);
             break;
           case 'error':
-            term.write(`\r\n\u001b[31m[apm] ${message.message}\u001b[0m\r\n`);
+            instance.write(`\r\n\u001b[31m[apm] ${message.message}\u001b[0m\r\n`);
             break;
         }
       };
@@ -138,8 +173,10 @@
       };
     };
 
-    const dataListener = term.onData((data) => send({ type: 'input', data }));
-    const resizeListener = term.onResize(({ cols, rows }) => send({ type: 'resize', cols, rows }));
+    const dataListener = instance.onData((data) => send({ type: 'input', data }));
+    const resizeListener = instance.onResize(({ cols, rows }) =>
+      send({ type: 'resize', cols, rows }),
+    );
 
     const observer = new ResizeObserver(() => safeFit());
     observer.observe(element);
@@ -158,8 +195,16 @@
         socket.onerror = null;
         socket.close();
       }
-      term.dispose();
+      instance.dispose();
+      if (term === instance) term = null;
     };
+  });
+
+  // Follow the app color scheme without recreating the session.
+  $effect(() => {
+    const instance = term;
+    const scheme = appTheme.scheme;
+    if (instance) instance.options.theme = TERMINAL_THEMES[scheme];
   });
 </script>
 
@@ -209,11 +254,11 @@
 
   .exited {
     color: var(--muted-fg);
-    background: rgba(255, 255, 255, 0.03);
+    background: var(--fill-3);
   }
 
   .lost {
-    color: color-mix(in oklab, var(--destructive) 82%, white);
+    color: color-mix(in oklab, var(--destructive) 82%, var(--tint-contrast));
     background: color-mix(in oklab, var(--destructive) 10%, transparent);
   }
 </style>

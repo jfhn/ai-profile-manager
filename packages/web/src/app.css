@@ -1,30 +1,130 @@
-/* apm design tokens — dark only for v1. Calm, tidy, hairline borders. */
+/* apm design tokens. Calm, tidy, hairline borders — in both color schemes.
+ *
+ * The active scheme lives on <html data-theme="light|dark">; an inline snippet
+ * in index.html sets it before first paint and src/lib/theme.svelte.ts keeps it
+ * in sync afterwards. Dark is also the bare `:root` fallback, so the app still
+ * renders correctly if that snippet never runs. */
 
 :root {
-  color-scheme: dark;
-  --bg: #161616; /* neutral-950 mixed 5% toward white */
-  --card: #1c1c1c; /* bg mixed 2% toward white */
-  --popover: #202020;
-  --border: rgba(255, 255, 255, 0.06);
-  --input: rgba(255, 255, 255, 0.08);
-  --hover: rgba(255, 255, 255, 0.04);
-  --fg: #f5f5f5; /* neutral-100 */
-  --muted-fg: #8f8f92;
+  /* Scheme-independent: brand, shape, type. */
   --primary: oklch(0.588 0.217 264); /* blue-violet */
   --primary-fg: #ffffff;
   --success: #10b981;
   --warning: #f59e0b;
-  --destructive: #f26d6d;
+  --claude: #d97757;
+  --ring: color-mix(in oklab, var(--primary) 50%, transparent);
+  --mark-gradient: linear-gradient(135deg, var(--primary), #a855f7);
+  --mark-gradient-error: linear-gradient(135deg, var(--destructive), #b45309);
+  --mark-inset: rgba(255, 255, 255, 0.06);
   --radius: 10px;
-  --font-sans: 'DM Sans', -apple-system, 'Segoe UI', system-ui, sans-serif;
-  --font-mono: 'SF Mono', 'JetBrains Mono', Consolas, 'Liberation Mono', monospace;
-
-  /* derived */
-  --sidebar-bg: #141414;
   --radius-sm: 6px;
   --radius-lg: 14px;
-  --ring: color-mix(in oklab, var(--primary) 50%, transparent);
-  --claude: #d97757;
+  --font-sans: 'DM Sans', -apple-system, 'Segoe UI', system-ui, sans-serif;
+  --font-mono: 'SF Mono', 'JetBrains Mono', Consolas, 'Liberation Mono', monospace;
+}
+
+:root,
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --bg: #161616; /* neutral-950 mixed 5% toward white */
+  --card: #1c1c1c; /* bg mixed 2% toward white */
+  --popover: #202020;
+  --sidebar-bg: #141414;
+  --border: rgba(255, 255, 255, 0.06);
+  --border-hover: rgba(255, 255, 255, 0.1);
+  --border-dashed: rgba(255, 255, 255, 0.11);
+  --input: rgba(255, 255, 255, 0.08);
+  --input-bg: rgba(255, 255, 255, 0.03);
+  --input-hover: rgba(255, 255, 255, 0.14);
+  --hover: rgba(255, 255, 255, 0.04);
+  --fg: #f5f5f5; /* neutral-100 */
+  --muted-fg: #8f8f92;
+  /* The one accent used as plain text (danger buttons, menu items), so it
+   * carries a per-scheme value instead of living with the shared brand. */
+  --destructive: #f26d6d;
+
+  /* Neutral overlay ladder, painted on top of a surface (light → heavy).
+   * The number is the dark-scheme alpha in percent. */
+  --fill-2: rgba(255, 255, 255, 0.02);
+  --fill-3: rgba(255, 255, 255, 0.03);
+  --fill-4: rgba(255, 255, 255, 0.04);
+  --fill-5: rgba(255, 255, 255, 0.05);
+  --fill-6: rgba(255, 255, 255, 0.06);
+  --fill-7: rgba(255, 255, 255, 0.07);
+  --fill-8: rgba(255, 255, 255, 0.08);
+  --fill-9: rgba(255, 255, 255, 0.09);
+  --fill-10: rgba(255, 255, 255, 0.1);
+
+  /* Direction a tinted foreground is pushed for legibility: toward white on a
+   * dark canvas, toward black on a light one. */
+  --tint-contrast: white;
+
+  --code-bg: rgba(0, 0, 0, 0.28);
+  --code-fg: #e6e6e6;
+  --badge-fg: #e8e8ea;
+  --track: rgba(255, 255, 255, 0.2);
+  --dot-muted: #5a5a5e;
+  --skeleton-bg: rgba(255, 255, 255, 0.045);
+  --skeleton-shine: rgba(255, 255, 255, 0.055);
+  --scrim: rgba(0, 0, 0, 0.55);
+  --surface-highlight: rgba(255, 255, 255, 0.03);
+  --shadow-menu: 0 12px 32px rgba(0, 0, 0, 0.5);
+  --shadow-toast: 0 16px 40px rgba(0, 0, 0, 0.5);
+  --shadow-modal: 0 24px 60px rgba(0, 0, 0, 0.55);
+  --scrollbar-thumb: rgba(255, 255, 255, 0.1);
+  --scrollbar-thumb-hover: rgba(255, 255, 255, 0.18);
+  --noise-opacity: 0.035;
+  --select-caret: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%238f8f92' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4 6.5 8 10.5 12 6.5'/%3E%3C/svg%3E");
+}
+
+:root[data-theme='light'] {
+  color-scheme: light;
+  --bg: #f7f7f8;
+  --card: #ffffff;
+  --popover: #ffffff;
+  --sidebar-bg: #f1f1f3;
+  --border: rgba(0, 0, 0, 0.08);
+  --border-hover: rgba(0, 0, 0, 0.16);
+  --border-dashed: rgba(0, 0, 0, 0.14);
+  --input: rgba(0, 0, 0, 0.12);
+  --input-bg: #ffffff;
+  --input-hover: rgba(0, 0, 0, 0.22);
+  --hover: rgba(0, 0, 0, 0.04);
+  --fg: #18181b;
+  --muted-fg: #71717a;
+  --destructive: #d13b3b;
+
+  /* Black overlays read heavier than white ones, so the light ladder is
+   * deliberately shallower than its dark counterpart. */
+  --fill-2: rgba(0, 0, 0, 0.015);
+  --fill-3: rgba(0, 0, 0, 0.022);
+  --fill-4: rgba(0, 0, 0, 0.03);
+  --fill-5: rgba(0, 0, 0, 0.04);
+  --fill-6: rgba(0, 0, 0, 0.05);
+  --fill-7: rgba(0, 0, 0, 0.06);
+  --fill-8: rgba(0, 0, 0, 0.07);
+  --fill-9: rgba(0, 0, 0, 0.08);
+  --fill-10: rgba(0, 0, 0, 0.09);
+
+  --tint-contrast: black;
+
+  --code-bg: rgba(0, 0, 0, 0.045);
+  --code-fg: #27272a;
+  --badge-fg: #27272a;
+  --track: rgba(0, 0, 0, 0.14);
+  --dot-muted: #a1a1aa;
+  --skeleton-bg: rgba(0, 0, 0, 0.06);
+  --skeleton-shine: rgba(255, 255, 255, 0.65);
+  --scrim: rgba(0, 0, 0, 0.32);
+  --surface-highlight: transparent;
+  --shadow-menu: 0 12px 32px rgba(0, 0, 0, 0.12);
+  --shadow-toast: 0 16px 40px rgba(0, 0, 0, 0.14);
+  --shadow-modal: 0 24px 60px rgba(0, 0, 0, 0.18);
+  --scrollbar-thumb: rgba(0, 0, 0, 0.18);
+  --scrollbar-thumb-hover: rgba(0, 0, 0, 0.3);
+  /* The noise film is dark speckle; on a near-white canvas it turns muddy fast. */
+  --noise-opacity: 0.016;
+  --select-caret: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%2371717a' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4 6.5 8 10.5 12 6.5'/%3E%3C/svg%3E");
 }
 
 *,
@@ -57,7 +157,7 @@ body::after {
   inset: 0;
   z-index: 9999;
   pointer-events: none;
-  opacity: 0.035;
+  opacity: var(--noise-opacity);
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='240' height='240'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='240' height='240' filter='url(%23n)'/%3E%3C/svg%3E");
 }
 
@@ -69,7 +169,7 @@ body::after {
 
 * {
   scrollbar-width: thin;
-  scrollbar-color: rgba(255, 255, 255, 0.1) transparent;
+  scrollbar-color: var(--scrollbar-thumb) transparent;
 }
 
 ::-webkit-scrollbar {
@@ -82,12 +182,12 @@ body::after {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.1);
+  background: var(--scrollbar-thumb);
   border-radius: 999px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.18);
+  background: var(--scrollbar-thumb-hover);
 }
 
 ::-webkit-scrollbar-corner {
@@ -170,7 +270,7 @@ textarea.input {
   font: inherit;
   font-size: 13px;
   color: var(--fg);
-  background: rgba(255, 255, 255, 0.03);
+  background: var(--input-bg);
   border: 1px solid var(--input);
   border-radius: var(--radius-sm);
   transition:
@@ -184,7 +284,7 @@ textarea.input {
 
 .input:hover,
 .select:hover {
-  border-color: rgba(255, 255, 255, 0.14);
+  border-color: var(--input-hover);
 }
 
 .input:focus-visible,
@@ -196,7 +296,7 @@ textarea.input {
 .select {
   appearance: none;
   padding-right: 28px;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%238f8f92' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4 6.5 8 10.5 12 6.5'/%3E%3C/svg%3E");
+  background-image: var(--select-caret);
   background-repeat: no-repeat;
   background-position: right 8px center;
   background-size: 14px;
@@ -260,7 +360,7 @@ textarea.input {
 .skeleton {
   position: relative;
   overflow: hidden;
-  background: rgba(255, 255, 255, 0.045);
+  background: var(--skeleton-bg);
   border-radius: var(--radius-sm);
 }
 
@@ -269,7 +369,7 @@ textarea.input {
   position: absolute;
   inset: 0;
   transform: translateX(-100%);
-  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.055), transparent);
+  background: linear-gradient(90deg, transparent, var(--skeleton-shine), transparent);
   animation: apm-shimmer 1.4s ease-in-out infinite;
 }
 

@@ -305,7 +305,7 @@
   }
 
   .card:hover {
-    border-color: rgba(255, 255, 255, 0.1);
+    border-color: var(--border-hover);
   }
 
   .card.disabled {
@@ -377,7 +377,7 @@
   }
 
   .note.error {
-    color: color-mix(in oklab, var(--destructive) 80%, white);
+    color: color-mix(in oklab, var(--destructive) 80%, var(--tint-contrast));
   }
 
   .foot {

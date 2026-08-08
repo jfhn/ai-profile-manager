@@ -113,7 +113,7 @@
   .summary {
     padding: 10px 12px;
     margin-bottom: 16px;
-    background: rgba(255, 255, 255, 0.03);
+    background: var(--fill-3);
     border: 1px solid var(--border);
     border-radius: var(--radius-sm);
   }

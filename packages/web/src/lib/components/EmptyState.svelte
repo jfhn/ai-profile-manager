@@ -39,7 +39,7 @@
   }
 
   .dashed {
-    border: 1px dashed rgba(255, 255, 255, 0.11);
+    border: 1px dashed var(--border-dashed);
     background: color-mix(in oklab, var(--card) 55%, transparent);
   }
 
@@ -51,7 +51,7 @@
     height: 36px;
     margin-bottom: 4px;
     border-radius: var(--radius-sm);
-    background: rgba(255, 255, 255, 0.05);
+    background: var(--fill-5);
     color: var(--muted-fg);
   }
 
