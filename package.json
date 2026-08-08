@@ -7,6 +7,9 @@
     "node": ">=24"
   },
   "scripts": {
+    "install:cli": "sh scripts/install-cli.sh",
+    "uninstall:cli": "sh scripts/install-cli.sh --uninstall",
+    "smoke": "sh scripts/smoke-cli.sh",
     "build": "pnpm -r build",
     "dev": "pnpm --parallel --filter @apm/daemon --filter @apm/web dev",
     "test": "pnpm -r --no-bail test",

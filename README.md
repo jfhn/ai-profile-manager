@@ -13,32 +13,49 @@ the daemon API.
 
 ## Quick start
 
-Needs Node >= 24 and pnpm 11 (pinned as `pnpm@11.3.0` via `packageManager`). If
-your `pnpm` comes from Corepack, it has to be a recent Corepack: 0.24.0 — the
-version Debian/Ubuntu ship as `node-corepack` — cannot launch pnpm 11 at all and
-fails with `ERR_VM_DYNAMIC_IMPORT_CALLBACK_MISSING` on every Node version. Either
-`npm i -g corepack@latest`, or install pnpm directly and keep the distro shim off
-your PATH.
+Needs Node >= 24 and pnpm 11 (pinned as `pnpm@11.3.0` via `packageManager`).
+The checked-in `mise.toml` pins both, so [mise](https://mise.jdx.dev) users can
+get them with `mise install`.
 
 ```sh
-pnpm install
-pnpm build
-node packages/daemon/dist/main.js        # starts the daemon, prints URL, opens the browser
+git clone https://github.com/jfhn/ai-profile-manager.git
+cd ai-profile-manager
+pnpm install:cli
 ```
 
-To get a global `apm` command, drop a wrapper into a directory on your PATH
-(tsc rebuilds strip the execute bit, so a wrapper beats a symlink):
+That one command checks the prerequisites, installs dependencies, builds every
+package (including the web UI) and puts an `apm` launcher in `~/.local/bin` —
+pass `--bin-dir DIR` (or set `APM_BIN_DIR`) for somewhere else; it tells you if
+that directory is not on your PATH. The launcher is a wrapper script that execs
+`node` on this checkout, so rebuilds never break it and you never have to
+reference `dist/` yourself. From any directory:
 
 ```sh
-printf '#!/bin/sh\nexec node %s "$@"\n' "$PWD/packages/daemon/dist/main.js" \
-  > ~/.local/bin/apm && chmod +x ~/.local/bin/apm
+apm          # start (or reuse) the daemon, print its URL, open the dashboard
+apm url      # print the authenticated URL, open nothing
+apm status
+apm stop
 ```
+
+Re-run `pnpm install:cli` after a `git pull` to update — it is idempotent.
+`pnpm uninstall:cli` removes the launcher again and leaves your data in
+`~/.local/share/apm` alone. With mise: `mise run install` / `mise run uninstall`.
+
+> **pnpm from Corepack?** It has to be a recent Corepack: 0.24.0 — the version
+> Debian/Ubuntu ship as `node-corepack` — cannot launch pnpm 11 at all and fails
+> with `ERR_VM_DYNAMIC_IMPORT_CALLBACK_MISSING` on every Node version. Either
+> `npm i -g corepack@latest`, or install pnpm directly (`npm i -g pnpm@11.3.0`,
+> or let mise provide it) and keep the distro shim off your PATH.
 
 Development (daemon on :4747, Vite dev server with HMR on :5173):
 
 ```sh
 pnpm dev
 ```
+
+`pnpm smoke` drives the installed command end to end — it installs a launcher
+into a temporary directory and exercises start/status/url/stop against its own
+data dir and port, so a daemon you are already running stays untouched.
 
 ## Layout
 
@@ -51,6 +68,7 @@ pnpm dev
 
 ```sh
 apm                       # start (or reuse) the daemon and open the dashboard
+apm url                   # print the authenticated dashboard URL, open nothing
 apm run work claude       # run claude bound to profile "work"
 apm run work bash         # any command; children inherit the profile env
 apm attach claude-work-1  # reattach to a running session
