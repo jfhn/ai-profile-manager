@@ -23,6 +23,13 @@ function writeJson(file: string, value: unknown): void {
   fs.writeFileSync(file, JSON.stringify(value));
 }
 
+/** Credentials with an explicit mtime: the adapter compares it to the error time. */
+function writeCredentials(home: string, mtimeMs: number): void {
+  const file = path.join(home, '.credentials.json');
+  writeJson(file, { claudeAiOauth: { accessToken: 'secret', expiresAt: '2025-01-11T00:00:00Z' } });
+  fs.utimesSync(file, mtimeMs / 1000, mtimeMs / 1000);
+}
+
 function rateLimits(): unknown {
   return {
     rate_limits: {
@@ -171,9 +178,7 @@ describe('claude adapter', () => {
 
   it('uses OAuth, blanks stale cache after auth failure, and cools down after timeout', async () => {
     const { home, cache, global } = setup();
-    writeJson(path.join(home, '.credentials.json'), {
-      claudeAiOauth: { accessToken: 'secret', expiresAt: '2025-01-11T00:00:00Z' },
-    });
+    writeCredentials(home, now - 60_000);
     const success = await claudeAdapter.collectUsage({
       home,
       defaultHome: home,
@@ -220,5 +225,276 @@ describe('claude adapter', () => {
       },
     });
     expect(cooldown.cacheStatus).toBe('cooldown');
+  });
+
+  it('bypasses the OAuth cooldown for a forced refresh but not for a background one', async () => {
+    const { home, cache, global } = setup();
+    writeCredentials(home, now - 60_000);
+    const failed = await claudeAdapter.collectUsage({
+      home,
+      defaultHome: home,
+      cacheDir: cache,
+      globalCacheDir: global,
+      allowNetwork: true,
+      now,
+      fetchImpl: async () => new Response('', { status: 500 }),
+    });
+    expect(failed.cacheStatus).toBe('error');
+
+    const background = await claudeAdapter.collectUsage({
+      home,
+      defaultHome: home,
+      cacheDir: cache,
+      globalCacheDir: global,
+      allowNetwork: true,
+      now: now + 60_000,
+      fetchImpl: async () => {
+        throw new Error('should not fetch');
+      },
+    });
+    expect(background.cacheStatus).toBe('cooldown');
+
+    const forced = await claudeAdapter.collectUsage({
+      home,
+      defaultHome: home,
+      cacheDir: cache,
+      globalCacheDir: global,
+      allowNetwork: true,
+      now: now + 60_000,
+      force: true,
+      fetchImpl: async () => new Response(JSON.stringify(rateLimits()), { status: 200 }),
+    });
+    expect(forced.cacheStatus).toBe('live');
+    expect(forced.windows.map((window) => window.id)).toEqual(['five_hour', 'weekly']);
+  });
+
+  it('ignores fresh caches on a forced refresh and still falls back when the fetch fails', async () => {
+    const { home, cache, global } = setup();
+    writeCredentials(home, now - 60_000);
+    writeJson(path.join(global, 'claude-rate-limits.json'), {
+      updatedAt: '2025-01-09T23:59:00Z',
+      rate_limits: { primary: { used_percent: 5, reset_at: '2025-01-10T01:00:00Z' } },
+    });
+    writeJson(path.join(cache, 'claude-oauth-usage.json'), {
+      updatedAt: '2025-01-09T23:59:00Z',
+      usage: rateLimits(),
+    });
+
+    const cached = await claudeAdapter.collectUsage({
+      home,
+      defaultHome: home,
+      cacheDir: cache,
+      globalCacheDir: global,
+      allowNetwork: true,
+      now,
+      fetchImpl: async () => {
+        throw new Error('should not fetch');
+      },
+    });
+    expect(cached.cacheStatus).toBe('cache');
+    expect(cached.windows).toEqual([expect.objectContaining({ id: 'five_hour', usedPercent: 5 })]);
+
+    const forced = await claudeAdapter.collectUsage({
+      home,
+      defaultHome: home,
+      cacheDir: cache,
+      globalCacheDir: global,
+      allowNetwork: true,
+      now,
+      force: true,
+      fetchImpl: async () =>
+        new Response(
+          JSON.stringify({ rate_limits: { primary: { used_percent: 80, reset_at: null } } }),
+          { status: 200 },
+        ),
+    });
+    expect(forced.cacheStatus).toBe('live');
+    expect(forced.windows).toEqual([expect.objectContaining({ id: 'five_hour', usedPercent: 80 })]);
+
+    const failedForce = await claudeAdapter.collectUsage({
+      home,
+      defaultHome: home,
+      cacheDir: cache,
+      globalCacheDir: global,
+      allowNetwork: true,
+      now: now + 1_000,
+      force: true,
+      fetchImpl: async () => new Response('', { status: 500 }),
+    });
+    expect(failedForce).toMatchObject({ cacheStatus: 'stale-cache', stale: true });
+    expect(failedForce.windows).toEqual([
+      expect.objectContaining({ id: 'five_hour', usedPercent: 80 }),
+    ]);
+    expect(failedForce.staleReason).toContain('HTTP 500');
+  });
+
+  it('keeps statusline windows when a forced fetch fails and the OAuth cache is unusable', async () => {
+    const { home, cache, global } = setup();
+    writeCredentials(home, now - 60_000);
+    writeJson(path.join(global, 'claude-rate-limits.json'), {
+      updatedAt: '2025-01-09T23:59:00Z',
+      rate_limits: { primary: { used_percent: 5, reset_at: '2025-01-10T01:00:00Z' } },
+    });
+    // A 200 response with an unexpected body shape: truthy, but no windows.
+    writeJson(path.join(cache, 'claude-oauth-usage.json'), {
+      updatedAt: '2025-01-09T23:59:00Z',
+      usage: {},
+    });
+
+    const result = await claudeAdapter.collectUsage({
+      home,
+      defaultHome: home,
+      cacheDir: cache,
+      globalCacheDir: global,
+      allowNetwork: true,
+      now,
+      force: true,
+      fetchImpl: async () => new Response('', { status: 500 }),
+    });
+    expect(result.windows).toEqual([expect.objectContaining({ id: 'five_hour', usedPercent: 5 })]);
+    expect(result).toMatchObject({ cacheStatus: 'stale-cache', stale: true });
+    expect(result.staleReason).toContain('HTTP 500');
+    expect(result.error).toContain('HTTP 500');
+  });
+
+  it('treats an unreadable HTTP 200 as a failure and never caches it', async () => {
+    const { home, cache, global } = setup();
+    writeCredentials(home, now - 60_000);
+    writeJson(path.join(global, 'claude-rate-limits.json'), {
+      updatedAt: '2025-01-09T23:59:00Z',
+      rate_limits: { primary: { used_percent: 5, reset_at: '2025-01-10T01:00:00Z' } },
+    });
+    const oauthFile = path.join(cache, 'claude-oauth-usage.json');
+
+    const result = await claudeAdapter.collectUsage({
+      home,
+      defaultHome: home,
+      cacheDir: cache,
+      globalCacheDir: global,
+      allowNetwork: true,
+      now,
+      force: true,
+      fetchImpl: async () => new Response(JSON.stringify({ unexpected: true }), { status: 200 }),
+    });
+    expect(result.windows).toEqual([expect.objectContaining({ id: 'five_hour', usedPercent: 5 })]);
+    expect(result.cacheStatus).toBe('stale-cache');
+    expect(result.stale).toBe(true);
+    expect(result.staleReason).toContain('no recognizable rate limits');
+    expect(JSON.parse(fs.readFileSync(oauthFile, 'utf8'))).toMatchObject({ usage: null });
+  });
+
+  it('accepts a well-formed response that reports zero usage', async () => {
+    const { home, cache, global } = setup();
+    writeCredentials(home, now - 60_000);
+    const result = await claudeAdapter.collectUsage({
+      home,
+      defaultHome: home,
+      cacheDir: cache,
+      globalCacheDir: global,
+      allowNetwork: true,
+      now,
+      fetchImpl: async () =>
+        new Response(
+          JSON.stringify({
+            rate_limits: { primary: { used_percent: 0, reset_at: '2025-01-10T01:00:00Z' } },
+          }),
+          { status: 200 },
+        ),
+    });
+    expect(result.cacheStatus).toBe('live');
+    expect(result.windows).toEqual([
+      expect.objectContaining({ id: 'five_hour', usedPercent: 0, remainingPercent: 100 }),
+    ]);
+  });
+
+  it('shows statusline data instead of rejected OAuth cache on an auth failure', async () => {
+    const { home, cache, global } = setup();
+    writeCredentials(home, now - 60_000);
+    writeJson(path.join(global, 'claude-rate-limits.json'), {
+      updatedAt: '2025-01-09T23:59:00Z',
+      rate_limits: { primary: { used_percent: 5, reset_at: '2025-01-10T01:00:00Z' } },
+    });
+    writeJson(path.join(cache, 'claude-oauth-usage.json'), {
+      updatedAt: '2025-01-09T23:59:00Z',
+      usage: rateLimits(),
+    });
+
+    const result = await claudeAdapter.collectUsage({
+      home,
+      defaultHome: home,
+      cacheDir: cache,
+      globalCacheDir: global,
+      allowNetwork: true,
+      now,
+      force: true,
+      fetchImpl: async () => new Response('', { status: 401 }),
+    });
+    // The rejected session's own cached numbers stay hidden; the statusline
+    // cache describes the same default-home account and is shown stale.
+    expect(result.source).toBe('claude statusLine rate_limits');
+    expect(result.windows).toEqual([expect.objectContaining({ id: 'five_hour', usedPercent: 5 })]);
+    expect(result).toMatchObject({ cacheStatus: 'stale-cache', stale: true, failureKind: 'auth' });
+  });
+
+  it('keeps the cooldown when the credentials mtime is in the future', async () => {
+    const { home, cache, global } = setup();
+    writeCredentials(home, now - 60_000);
+    const failed = await claudeAdapter.collectUsage({
+      home,
+      defaultHome: home,
+      cacheDir: cache,
+      globalCacheDir: global,
+      allowNetwork: true,
+      now,
+      fetchImpl: async () => new Response('', { status: 500 }),
+    });
+    expect(failed.cacheStatus).toBe('error');
+
+    // Clock skew or a restored backup must not disable the cooldown forever.
+    writeCredentials(home, now + 60 * 60 * 1000);
+    const cooldown = await claudeAdapter.collectUsage({
+      home,
+      defaultHome: home,
+      cacheDir: cache,
+      globalCacheDir: global,
+      allowNetwork: true,
+      now: now + 60_000,
+      fetchImpl: async () => {
+        throw new Error('should not fetch');
+      },
+    });
+    expect(cooldown.cacheStatus).toBe('cooldown');
+  });
+
+  it('retries during the cooldown when credentials changed after the error', async () => {
+    const { home, cache, global } = setup();
+    const credentials = path.join(home, '.credentials.json');
+    writeJson(credentials, { claudeAiOauth: {} });
+    fs.utimesSync(credentials, (now - 60_000) / 1000, (now - 60_000) / 1000);
+    const failed = await claudeAdapter.collectUsage({
+      home,
+      defaultHome: home,
+      cacheDir: cache,
+      globalCacheDir: global,
+      allowNetwork: true,
+      now,
+      fetchImpl: async () => {
+        throw new Error('should not fetch without credentials');
+      },
+    });
+    expect(failed.staleReason).toContain('Claude OAuth credentials are missing');
+
+    // A login after the error invalidates the cooldown even without force.
+    writeCredentials(home, now + 30_000);
+    const retried = await claudeAdapter.collectUsage({
+      home,
+      defaultHome: home,
+      cacheDir: cache,
+      globalCacheDir: global,
+      allowNetwork: true,
+      now: now + 60_000,
+      fetchImpl: async () => new Response(JSON.stringify(rateLimits()), { status: 200 }),
+    });
+    expect(retried.cacheStatus).toBe('live');
   });
 });
