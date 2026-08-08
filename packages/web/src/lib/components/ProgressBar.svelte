@@ -24,7 +24,8 @@
 
 <style>
   .track {
-    flex: 1;
+    flex: 1 1 auto;
+    width: 100%;
     height: 6px;
     min-width: 0;
     border-radius: 999px;

@@ -12,6 +12,7 @@
   --success: #10b981;
   --warning: #f59e0b;
   --claude: #d97757;
+  --codex: #10a37f;
   --ring: color-mix(in oklab, var(--primary) 50%, transparent);
   --mark-gradient: linear-gradient(135deg, var(--primary), #a855f7);
   --mark-gradient-error: linear-gradient(135deg, var(--destructive), #b45309);

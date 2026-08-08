@@ -1,7 +1,7 @@
 <script lang="ts">
-  import type { Profile, UsageSnapshot, UsageWindow } from '@apm/shared';
   import { api } from '../api';
   import { app, refreshAll } from '../stores.svelte';
+  import type { ProfileView } from '../runway';
   import { timeAgo, timeUntil, timeUntilFrom, absolute } from '../time.svelte';
   import { toast, toastError } from '../toasts.svelte';
   import Badge from './Badge.svelte';
@@ -12,15 +12,20 @@
   import Modal from './Modal.svelte';
   import Button from './Button.svelte';
   import ProgressBar from './ProgressBar.svelte';
-  import ProviderBadge from './ProviderBadge.svelte';
+  import ProviderMark from './ProviderMark.svelte';
+  import StatusDot from './StatusDot.svelte';
+  import TimeRing from './TimeRing.svelte';
   import WizardModal from './WizardModal.svelte';
 
   interface Props {
-    profile: Profile;
-    snapshot: UsageSnapshot | undefined;
+    view: ProfileView;
   }
 
-  let { profile, snapshot }: Props = $props();
+  let { view }: Props = $props();
+
+  const profile = $derived(view.profile);
+  const snapshot = $derived(view.snapshot);
+  const windows = $derived(view.windows);
 
   let refreshing = $state(false);
   let renaming = $state(false);
@@ -32,16 +37,6 @@
   /** The login wizard was reopened for this pending profile — never automatic. */
   let resuming = $state(false);
 
-  const WINDOW_ORDER = ['five_hour', 'weekly', 'monthly'];
-
-  const windows = $derived(
-    [...(snapshot?.windows ?? [])].sort((a, b) => {
-      const ai = WINDOW_ORDER.indexOf(a.id);
-      const bi = WINDOW_ORDER.indexOf(b.id);
-      return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
-    }),
-  );
-
   const plan = $derived(profile.identity?.plan ?? snapshot?.planType ?? null);
 
   const identityLine = $derived(
@@ -51,18 +46,6 @@
   const retryIn = $derived(
     snapshot ? timeUntilFrom(snapshot.fetchedAt, snapshot.retryAfterSeconds) : null,
   );
-
-  function remainingOf(window: UsageWindow): number | null {
-    if (window.remainingPercent !== null) return window.remainingPercent;
-    if (window.usedPercent !== null) return 100 - window.usedPercent;
-    return null;
-  }
-
-  function toneOf(remaining: number): 'success' | 'warning' | 'destructive' {
-    if (remaining >= 50) return 'success';
-    if (remaining >= 20) return 'warning';
-    return 'destructive';
-  }
 
   async function refresh(): Promise<void> {
     if (refreshing) return;
@@ -152,7 +135,13 @@
 
 <article class="card" class:disabled={!profile.enabled}>
   <div class="head">
-    <ProviderBadge provider={profile.provider} />
+    <StatusDot
+      tone={view.tone}
+      title={view.headroom === null
+        ? 'No usage reported'
+        : `${Math.round(view.headroom)}% left on ${view.tightest?.label}`}
+    />
+    <ProviderMark provider={profile.provider} />
     <h3 class="name truncate" title={profile.label}>{profile.label}</h3>
     {#if plan}<Badge>{plan}</Badge>{/if}
     {#if !profile.enabled}<Badge>disabled</Badge>{/if}
@@ -181,26 +170,41 @@
       <p class="note error">{profile.statusReason}</p>
     {:else if windows.length > 0}
       {#each windows as window (window.id)}
-        {@const remaining = remainingOf(window)}
+        {@const until = timeUntil(window.resetAt)}
         <div class="window">
-          <span class="win-label">{window.label}</span>
-          {#if remaining === null}
-            <ProgressBar value={0} tone="muted" label={window.label} />
-            <div class="win-right">
-              <span class="win-pct muted">not reported</span>
-            </div>
-          {:else}
-            <ProgressBar value={remaining} tone={toneOf(remaining)} label={window.label} />
-            <div class="win-right">
-              <span class="win-pct">{Math.round(remaining)}% left</span>
-              {#if window.resetAt}
-                {@const until = timeUntil(window.resetAt)}
-                <span class="win-reset" title={absolute(window.resetAt)}>
-                  {until ? `resets in ${until}` : 'resetting now'}
-                </span>
+          <div class="usage-bar">
+            <div class="usage-top">
+              <span class="win-label truncate">{window.label}</span>
+              {#if window.remaining === null}
+                <span class="win-pct muted">not reported</span>
+              {:else}
+                <span class="win-pct {window.tone}">{Math.round(window.remaining)}% left</span>
               {/if}
             </div>
-          {/if}
+            <ProgressBar
+              value={window.remaining ?? 0}
+              tone={window.tone}
+              label={`${window.label} remaining`}
+            />
+          </div>
+          <div class="time" class:none={!until}>
+            <TimeRing
+              elapsed={window.elapsedFraction}
+              title={window.elapsedFraction === null
+                ? 'Window length unknown'
+                : `${Math.round(window.elapsedFraction * 100)}% of the window elapsed`}
+            />
+            <div class="time-text">
+              {#if until}
+                <span class="left" title={absolute(window.resetAt)}>{until}</span>
+                <span class="cap">to reset</span>
+              {:else if window.remaining === null}
+                <span class="left">no data</span>
+              {:else}
+                <span class="left">not started</span>
+              {/if}
+            </div>
+          </div>
         </div>
       {/each}
     {:else if snapshot?.staleReason}
@@ -346,41 +350,83 @@
   .usage {
     display: flex;
     flex-direction: column;
-    gap: 10px;
-    margin-top: 16px;
-    margin-bottom: 16px;
+    gap: 8px;
+    margin-top: 14px;
+    margin-bottom: 14px;
     min-height: 44px;
   }
 
+  /* Usage bar on the left, the neutral time ring and countdown on the right. */
   .window {
-    display: flex;
+    display: grid;
+    grid-template-columns: 1fr auto;
     align-items: center;
-    gap: 10px;
+    gap: 12px;
+  }
+
+  .usage-bar {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .usage-top {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    font-size: 11px;
   }
 
   .win-label {
-    width: 24px;
-    flex: none;
-    font-size: 12px;
     color: var(--muted-fg);
-  }
-
-  .win-right {
-    flex: none;
-    min-width: 96px;
-    display: flex;
-    flex-direction: column;
-    align-items: flex-end;
-    line-height: 1.3;
+    letter-spacing: 0.02em;
   }
 
   .win-pct {
+    margin-left: auto;
+    flex: none;
     font-size: 12px;
     font-variant-numeric: tabular-nums;
   }
 
-  .win-reset {
+  .win-pct.warning {
+    color: color-mix(in oklab, var(--warning) 80%, var(--tint-contrast));
+  }
+
+  .win-pct.destructive {
+    color: color-mix(in oklab, var(--destructive) 80%, var(--tint-contrast));
+  }
+
+  .win-pct.muted {
+    color: var(--muted-fg);
+  }
+
+  .time {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex: none;
+  }
+
+  .time-text {
+    display: flex;
+    flex-direction: column;
+    line-height: 1.15;
+    width: 54px;
+  }
+
+  .time-text .left {
     font-size: 11px;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .time-text .cap {
+    font-size: 10px;
+    color: var(--muted-fg);
+  }
+
+  .time.none .time-text .left {
     color: var(--muted-fg);
   }
 
@@ -393,12 +439,12 @@
     color: color-mix(in oklab, var(--destructive) 80%, var(--tint-contrast));
   }
 
+  /* Same rhythm as .window: the text on the left, its control right-aligned. */
   .pending {
-    display: flex;
+    display: grid;
+    grid-template-columns: 1fr auto;
     align-items: center;
-    justify-content: space-between;
-    flex-wrap: wrap;
-    gap: 8px;
+    gap: 12px;
   }
 
   .foot {

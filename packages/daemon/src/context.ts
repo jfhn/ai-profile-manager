@@ -44,11 +44,21 @@ export interface ProfileService {
   envFor(profileId: string): Record<string, string>;
 }
 
+/** Options for a single usage refresh run. */
+export interface RefreshOptions {
+  /**
+   * Set for user-initiated refreshes: adapters then skip their error
+   * cooldowns and attempt a real fetch. The periodic scheduler and the
+   * start-up refresh leave it unset so cooldowns keep throttling them.
+   */
+  force?: boolean;
+}
+
 export interface UsageService {
   /** Latest snapshot per profile id. */
   latest(): Record<string, UsageSnapshot>;
   /** Refresh one profile (or all enabled) now; per-profile failures are isolated. */
-  refresh(profileId?: string): Promise<void>;
+  refresh(profileId?: string, options?: RefreshOptions): Promise<void>;
   /** Start/stop the periodic scheduler. */
   start(): void;
   stop(): void;

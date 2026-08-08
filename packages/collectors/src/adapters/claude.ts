@@ -20,6 +20,7 @@ import {
 const CACHE_FRESH_MS = 10 * 60 * 1000;
 const OAUTH_TTL_MS = 5 * 60 * 1000;
 const OAUTH_COOLDOWN_MS = 5 * 60 * 1000;
+const CREDENTIAL_SKEW_MS = 60 * 1000;
 const STALE_MS = 24 * 60 * 60 * 1000;
 const FABLE_MAX_BYTES = 16 * 1024;
 
@@ -64,26 +65,31 @@ async function collectClaudeUsage(ctx: CollectContext): Promise<CollectResult> {
           nowMs,
         )
       : null;
-    if (statusline?.usable && statusline.ageMs <= CACHE_FRESH_MS) {
+    // A user-initiated refresh means "check again now": it skips the fresh
+    // caches and the error cooldown alike. Without network access there is
+    // nothing to skip to, so the caches still win there.
+    const forceFetch = ctx.force === true && ctx.allowNetwork;
+    if (!forceFetch && statusline?.usable && statusline.ageMs <= CACHE_FRESH_MS) {
       return appendFable(statusline.result, fable, nowMs);
     }
 
     const oauthFile = path.join(ctx.cacheDir, 'claude-oauth-usage.json');
     const oauthCache = await readOauthCache(oauthFile, nowMs);
-    if (oauthCache.usage && oauthCache.ageMs <= OAUTH_TTL_MS) {
-      return appendFable(
-        fromRateLimits(
-          oauthCache.usage,
-          oauthCache.updatedAt,
-          'Claude OAuth usage endpoint cache',
-          'cache',
-          nowMs,
-        ),
-        fable,
-        nowMs,
-      );
+    const cachedOauth = usableRateLimits(
+      oauthCache.usage,
+      oauthCache.updatedAt,
+      'Claude OAuth usage endpoint cache',
+      'cache',
+      nowMs,
+    );
+    if (!forceFetch && cachedOauth && oauthCache.ageMs <= OAUTH_TTL_MS) {
+      return appendFable(cachedOauth, fable, nowMs);
     }
-    if (oauthCache.errorAgeMs <= OAUTH_COOLDOWN_MS) {
+    if (
+      oauthCache.errorAgeMs <= OAUTH_COOLDOWN_MS &&
+      !forceFetch &&
+      !(await credentialsChangedSince(ctx.home, oauthCache.errorAt, nowMs))
+    ) {
       return appendFable(cooldownResult(oauthCache, nowMs), fable, nowMs);
     }
     if (!ctx.allowNetwork) {
@@ -96,18 +102,9 @@ async function collectClaudeUsage(ctx: CollectContext): Promise<CollectResult> {
           fable,
           nowMs,
         );
-      if (oauthCache.usage)
+      if (cachedOauth)
         return appendFable(
-          asStale(
-            fromRateLimits(
-              oauthCache.usage,
-              oauthCache.updatedAt,
-              'Claude OAuth usage endpoint cache',
-              'stale-cache',
-              nowMs,
-            ),
-            'Claude OAuth cache is not fresh and network access is disabled',
-          ),
+          asStale(cachedOauth, 'Claude OAuth cache is not fresh and network access is disabled'),
           fable,
           nowMs,
         );
@@ -123,57 +120,74 @@ async function collectClaudeUsage(ctx: CollectContext): Promise<CollectResult> {
     }
 
     const fetched = await fetchOauth(ctx, nowMs);
-    if (fetched.usage) {
+    const live = usableRateLimits(
+      fetched.usage,
+      new Date(nowMs).toISOString(),
+      'Claude OAuth usage endpoint',
+      'live',
+      nowMs,
+    );
+    if (live) {
       await writeOauthCache(oauthFile, {
         updatedAt: new Date(nowMs).toISOString(),
         usage: fetched.usage,
       });
+      return appendFable(live, fable, nowMs);
+    }
+    // A 200 we cannot read is a failure, not live data: caching it would serve
+    // an empty card for the whole TTL. A genuine zero-usage response still
+    // parses into windows, so it does not land here.
+    const reason =
+      fetched.reason ??
+      (fetched.usage
+        ? 'Claude OAuth usage endpoint returned no recognizable rate limits'
+        : 'Claude OAuth usage endpoint unavailable');
+    await writeOauthError(oauthFile, oauthCache, reason, nowMs);
+    const kind = failureKind(reason);
+    const oauthFallback = usableRateLimits(
+      oauthCache.usage,
+      oauthCache.updatedAt,
+      'Claude OAuth usage endpoint cache',
+      'stale-cache',
+      nowMs,
+    );
+    // Prefer whichever fallback still carries numbers, so a failed refresh
+    // never blanks usage the user can already see. An auth failure is the
+    // exception: those cached OAuth numbers belong to a session the endpoint
+    // just rejected, so they stay hidden and only the statusline may show.
+    if (oauthFallback && kind !== 'auth') {
       return appendFable(
-        fromRateLimits(
-          fetched.usage,
-          new Date(nowMs).toISOString(),
-          'Claude OAuth usage endpoint',
-          'live',
-          nowMs,
-        ),
+        {
+          ...oauthFallback,
+          stale: true,
+          staleReason: reason,
+          failureKind: kind,
+          error: safeReason(reason),
+        },
         fable,
         nowMs,
       );
     }
-    const reason = fetched.reason ?? 'Claude OAuth usage endpoint unavailable';
-    await writeOauthError(oauthFile, oauthCache, reason, nowMs);
-    const kind = failureKind(reason);
-    if (oauthCache.usage) {
-      const fallback = fromRateLimits(
-        oauthCache.usage,
-        oauthCache.updatedAt,
-        'Claude OAuth usage endpoint cache',
-        'stale-cache',
-        nowMs,
-      );
-      const result =
-        kind === 'auth'
-          ? {
-              ...fallback,
-              windows: [],
-              source: 'Claude OAuth usage endpoint',
-              stale: true,
-              staleReason: reason,
-              failureKind: kind,
-              error: safeReason(reason),
-            }
-          : {
-              ...fallback,
-              stale: true,
-              staleReason: reason,
-              failureKind: kind,
-              error: safeReason(reason),
-            };
-      return appendFable(result, fable, nowMs);
-    }
     if (statusline?.usable) {
       return appendFable(
         { ...asStale(statusline.result, reason), failureKind: kind, error: safeReason(reason) },
+        fable,
+        nowMs,
+      );
+    }
+    if (oauthFallback) {
+      // Only reachable for an auth failure: the rejected session's numbers are
+      // withheld, but the cache's timestamp still explains what went stale.
+      return appendFable(
+        {
+          ...oauthFallback,
+          windows: [],
+          source: 'Claude OAuth usage endpoint',
+          stale: true,
+          staleReason: reason,
+          failureKind: kind,
+          error: safeReason(reason),
+        },
         fable,
         nowMs,
       );
@@ -287,6 +301,27 @@ function fromRateLimits(
   };
 }
 
+/**
+ * Parse a rate-limit payload, or null when it yields no window at all.
+ *
+ * Callers use this instead of a truthiness check on the raw payload: an
+ * unexpected body shape is truthy but carries nothing to show, and treating it
+ * as data produces an empty card that claims to be live or cached. A response
+ * that genuinely reports zero usage still parses into a window, so it is not
+ * mistaken for an unreadable one.
+ */
+function usableRateLimits(
+  data: unknown,
+  updatedAt: string | null,
+  source: string,
+  cacheStatus: CollectResult['cacheStatus'],
+  nowMs: number,
+): CollectResult | null {
+  if (!data) return null;
+  const result = fromRateLimits(data, updatedAt, source, cacheStatus, nowMs);
+  return result.windows.length ? result : null;
+}
+
 async function readFable(file: string, nowMs: number): Promise<UsageWindow | null> {
   const [data, stat] = await Promise.all([
     readJsonBounded(file, FABLE_MAX_BYTES),
@@ -370,6 +405,28 @@ async function readOauthCache(file: string, nowMs: number): Promise<OAuthCache> 
     errorAgeMs: Number.isFinite(errorMs) ? nowMs - errorMs : Infinity,
     errorReason: readString(record?.lastErrorReason),
   };
+}
+
+/**
+ * True when the profile logged in (or refreshed its token) after the recorded
+ * error, which makes the cached failure obsolete and worth retrying at once.
+ *
+ * A future-dated mtime is ignored: clock skew or a restored backup would
+ * otherwise satisfy the comparison on every run and turn the cooldown off
+ * permanently. The tolerance covers ordinary skew between the writer's clock
+ * and ours without opening that loop.
+ */
+async function credentialsChangedSince(
+  home: string,
+  errorAt: string | null,
+  nowMs: number,
+): Promise<boolean> {
+  const errorMs = Date.parse(errorAt ?? '');
+  if (!Number.isFinite(errorMs)) return false;
+  const stat = await statOrNull(path.join(home, '.credentials.json'));
+  const mtimeMs = Number(stat?.mtimeMs ?? NaN);
+  if (!Number.isFinite(mtimeMs)) return false;
+  return mtimeMs > errorMs && mtimeMs <= nowMs + CREDENTIAL_SKEW_MS;
 }
 
 function cooldownResult(cache: OAuthCache, _nowMs: number): CollectResult {

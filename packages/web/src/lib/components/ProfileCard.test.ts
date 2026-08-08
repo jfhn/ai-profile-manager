@@ -1,6 +1,7 @@
 import type { Profile } from '@apm/shared';
 import { fireEvent, render, screen, waitFor } from '@testing-library/svelte';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { profileView } from '../runway';
 import { FakeDaemon, loginCommand } from '../test-support/fake-daemon';
 import ProfileCard from './ProfileCard.svelte';
 
@@ -54,8 +55,12 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+/**
+ * Built through the real factory rather than hand-rolled, so the card under
+ * test keeps seeing exactly the view the dashboard builds for it.
+ */
 function renderCard(profile: Profile) {
-  return render(ProfileCard, { profile, snapshot: undefined });
+  return render(ProfileCard, { view: profileView(profile, undefined, Date.now()) });
 }
 
 describe('ProfileCard: resuming a pending profile', () => {
