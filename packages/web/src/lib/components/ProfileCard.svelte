@@ -15,6 +15,7 @@
   import ProviderMark from './ProviderMark.svelte';
   import StatusDot from './StatusDot.svelte';
   import TimeRing from './TimeRing.svelte';
+  import WizardModal from './WizardModal.svelte';
 
   interface Props {
     view: ProfileView;
@@ -33,6 +34,8 @@
   let removing = $state(false);
   let removeBusy = $state(false);
   let purge = $state(false);
+  /** The login wizard was reopened for this pending profile — never automatic. */
+  let resuming = $state(false);
 
   const plan = $derived(profile.identity?.plan ?? snapshot?.planType ?? null);
 
@@ -114,6 +117,9 @@
   }
 
   const menuItems = $derived<MenuItem[]>([
+    ...(profile.status === 'pending'
+      ? [{ label: 'Resume login', onSelect: () => (resuming = true) }]
+      : []),
     { label: 'Rename', onSelect: openRename },
     { label: profile.enabled ? 'Disable' : 'Enable', onSelect: () => void toggleEnabled() },
     {
@@ -208,7 +214,10 @@
     {:else if !profile.enabled}
       <p class="note">Refreshing is paused while this profile is disabled.</p>
     {:else if profile.status === 'pending'}
-      <p class="note">Waiting for the login to finish in your terminal.</p>
+      <div class="pending">
+        <p class="note">Waiting for the login to finish in your terminal.</p>
+        <Button size="sm" onclick={() => (resuming = true)}>Resume login</Button>
+      </div>
     {:else}
       <p class="note">No usage collected yet.</p>
     {/if}
@@ -268,6 +277,10 @@
       >
     {/snippet}
   </Modal>
+{/if}
+
+{#if resuming}
+  <WizardModal resumeProfileId={profile.id} onclose={() => (resuming = false)} />
 {/if}
 
 {#if removing}
@@ -424,6 +437,14 @@
 
   .note.error {
     color: color-mix(in oklab, var(--destructive) 80%, var(--tint-contrast));
+  }
+
+  /* Same rhythm as .window: the text on the left, its control right-aligned. */
+  .pending {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    align-items: center;
+    gap: 12px;
   }
 
   .foot {
