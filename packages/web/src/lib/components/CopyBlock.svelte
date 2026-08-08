@@ -51,7 +51,7 @@
     align-items: flex-start;
     gap: 8px;
     padding: 10px 10px 10px 12px;
-    background: rgba(0, 0, 0, 0.28);
+    background: var(--code-bg);
     border: 1px solid var(--border);
     border-radius: var(--radius-sm);
   }
@@ -62,7 +62,7 @@
     font-family: var(--font-mono);
     font-size: 12px;
     line-height: 1.6;
-    color: #e6e6e6;
+    color: var(--code-fg);
     overflow-wrap: anywhere;
     user-select: all;
   }
@@ -90,7 +90,7 @@
   }
 
   .copy.copied {
-    color: color-mix(in oklab, var(--success) 78%, white);
+    color: color-mix(in oklab, var(--success) 78%, var(--tint-contrast));
     border-color: color-mix(in oklab, var(--success) 34%, transparent);
   }
 </style>

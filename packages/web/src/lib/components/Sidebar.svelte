@@ -2,6 +2,7 @@
   import Icon from './Icon.svelte';
   import type { IconName } from './Icon.svelte';
   import StatusDot from './StatusDot.svelte';
+  import ThemeToggle from './ThemeToggle.svelte';
   import { router } from '../router.svelte';
   import type { RoutePath } from '../router.svelte';
   import { app } from '../stores.svelte';
@@ -63,6 +64,7 @@
   <div class="spacer"></div>
 
   <div class="footer">
+    <ThemeToggle />
     <div class="pill" title={connectionLabel}>
       <StatusDot tone={connectionTone} pulse={app.connection !== 'live'} size={6} />
       <span class="truncate">
@@ -95,8 +97,8 @@
     width: 20px;
     height: 20px;
     border-radius: 6px;
-    background: linear-gradient(135deg, var(--primary), #a855f7);
-    box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.06) inset;
+    background: var(--mark-gradient);
+    box-shadow: 0 0 0 1px var(--mark-inset) inset;
   }
 
   .wordmark {
@@ -143,11 +145,14 @@
     font-size: 11px;
     line-height: 16px;
     color: var(--muted-fg);
-    background: rgba(255, 255, 255, 0.07);
+    background: var(--fill-7);
     border-radius: 999px;
   }
 
   .footer {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
     padding-top: 12px;
     border-top: 1px solid var(--border);
   }

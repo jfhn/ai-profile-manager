@@ -38,7 +38,7 @@
     background: var(--popover);
     border: 1px solid var(--border);
     border-radius: var(--radius-sm);
-    box-shadow: 0 16px 40px rgba(0, 0, 0, 0.5);
+    box-shadow: var(--shadow-toast);
     animation: slide 140ms ease;
   }
 
@@ -58,7 +58,7 @@
   }
 
   .toast.destructive .title {
-    color: color-mix(in oklab, var(--destructive) 82%, white);
+    color: color-mix(in oklab, var(--destructive) 82%, var(--tint-contrast));
   }
 
   .description {

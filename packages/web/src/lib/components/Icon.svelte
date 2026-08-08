@@ -16,7 +16,10 @@
     | 'trash'
     | 'alert'
     | 'folder'
-    | 'sparkle';
+    | 'sparkle'
+    | 'monitor'
+    | 'sun'
+    | 'moon';
 </script>
 
 <script lang="ts">
@@ -96,6 +99,16 @@
     />
   {:else if name === 'sparkle'}
     <path d="M8 2.2 9.4 6.2 13.4 7.6 9.4 9 8 13 6.6 9 2.6 7.6 6.6 6.2z" />
+  {:else if name === 'monitor'}
+    <rect x="1.9" y="2.6" width="12.2" height="8.4" rx="1.6" />
+    <path d="M5.6 13.4h4.8" />
+    <path d="M8 11v2.4" />
+  {:else if name === 'sun'}
+    <circle cx="8" cy="8" r="3" />
+    <path d="M8 1.4v1.5M8 13.1v1.5M14.6 8h-1.5M2.9 8H1.4" />
+    <path d="M12.66 3.34 11.6 4.4M4.4 11.6l-1.06 1.06M12.66 12.66 11.6 11.6M4.4 4.4 3.34 3.34" />
+  {:else if name === 'moon'}
+    <path d="M13.4 9.6A5.9 5.9 0 0 1 6.1 2.4a5.9 5.9 0 1 0 7.3 7.2z" />
   {/if}
 </svg>
 

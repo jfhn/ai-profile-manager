@@ -91,11 +91,11 @@
     height: 28px;
     margin-bottom: 14px;
     border-radius: 9px;
-    background: linear-gradient(135deg, var(--primary), #a855f7);
+    background: var(--mark-gradient);
   }
 
   .mark.error {
-    background: linear-gradient(135deg, var(--destructive), #b45309);
+    background: var(--mark-gradient-error);
   }
 
   .body {
@@ -107,7 +107,7 @@
   .body code {
     padding: 1px 5px;
     color: var(--fg);
-    background: rgba(255, 255, 255, 0.07);
+    background: var(--fill-7);
     border-radius: 4px;
   }
 

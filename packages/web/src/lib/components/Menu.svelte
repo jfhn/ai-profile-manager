@@ -85,7 +85,7 @@
     background: var(--popover);
     border: 1px solid var(--border);
     border-radius: var(--radius-sm);
-    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
+    box-shadow: var(--shadow-menu);
     animation: pop 120ms ease;
   }
 

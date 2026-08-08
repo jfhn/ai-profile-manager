@@ -90,17 +90,17 @@
   }
 
   .primary:hover:not(:disabled) {
-    background: color-mix(in oklab, var(--primary) 88%, white);
+    background: color-mix(in oklab, var(--primary) 88%, var(--tint-contrast));
   }
 
   .secondary {
-    background: rgba(255, 255, 255, 0.05);
+    background: var(--fill-5);
     border-color: var(--input);
     color: var(--fg);
   }
 
   .secondary:hover:not(:disabled) {
-    background: rgba(255, 255, 255, 0.09);
+    background: var(--fill-9);
   }
 
   .ghost {

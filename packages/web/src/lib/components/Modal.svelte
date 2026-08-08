@@ -111,7 +111,7 @@
     align-items: center;
     justify-content: center;
     padding: 24px;
-    background: rgba(0, 0, 0, 0.55);
+    background: var(--scrim);
     backdrop-filter: blur(2px);
     animation: fade 120ms ease;
   }
@@ -131,8 +131,8 @@
     border: 1px solid var(--border);
     border-radius: var(--radius);
     box-shadow:
-      0 1px 0 rgba(255, 255, 255, 0.03) inset,
-      0 24px 60px rgba(0, 0, 0, 0.55);
+      0 1px 0 var(--surface-highlight) inset,
+      var(--shadow-modal);
     animation: pop 120ms ease;
   }
 

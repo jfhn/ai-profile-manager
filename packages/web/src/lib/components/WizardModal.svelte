@@ -329,7 +329,7 @@
   .steps li.done .bullet {
     border-color: transparent;
     background: color-mix(in oklab, var(--success) 22%, transparent);
-    color: color-mix(in oklab, var(--success) 80%, white);
+    color: color-mix(in oklab, var(--success) 80%, var(--tint-contrast));
   }
 
   .providers {
@@ -344,7 +344,7 @@
     gap: 6px;
     padding: 14px;
     text-align: left;
-    background: rgba(255, 255, 255, 0.02);
+    background: var(--fill-2);
     border: 1px solid var(--input);
     border-radius: var(--radius);
     transition:
@@ -393,7 +393,7 @@
     padding: 10px 12px;
     border: 1px solid var(--border);
     border-radius: var(--radius-sm);
-    background: rgba(255, 255, 255, 0.02);
+    background: var(--fill-2);
     color: var(--muted-fg);
   }
 
@@ -417,7 +417,7 @@
     flex: none;
     border-radius: 999px;
     background: color-mix(in oklab, var(--success) 20%, transparent);
-    color: color-mix(in oklab, var(--success) 85%, white);
+    color: color-mix(in oklab, var(--success) 85%, var(--tint-contrast));
   }
 
   .status-title {
