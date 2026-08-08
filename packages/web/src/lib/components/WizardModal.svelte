@@ -1,8 +1,9 @@
 <script lang="ts">
-  import type { ProviderId, WizardStateResponse } from '@apm/shared';
+  import type { ProviderId } from '@apm/shared';
   import { api } from '../api';
   import { app, refreshAll } from '../stores.svelte';
   import { toast, toastError } from '../toasts.svelte';
+  import { WizardFlow } from '../wizard.svelte';
   import Button from './Button.svelte';
   import ConfirmDialog from './ConfirmDialog.svelte';
   import CopyBlock from './CopyBlock.svelte';
@@ -12,11 +13,11 @@
 
   interface Props {
     onclose: () => void;
+    /** Reopen the login step for this already-pending profile instead of starting fresh. */
+    resumeProfileId?: string;
   }
 
-  let { onclose }: Props = $props();
-
-  type Step = 'provider' | 'login' | 'name';
+  let { onclose, resumeProfileId }: Props = $props();
 
   const PROVIDERS: Array<{ id: ProviderId; title: string; description: string }> = [
     {
@@ -31,60 +32,38 @@
     },
   ];
 
-  let step = $state<Step>('provider');
-  let starting = $state<ProviderId | null>(null);
-  let wizard = $state<WizardStateResponse | null>(null);
-  /** Kept separate from `wizard` so the polling effect never depends on its own writes. */
-  let wizardId = $state<string | null>(null);
-  let label = $state('');
-  let confirming = $state(false);
-  let discardOpen = $state(false);
-  let discardBusy = $state(false);
-  let pollError = $state<string | null>(null);
+  const flow = new WizardFlow({
+    api,
+    refresh: refreshAll,
+    toast,
+    toastError,
+    // Props go in through closures so the flow reads them lazily instead of
+    // capturing whatever they happened to be at init.
+    onclose: () => onclose(),
+    get resumeProfileId() {
+      return resumeProfileId;
+    },
+  });
 
-  const identity = $derived(wizard?.identity ?? null);
-
-  async function start(provider: ProviderId): Promise<void> {
-    if (starting) return;
-    starting = provider;
-    try {
-      const state = await api.startWizard({ provider });
-      wizard = state;
-      wizardId = state.profile.id;
-      label = state.suggestedLabel;
-      step = 'login';
-    } catch (error) {
-      toastError(error, 'Could not start the login flow');
-    } finally {
-      starting = null;
-    }
-  }
+  // No-op unless the card opened this modal for a pending profile. Kicked off
+  // during init so the login step is already the one being loaded on first paint.
+  void flow.resume();
 
   // Poll while the modal sits on the login step; the daemon watches the fresh
   // home for credentials the user creates in their own terminal.
   $effect(() => {
-    const profileId = wizardId;
-    if (step !== 'login' || !profileId) return;
+    if (flow.step !== 'login' || !flow.wizardId) return;
 
     let cancelled = false;
     let advanceTimer: ReturnType<typeof setTimeout> | null = null;
 
     const tick = async () => {
-      try {
-        const state = await api.wizardState(profileId);
-        if (cancelled) return;
-        pollError = null;
-        wizard = state;
-        if (state.credentialsFound) {
-          if (!label.trim()) label = state.suggestedLabel;
-          clearInterval(timer);
-          advanceTimer = setTimeout(() => {
-            if (!cancelled) step = 'name';
-          }, 900);
-        }
-      } catch (error) {
-        if (!cancelled) pollError = error instanceof Error ? error.message : 'Polling failed';
-      }
+      const found = await flow.poll();
+      if (cancelled || !found) return;
+      clearInterval(timer);
+      advanceTimer = setTimeout(() => {
+        if (!cancelled) flow.goToName();
+      }, 900);
     };
 
     const timer = setInterval(() => void tick(), 2000);
@@ -97,71 +76,22 @@
     };
   });
 
-  async function confirm(): Promise<void> {
-    const profileId = wizard?.profile.id;
-    const trimmed = label.trim();
-    if (!profileId || !trimmed || confirming) return;
-    confirming = true;
-    try {
-      await api.confirmWizard(profileId, { label: trimmed });
-      await refreshAll();
-      toast('Profile added', `${trimmed} is ready to use.`);
-      onclose();
-    } catch (error) {
-      toastError(error, 'Could not save the profile');
-    } finally {
-      confirming = false;
-    }
-  }
-
-  async function discard(): Promise<void> {
-    const profileId = wizard?.profile.id;
-    if (!profileId) {
-      onclose();
-      return;
-    }
-    discardBusy = true;
-    try {
-      await api.deleteProfile(profileId, true);
-      await refreshAll();
-      onclose();
-    } catch (error) {
-      toastError(error, 'Could not discard the pending profile');
-    } finally {
-      discardBusy = false;
-      discardOpen = false;
-    }
-  }
-
-  function requestClose(): void {
-    if (wizard) {
-      discardOpen = true;
-      return;
-    }
-    onclose();
-  }
-
-  function keepPending(): void {
-    discardOpen = false;
-    toast('Kept as pending', 'Finish the login later — the profile stays on the dashboard.');
-    void refreshAll();
-    onclose();
-  }
-
   function submitName(event: SubmitEvent): void {
     event.preventDefault();
-    void confirm();
+    void flow.confirm();
   }
 
+  const wizard = $derived(flow.wizard);
+  const identity = $derived(flow.identity);
   const providerLabel = $derived(wizard ? app.providerLabel(wizard.profile.provider) : '');
-  const stepIndex = $derived(step === 'provider' ? 0 : step === 'login' ? 1 : 2);
+  const stepIndex = $derived(flow.step === 'provider' ? 0 : flow.step === 'login' ? 1 : 2);
 </script>
 
 <Modal
-  title="Add profile"
+  title={flow.resumed ? 'Resume login' : 'Add profile'}
   subtitle="apm never performs the login itself — you run the provider's own command."
   width={520}
-  onclose={requestClose}
+  onclose={() => flow.requestClose()}
 >
   <ol class="steps" aria-label="Progress">
     {#each ['Provider', 'Login', 'Name'] as name, index (name)}
@@ -178,24 +108,32 @@
     {/each}
   </ol>
 
-  {#if step === 'provider'}
+  {#if flow.loading}
+    <div class="status">
+      <Spinner size={14} />
+      <div>
+        <p class="status-title">Loading the login details…</p>
+        <p class="status-sub">Fetching the command for this pending profile.</p>
+      </div>
+    </div>
+  {:else if flow.step === 'provider'}
     <div class="providers">
       {#each PROVIDERS as provider (provider.id)}
         <button
           class="provider"
           type="button"
-          disabled={starting !== null}
-          onclick={() => void start(provider.id)}
+          disabled={flow.starting !== null}
+          onclick={() => void flow.start(provider.id)}
         >
           <span class="provider-head">
             <span class="provider-title">{provider.title}</span>
-            {#if starting === provider.id}<Spinner size={13} />{/if}
+            {#if flow.starting === provider.id}<Spinner size={13} />{/if}
           </span>
           <span class="provider-desc">{provider.description}</span>
         </button>
       {/each}
     </div>
-  {:else if step === 'login' && wizard}
+  {:else if flow.step === 'login' && wizard}
     <p class="lead">Run this in a terminal, then come back:</p>
     <CopyBlock value={wizard.loginCommand} />
     <p class="home mono" title={wizard.profile.home}>{wizard.profile.home}</p>
@@ -214,12 +152,13 @@
         <div>
           <p class="status-title">Waiting for login…</p>
           <p class="status-sub">
-            {pollError ?? `A fresh ${providerLabel} home is ready; apm checks it every 2 seconds.`}
+            {flow.pollError ??
+              `A fresh ${providerLabel} home is ready; apm checks it every 2 seconds.`}
           </p>
         </div>
       {/if}
     </div>
-  {:else if step === 'name' && wizard}
+  {:else if flow.step === 'name' && wizard}
     <div class="detected">
       <span class="check"><Icon name="check" size={13} /></span>
       <div>
@@ -238,7 +177,7 @@
         <input
           id="wizard-label"
           class="input"
-          bind:value={label}
+          bind:value={flow.label}
           data-autofocus
           maxlength="64"
           autocomplete="off"
@@ -250,24 +189,24 @@
   {/if}
 
   {#snippet footer()}
-    {#if step === 'provider'}
-      <Button variant="ghost" onclick={requestClose}>Cancel</Button>
-    {:else if step === 'login'}
-      <Button variant="ghost" onclick={requestClose}>Cancel</Button>
+    {#if flow.step === 'provider'}
+      <Button variant="ghost" onclick={() => flow.requestClose()}>Cancel</Button>
+    {:else if flow.step === 'login'}
+      <Button variant="ghost" onclick={() => flow.requestClose()}>Cancel</Button>
       <Button
         disabled={!wizard?.credentialsFound}
         variant="primary"
-        onclick={() => (step = 'name')}
+        onclick={() => flow.goToName()}
       >
         Continue
       </Button>
     {:else}
-      <Button variant="ghost" onclick={requestClose}>Cancel</Button>
+      <Button variant="ghost" onclick={() => flow.requestClose()}>Cancel</Button>
       <Button
         variant="primary"
-        loading={confirming}
-        disabled={label.trim().length === 0}
-        onclick={() => void confirm()}
+        loading={flow.confirming}
+        disabled={flow.label.trim().length === 0}
+        onclick={() => void flow.confirm()}
       >
         Confirm
       </Button>
@@ -275,15 +214,17 @@
   {/snippet}
 </Modal>
 
-{#if discardOpen}
+{#if flow.discardOpen}
   <ConfirmDialog
     title="Leave the wizard?"
-    message="A pending profile and a fresh home were already created for this login."
+    message={flow.resumed
+      ? 'Keeping it pending leaves the profile on the dashboard, ready to resume. Discarding removes the profile and its managed home.'
+      : 'A pending profile and a fresh home were already created for this login.'}
     confirmLabel="Discard"
     cancelLabel="Keep pending"
-    busy={discardBusy}
-    onconfirm={() => void discard()}
-    oncancel={keepPending}
+    busy={flow.discardBusy}
+    onconfirm={() => void flow.discard()}
+    oncancel={() => flow.keepPending()}
   />
 {/if}
 
