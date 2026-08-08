@@ -357,6 +357,56 @@ describe('claude adapter', () => {
     expect(result.error).toContain('HTTP 500');
   });
 
+  it('treats an unreadable HTTP 200 as a failure and never caches it', async () => {
+    const { home, cache, global } = setup();
+    writeCredentials(home, now - 60_000);
+    writeJson(path.join(global, 'claude-rate-limits.json'), {
+      updatedAt: '2025-01-09T23:59:00Z',
+      rate_limits: { primary: { used_percent: 5, reset_at: '2025-01-10T01:00:00Z' } },
+    });
+    const oauthFile = path.join(cache, 'claude-oauth-usage.json');
+
+    const result = await claudeAdapter.collectUsage({
+      home,
+      defaultHome: home,
+      cacheDir: cache,
+      globalCacheDir: global,
+      allowNetwork: true,
+      now,
+      force: true,
+      fetchImpl: async () => new Response(JSON.stringify({ unexpected: true }), { status: 200 }),
+    });
+    expect(result.windows).toEqual([expect.objectContaining({ id: 'five_hour', usedPercent: 5 })]);
+    expect(result.cacheStatus).toBe('stale-cache');
+    expect(result.stale).toBe(true);
+    expect(result.staleReason).toContain('no recognizable rate limits');
+    expect(JSON.parse(fs.readFileSync(oauthFile, 'utf8'))).toMatchObject({ usage: null });
+  });
+
+  it('accepts a well-formed response that reports zero usage', async () => {
+    const { home, cache, global } = setup();
+    writeCredentials(home, now - 60_000);
+    const result = await claudeAdapter.collectUsage({
+      home,
+      defaultHome: home,
+      cacheDir: cache,
+      globalCacheDir: global,
+      allowNetwork: true,
+      now,
+      fetchImpl: async () =>
+        new Response(
+          JSON.stringify({
+            rate_limits: { primary: { used_percent: 0, reset_at: '2025-01-10T01:00:00Z' } },
+          }),
+          { status: 200 },
+        ),
+    });
+    expect(result.cacheStatus).toBe('live');
+    expect(result.windows).toEqual([
+      expect.objectContaining({ id: 'five_hour', usedPercent: 0, remainingPercent: 100 }),
+    ]);
+  });
+
   it('shows statusline data instead of rejected OAuth cache on an auth failure', async () => {
     const { home, cache, global } = setup();
     writeCredentials(home, now - 60_000);

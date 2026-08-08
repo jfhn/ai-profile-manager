@@ -75,18 +75,15 @@ async function collectClaudeUsage(ctx: CollectContext): Promise<CollectResult> {
 
     const oauthFile = path.join(ctx.cacheDir, 'claude-oauth-usage.json');
     const oauthCache = await readOauthCache(oauthFile, nowMs);
-    if (!forceFetch && oauthCache.usage && oauthCache.ageMs <= OAUTH_TTL_MS) {
-      return appendFable(
-        fromRateLimits(
-          oauthCache.usage,
-          oauthCache.updatedAt,
-          'Claude OAuth usage endpoint cache',
-          'cache',
-          nowMs,
-        ),
-        fable,
-        nowMs,
-      );
+    const cachedOauth = usableRateLimits(
+      oauthCache.usage,
+      oauthCache.updatedAt,
+      'Claude OAuth usage endpoint cache',
+      'cache',
+      nowMs,
+    );
+    if (!forceFetch && cachedOauth && oauthCache.ageMs <= OAUTH_TTL_MS) {
+      return appendFable(cachedOauth, fable, nowMs);
     }
     if (
       oauthCache.errorAgeMs <= OAUTH_COOLDOWN_MS &&
@@ -105,18 +102,9 @@ async function collectClaudeUsage(ctx: CollectContext): Promise<CollectResult> {
           fable,
           nowMs,
         );
-      if (oauthCache.usage)
+      if (cachedOauth)
         return appendFable(
-          asStale(
-            fromRateLimits(
-              oauthCache.usage,
-              oauthCache.updatedAt,
-              'Claude OAuth usage endpoint cache',
-              'stale-cache',
-              nowMs,
-            ),
-            'Claude OAuth cache is not fresh and network access is disabled',
-          ),
+          asStale(cachedOauth, 'Claude OAuth cache is not fresh and network access is disabled'),
           fable,
           nowMs,
         );
@@ -132,40 +120,42 @@ async function collectClaudeUsage(ctx: CollectContext): Promise<CollectResult> {
     }
 
     const fetched = await fetchOauth(ctx, nowMs);
-    if (fetched.usage) {
+    const live = usableRateLimits(
+      fetched.usage,
+      new Date(nowMs).toISOString(),
+      'Claude OAuth usage endpoint',
+      'live',
+      nowMs,
+    );
+    if (live) {
       await writeOauthCache(oauthFile, {
         updatedAt: new Date(nowMs).toISOString(),
         usage: fetched.usage,
       });
-      return appendFable(
-        fromRateLimits(
-          fetched.usage,
-          new Date(nowMs).toISOString(),
-          'Claude OAuth usage endpoint',
-          'live',
-          nowMs,
-        ),
-        fable,
-        nowMs,
-      );
+      return appendFable(live, fable, nowMs);
     }
-    const reason = fetched.reason ?? 'Claude OAuth usage endpoint unavailable';
+    // A 200 we cannot read is a failure, not live data: caching it would serve
+    // an empty card for the whole TTL. A genuine zero-usage response still
+    // parses into windows, so it does not land here.
+    const reason =
+      fetched.reason ??
+      (fetched.usage
+        ? 'Claude OAuth usage endpoint returned no recognizable rate limits'
+        : 'Claude OAuth usage endpoint unavailable');
     await writeOauthError(oauthFile, oauthCache, reason, nowMs);
     const kind = failureKind(reason);
-    const oauthFallback = oauthCache.usage
-      ? fromRateLimits(
-          oauthCache.usage,
-          oauthCache.updatedAt,
-          'Claude OAuth usage endpoint cache',
-          'stale-cache',
-          nowMs,
-        )
-      : null;
+    const oauthFallback = usableRateLimits(
+      oauthCache.usage,
+      oauthCache.updatedAt,
+      'Claude OAuth usage endpoint cache',
+      'stale-cache',
+      nowMs,
+    );
     // Prefer whichever fallback still carries numbers, so a failed refresh
     // never blanks usage the user can already see. An auth failure is the
     // exception: those cached OAuth numbers belong to a session the endpoint
     // just rejected, so they stay hidden and only the statusline may show.
-    if (oauthFallback?.windows.length && kind !== 'auth') {
+    if (oauthFallback && kind !== 'auth') {
       return appendFable(
         {
           ...oauthFallback,
@@ -186,10 +176,13 @@ async function collectClaudeUsage(ctx: CollectContext): Promise<CollectResult> {
       );
     }
     if (oauthFallback) {
+      // Only reachable for an auth failure: the rejected session's numbers are
+      // withheld, but the cache's timestamp still explains what went stale.
       return appendFable(
         {
           ...oauthFallback,
-          ...(kind === 'auth' ? { windows: [], source: 'Claude OAuth usage endpoint' } : {}),
+          windows: [],
+          source: 'Claude OAuth usage endpoint',
           stale: true,
           staleReason: reason,
           failureKind: kind,
@@ -306,6 +299,27 @@ function fromRateLimits(
     planType: null,
     retryAfterSeconds: null,
   };
+}
+
+/**
+ * Parse a rate-limit payload, or null when it yields no window at all.
+ *
+ * Callers use this instead of a truthiness check on the raw payload: an
+ * unexpected body shape is truthy but carries nothing to show, and treating it
+ * as data produces an empty card that claims to be live or cached. A response
+ * that genuinely reports zero usage still parses into a window, so it is not
+ * mistaken for an unreadable one.
+ */
+function usableRateLimits(
+  data: unknown,
+  updatedAt: string | null,
+  source: string,
+  cacheStatus: CollectResult['cacheStatus'],
+  nowMs: number,
+): CollectResult | null {
+  if (!data) return null;
+  const result = fromRateLimits(data, updatedAt, source, cacheStatus, nowMs);
+  return result.windows.length ? result : null;
 }
 
 async function readFable(file: string, nowMs: number): Promise<UsageWindow | null> {
