@@ -38,14 +38,14 @@ export function registerCoreRoutes(app: FastifyInstance, ctx: AppContext): void 
   });
 
   app.post<{ Params: IdParams }>('/api/profiles/:id/refresh', async (request, reply) => {
-    await ctx.usage.refresh(request.params.id);
+    await ctx.usage.refresh(request.params.id, { force: true });
     return reply.code(204).send();
   });
 
   app.get('/api/usage', async () => ctx.usage.latest());
 
   app.post('/api/usage/refresh', async (_request, reply) => {
-    await ctx.usage.refresh();
+    await ctx.usage.refresh(undefined, { force: true });
     return reply.code(204).send();
   });
 

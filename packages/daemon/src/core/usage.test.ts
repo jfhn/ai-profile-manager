@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import type { ProviderAdapter } from '@apm/collectors';
+import type { CollectContext, ProviderAdapter } from '@apm/collectors';
 import type { CollectResult, ProviderId, ProviderIdentity } from '@apm/shared';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ensureDirs, resolveConfig } from '../config.js';
@@ -100,6 +100,31 @@ describe('usage service', () => {
     expect(usage.latest()[active.id]).toBeDefined();
     expect(usage.latest()[disabled.id]).toBeUndefined();
     expect(usage.latest()[pending.profile.id]).toBeUndefined();
+  });
+
+  it('forwards force to the adapter only when the caller asks for it', async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'apm-usage-force-test-'));
+    temporaryDirectories.push(directory);
+    const config = resolveConfig({ dataDir: directory });
+    ensureDirs(config);
+    const collect = vi.fn(async (_ctx: CollectContext): Promise<CollectResult> => cannedResult());
+    const adapters: AdapterRegistry = {
+      claude: fakeAdapter('claude', collect),
+      codex: fakeAdapter('codex', collect),
+    };
+    const profiles = createProfileService(config, createEventBus(), adapters);
+    const profile = await profiles.create({
+      provider: 'claude',
+      label: 'forced',
+      home: makeCredentialHome(directory, 'forced'),
+    });
+
+    const usage = createUsageService(config, createEventBus(), profiles, adapters);
+    await usage.refresh();
+    await usage.refresh(profile.id, { force: true });
+    await usage.refresh(undefined, { force: true });
+
+    expect(collect.mock.calls.map(([ctx]) => ctx?.force)).toEqual([false, true, true]);
   });
 });
 

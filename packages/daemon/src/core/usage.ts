@@ -3,7 +3,13 @@ import path from 'node:path';
 import { adapters as defaultAdapters } from '@apm/collectors';
 import type { UsageSnapshot } from '@apm/shared';
 import type { DaemonConfig } from '../config.js';
-import { ApiFailure, type EventBus, type ProfileService, type UsageService } from '../context.js';
+import {
+  ApiFailure,
+  type EventBus,
+  type ProfileService,
+  type RefreshOptions,
+  type UsageService,
+} from '../context.js';
 import { UsageDatabase } from './db.js';
 import type { AdapterRegistry } from './profiles.js';
 
@@ -26,7 +32,7 @@ export function createUsageService(
     db.deleteBefore(new Date(Date.now() - RETENTION_MS).toISOString());
   }
 
-  async function refresh(profileId?: string): Promise<void> {
+  async function refresh(profileId?: string, options?: RefreshOptions): Promise<void> {
     const targets = profileId
       ? [profileOrThrow(profiles, profileId)]
       : profiles.list().filter((profile) => profile.enabled && profile.status !== 'pending');
@@ -46,6 +52,7 @@ export function createUsageService(
           home: profile.home,
           cacheDir,
           allowNetwork: true,
+          force: options?.force === true,
         });
         snapshot = {
           ...result,

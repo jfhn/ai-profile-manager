@@ -83,7 +83,11 @@ async function collectClaudeUsage(ctx: CollectContext): Promise<CollectResult> {
         nowMs,
       );
     }
-    if (oauthCache.errorAgeMs <= OAUTH_COOLDOWN_MS) {
+    if (
+      oauthCache.errorAgeMs <= OAUTH_COOLDOWN_MS &&
+      !ctx.force &&
+      !(await credentialsChangedSince(ctx.home, oauthCache.errorAt))
+    ) {
       return appendFable(cooldownResult(oauthCache, nowMs), fable, nowMs);
     }
     if (!ctx.allowNetwork) {
@@ -370,6 +374,18 @@ async function readOauthCache(file: string, nowMs: number): Promise<OAuthCache> 
     errorAgeMs: Number.isFinite(errorMs) ? nowMs - errorMs : Infinity,
     errorReason: readString(record?.lastErrorReason),
   };
+}
+
+/**
+ * True when the profile logged in (or refreshed its token) after the recorded
+ * error, which makes the cached failure obsolete and worth retrying at once.
+ */
+async function credentialsChangedSince(home: string, errorAt: string | null): Promise<boolean> {
+  const errorMs = Date.parse(errorAt ?? '');
+  if (!Number.isFinite(errorMs)) return false;
+  const stat = await statOrNull(path.join(home, '.credentials.json'));
+  const mtimeMs = Number(stat?.mtimeMs ?? NaN);
+  return Number.isFinite(mtimeMs) && mtimeMs > errorMs;
 }
 
 function cooldownResult(cache: OAuthCache, _nowMs: number): CollectResult {

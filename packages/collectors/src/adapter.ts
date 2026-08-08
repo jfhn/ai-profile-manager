@@ -16,6 +16,12 @@ export interface CollectContext {
    * discovery mode). Network fetches are opt-in per call.
    */
   allowNetwork: boolean;
+  /**
+   * Set for user-initiated refreshes. Adapters must skip their error
+   * cooldowns and attempt a real fetch — the periodic scheduler never
+   * sets it, so cooldowns still protect against background fetch spam.
+   */
+  force?: boolean;
   /** Injectable fetch implementation for deterministic, network-free tests. */
   fetchImpl?: typeof fetch;
   /** Override the global statusline cache directory (tests only). */
