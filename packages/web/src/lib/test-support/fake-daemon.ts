@@ -29,7 +29,7 @@ export class FakeDaemon implements WizardApi {
 
   /** Seed a profile that is already pending, as if an earlier wizard made it. */
   seedPending(provider: ProviderId): Profile {
-    const id = `profile-${++this.counter}`;
+    const id = this.nextId();
     const profile: Profile = {
       id,
       provider,
@@ -122,6 +122,24 @@ export class FakeDaemon implements WizardApi {
     let suffix = 1;
     while (this.labelExists(provider, `${provider}-${suffix}`)) suffix += 1;
     return `${provider}-${suffix}`;
+  }
+
+  /**
+   * Reproducible across runs, but deliberately not positional. The daemon uses
+   * `crypto.randomUUID()`, so a test must not be able to pass by hard-coding
+   * the id of the first seeded profile — that would hide a card wiring the
+   * wrong profile into the wizard.
+   */
+  private nextId(): string {
+    let hash = (++this.counter * 0x9e3779b1) >>> 0 || 1;
+    const word = (): string => {
+      hash = (hash ^ (hash << 13)) >>> 0;
+      hash = (hash ^ (hash >>> 17)) >>> 0;
+      hash = (hash ^ (hash << 5)) >>> 0;
+      return hash.toString(16).padStart(8, '0');
+    };
+    const short = (): string => word().slice(0, 4);
+    return `${word()}-${short()}-${short()}-${short()}-${word()}${short()}`;
   }
 
   private uniqueLabel(provider: ProviderId, base: string): string {

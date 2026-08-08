@@ -34,6 +34,8 @@ vi.mock('../api', () => ({
   },
 }));
 
+/** A second pending profile that is never rendered — see `decoy` below. */
+let decoy: Profile;
 let pending: Profile;
 
 beforeEach(() => {
@@ -41,6 +43,10 @@ beforeEach(() => {
   // working while we jump the wizard's 2s credential poll by hand.
   vi.useFakeTimers({ shouldAdvanceTime: true });
   mocks.daemon = new FakeDaemon();
+  // Seeded first so the profile under test is neither the only pending one nor
+  // the first id the fake hands out. A card that resumed a hard-coded or
+  // otherwise wrong profile would now talk to the decoy and fail.
+  decoy = mocks.daemon.seedPending('claude');
   pending = mocks.daemon.seedPending('claude');
 });
 
@@ -64,6 +70,7 @@ describe('ProfileCard: resuming a pending profile', () => {
     // opened on the login step rather than the provider picker.
     await waitFor(() => expect(mocks.daemon.wizardStateCalls).toContain(pending.id));
     expect([...new Set(mocks.daemon.wizardStateCalls)]).toEqual([pending.id]);
+    expect(mocks.daemon.wizardStateCalls).not.toContain(decoy.id);
     expect(screen.getByRole('dialog', { name: 'Resume login' })).toBeDefined();
     // The provider picker is skipped — the profile already has a provider.
     expect(screen.queryByText('Claude Code')).toBeNull();
@@ -98,6 +105,7 @@ describe('ProfileCard: resuming a pending profile', () => {
     await fireEvent.click(screen.getByRole('menuitem', { name: 'Resume login' }));
     await screen.findByText(loginCommand(pending));
     expect([...new Set(mocks.daemon.wizardStateCalls)]).toEqual([pending.id]);
+    expect(mocks.daemon.wizardStateCalls).not.toContain(decoy.id);
   });
 
   it('keeps the resume action off an active profile', () => {
