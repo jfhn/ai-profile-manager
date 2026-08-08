@@ -13,6 +13,13 @@ the daemon API.
 
 ## Quick start
 
+Needs Node >= 24 and pnpm 11 (pinned as `pnpm@11.3.0` via `packageManager`). If
+your `pnpm` comes from Corepack, it has to be a recent Corepack: 0.24.0 — the
+version Debian/Ubuntu ship as `node-corepack` — cannot launch pnpm 11 at all and
+fails with `ERR_VM_DYNAMIC_IMPORT_CALLBACK_MISSING` on every Node version. Either
+`npm i -g corepack@latest`, or install pnpm directly and keep the distro shim off
+your PATH.
+
 ```sh
 pnpm install
 pnpm build
