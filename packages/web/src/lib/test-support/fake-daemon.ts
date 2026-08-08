@@ -25,7 +25,6 @@ export class FakeDaemon implements WizardApi {
   deleted: Array<{ id: string; purge: boolean }> = [];
   /** Every profile id `wizardState` was asked about, in order. */
   wizardStateCalls: string[] = [];
-  private counter = 0;
 
   /** Seed a profile that is already pending, as if an earlier wizard made it. */
   seedPending(provider: ProviderId): Profile {
@@ -125,21 +124,14 @@ export class FakeDaemon implements WizardApi {
   }
 
   /**
-   * Reproducible across runs, but deliberately not positional. The daemon uses
-   * `crypto.randomUUID()`, so a test must not be able to pass by hard-coding
-   * the id of the first seeded profile — that would hide a card wiring the
-   * wrong profile into the wizard.
+   * Unpredictable on purpose, exactly as the daemon's `crypto.randomUUID()` is.
+   * A test must not be able to pass by hard-coding an id, because that would
+   * hide a card wiring the wrong profile into the wizard. Nothing asserts a
+   * literal id — every reference goes through a returned `Profile` — so this
+   * costs no determinism.
    */
   private nextId(): string {
-    let hash = (++this.counter * 0x9e3779b1) >>> 0 || 1;
-    const word = (): string => {
-      hash = (hash ^ (hash << 13)) >>> 0;
-      hash = (hash ^ (hash >>> 17)) >>> 0;
-      hash = (hash ^ (hash << 5)) >>> 0;
-      return hash.toString(16).padStart(8, '0');
-    };
-    const short = (): string => word().slice(0, 4);
-    return `${word()}-${short()}-${short()}-${short()}-${word()}${short()}`;
+    return crypto.randomUUID();
   }
 
   private uniqueLabel(provider: ProviderId, base: string): string {
