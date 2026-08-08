@@ -1,90 +1,8 @@
-import type {
-  ConfirmWizardRequest,
-  Profile,
-  ProviderId,
-  StartWizardRequest,
-  WizardStateResponse,
-} from '@apm/shared';
+import type { ProviderId } from '@apm/shared';
 import { describe, expect, it } from 'vitest';
+import { FakeDaemon, loginCommand } from './test-support/fake-daemon';
 import { WizardFlow } from './wizard.svelte';
-import type { WizardApi, WizardOptions } from './wizard.svelte';
-
-/**
- * A stand-in for the daemon: it owns the profile list, so a second WizardFlow
- * built from nothing but a profile id behaves exactly like the dashboard after
- * a page reload.
- */
-class FakeDaemon implements WizardApi {
-  profiles: Profile[] = [];
-  /** Flipped when the user finishes the provider login in their terminal. */
-  credentialsFound = false;
-  deleted: Array<{ id: string; purge: boolean }> = [];
-  private counter = 0;
-
-  async startWizard({ provider }: StartWizardRequest): Promise<WizardStateResponse> {
-    const id = `profile-${++this.counter}`;
-    const profile: Profile = {
-      id,
-      provider,
-      label: '',
-      home: `/home/tester/.apm/homes/${provider}/${id}`,
-      homeKind: 'managed',
-      identity: null,
-      status: 'pending',
-      statusReason: null,
-      enabled: true,
-      createdAt: '2026-01-01T00:00:00.000Z',
-    };
-    this.profiles = [...this.profiles, profile];
-    return this.state(profile);
-  }
-
-  async wizardState(profileId: string): Promise<WizardStateResponse> {
-    const profile = this.find(profileId);
-    if (profile.status !== 'pending') throw new Error('Profile is not pending login');
-    return this.state(profile);
-  }
-
-  async confirmWizard(profileId: string, { label }: ConfirmWizardRequest): Promise<Profile> {
-    const profile = this.find(profileId);
-    if (profile.status !== 'pending') throw new Error('Profile is not pending login');
-    if (!this.credentialsFound) throw new Error('No credentials found');
-    const updated: Profile = { ...profile, label, status: 'active' };
-    this.profiles = this.profiles.map((it) => (it.id === profileId ? updated : it));
-    return updated;
-  }
-
-  async deleteProfile(profileId: string, purge = false): Promise<void> {
-    this.deleted.push({ id: profileId, purge });
-    this.profiles = this.profiles.filter((it) => it.id !== profileId);
-  }
-
-  private find(profileId: string): Profile {
-    const profile = this.profiles.find((it) => it.id === profileId);
-    if (!profile) throw new Error(`Unknown profile ${profileId}`);
-    return profile;
-  }
-
-  private state(profile: Profile): WizardStateResponse {
-    return {
-      profile,
-      loginCommand: loginCommand(profile),
-      credentialsFound: this.credentialsFound,
-      identity: this.credentialsFound
-        ? { account: 'tester@example.com', organization: null, plan: 'max' }
-        : null,
-      // The daemon derives the suggestion from the identity, so there is none
-      // until the credentials show up.
-      suggestedLabel: this.credentialsFound ? 'tester' : '',
-    };
-  }
-}
-
-function loginCommand(profile: Profile): string {
-  return profile.provider === 'claude'
-    ? `CLAUDE_CONFIG_DIR=${profile.home} claude /login`
-    : `CODEX_HOME=${profile.home} codex login`;
-}
+import type { WizardOptions } from './wizard.svelte';
 
 interface Harness {
   flow: WizardFlow;
@@ -152,13 +70,14 @@ describe('WizardFlow: dismiss, resume, confirm', () => {
     expect(flow.step).toBe('login');
     expect(flow.wizardId).toBe(profileId);
     expect(flow.wizard?.profile.provider).toBe('claude');
-    expect(flow.wizard?.loginCommand).toBe(`CLAUDE_CONFIG_DIR=${pending!.home} claude /login`);
+    expect(flow.wizard?.loginCommand).toBe(loginCommand(pending!));
     expect(flow.wizard?.credentialsFound).toBe(false);
 
-    // Still waiting: polling keeps the step where it is.
+    // Still waiting: polling keeps the step where it is. The name is the
+    // daemon's positional placeholder until an account turns up.
     expect(await flow.poll()).toBe(false);
     expect(flow.step).toBe('login');
-    expect(flow.label).toBe('');
+    expect(flow.label).toBe('claude-1');
 
     // The user finishes the login in their terminal.
     daemon.credentialsFound = true;
@@ -203,6 +122,49 @@ describe('WizardFlow: dismiss, resume, confirm', () => {
     const again = harness(daemon, profileId);
     expect(await again.flow.resume()).toBe(true);
     expect(again.flow.step).toBe('login');
+  });
+
+  it('offers the same account-derived name a resumed wizard would', async () => {
+    // `wizardState` never answers with an empty suggestion — before the login
+    // completes it can only offer `claude-1`. A resumed wizard must not get
+    // stuck on that placeholder once the real account shows up, or it would
+    // prefill a worse name than the flow that was never interrupted.
+    const uninterrupted = new FakeDaemon();
+    const first = harness(uninterrupted);
+    await first.flow.start('claude');
+    uninterrupted.credentialsFound = true;
+    await first.flow.poll();
+
+    const dropped = new FakeDaemon();
+    await dismissedPendingProfile(dropped, 'claude');
+    const resumedFlow = harness(dropped, dropped.profiles[0]!.id).flow;
+    await resumedFlow.resume();
+    expect(resumedFlow.label).toBe('claude-1');
+
+    dropped.credentialsFound = true;
+    await resumedFlow.poll();
+
+    expect(resumedFlow.label).toBe('tester');
+    expect(resumedFlow.label).toBe(first.flow.label);
+  });
+
+  it('never overwrites a name the user typed', async () => {
+    const daemon = new FakeDaemon();
+    await dismissedPendingProfile(daemon, 'claude');
+    const { flow } = harness(daemon, daemon.profiles[0]!.id);
+    await flow.resume();
+
+    flow.label = 'billing';
+    expect(flow.labelEdited).toBe(true);
+
+    // Later suggestions, however good, must not clobber the user's choice.
+    daemon.credentialsFound = true;
+    await flow.poll();
+    expect(flow.label).toBe('billing');
+
+    flow.goToName();
+    await flow.confirm();
+    expect(daemon.profiles[0]?.label).toBe('billing');
   });
 
   it('discards the profile and its managed home when asked to', async () => {

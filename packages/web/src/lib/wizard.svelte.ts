@@ -46,7 +46,9 @@ export class WizardFlow {
   wizard = $state<WizardStateResponse | null>(null);
   /** Kept separate from `wizard` so the polling effect never depends on its own writes. */
   wizardId = $state<string | null>(null);
-  label = $state('');
+  #label = $state('');
+  /** Set once the user types a name, which freezes out the daemon's suggestions. */
+  labelEdited = $state(false);
   /** Resuming an already-pending profile rather than creating a new one. */
   resumed = $state(false);
   /** The initial wizard-state fetch of a resume is still in flight. */
@@ -60,6 +62,29 @@ export class WizardFlow {
 
   constructor(options: WizardOptions) {
     this.options = options;
+  }
+
+  get label(): string {
+    return this.#label;
+  }
+
+  /** Every write from the UI is the user typing, so it wins from then on. */
+  set label(value: string) {
+    this.#label = value;
+    this.labelEdited = true;
+  }
+
+  /**
+   * Take the daemon's prefill. Suggestions supersede each other because
+   * `wizardState` always answers with one: before the credentials appear it can
+   * only offer a positional `claude-1`, and the account-derived name that
+   * arrives with them is strictly better. Only a user edit stops the updates —
+   * testing for an empty field would let the placeholder stick forever, which
+   * is what made a resumed wizard offer a worse name than an uninterrupted one.
+   */
+  private suggestLabel(value: string): void {
+    if (this.labelEdited) return;
+    this.#label = value;
   }
 
   async start(provider: ProviderId): Promise<void> {
@@ -106,9 +131,8 @@ export class WizardFlow {
       const state = await this.options.api.wizardState(profileId);
       this.pollError = null;
       this.wizard = state;
-      if (!state.credentialsFound) return false;
-      if (!this.label.trim()) this.label = state.suggestedLabel;
-      return true;
+      this.suggestLabel(state.suggestedLabel);
+      return state.credentialsFound;
     } catch (error) {
       this.pollError = error instanceof Error ? error.message : 'Polling failed';
       return false;
@@ -178,7 +202,7 @@ export class WizardFlow {
   private adopt(state: WizardStateResponse): void {
     this.wizard = state;
     this.wizardId = state.profile.id;
-    if (!this.label.trim()) this.label = state.suggestedLabel;
+    this.suggestLabel(state.suggestedLabel);
     this.step = 'login';
   }
 }
