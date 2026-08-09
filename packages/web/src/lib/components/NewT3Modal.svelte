@@ -1,7 +1,7 @@
 <script lang="ts">
-  import type { CreateT3InstanceRequest, ProviderId, TargetProfileSummary } from '@apm/shared';
-  import { api, errorMessage } from '../api';
-  import { app, LOCAL_TARGET_ID } from '../stores.svelte';
+  import type { CreateT3InstanceRequest, ProviderId } from '@apm/shared';
+  import { api } from '../api';
+  import { app, loadTargetProfiles, LOCAL_TARGET_ID } from '../stores.svelte';
   import { toast, toastError } from '../toasts.svelte';
   import Button from './Button.svelte';
   import Modal from './Modal.svelte';
@@ -30,42 +30,25 @@
   const remote = $derived(targetId !== LOCAL_TARGET_ID);
 
   // Profile ids are target-scoped, so a remote instance picks from the list the
-  // target itself reports rather than from this machine's profiles.
-  let remoteProfiles = $state<TargetProfileSummary[]>([]);
+  // target itself reports rather than from this machine's profiles. The cache
+  // behind it is shared with the instance cards, which resolve their own
+  // bindings from the same lists.
   let remoteProfileId = $state('');
-  let remoteError = $state<string | null>(null);
-  let remoteLoading = $state(false);
 
   $effect(() => {
     const id = targetId;
     remoteProfileId = '';
-    remoteError = null;
-    if (id === LOCAL_TARGET_ID) {
-      remoteProfiles = [];
-      return;
-    }
-    let cancelled = false;
-    remoteLoading = true;
-    void api
-      .targetProfiles(id)
-      .then((profiles) => {
-        if (cancelled) return;
-        remoteProfiles = profiles.filter(
-          (profile) => profile.enabled && profile.status === 'active',
-        );
-      })
-      .catch((error: unknown) => {
-        if (cancelled) return;
-        remoteProfiles = [];
-        remoteError = errorMessage(error);
-      })
-      .finally(() => {
-        if (!cancelled) remoteLoading = false;
-      });
-    return () => {
-      cancelled = true;
-    };
+    void loadTargetProfiles(id);
   });
+
+  const entry = $derived(remote ? app.targetProfiles[targetId] : undefined);
+  const remoteLoading = $derived(remote && (entry === undefined || entry.state === 'loading'));
+  const remoteError = $derived(entry?.state === 'error' ? entry.reason : null);
+  const remoteProfiles = $derived(
+    (entry?.state === 'ready' ? entry.profiles : []).filter(
+      (profile) => profile.enabled && profile.status === 'active',
+    ),
+  );
 
   const optionsFor = (provider: ProviderId) =>
     app.launchable.filter((profile) => profile.provider === provider);

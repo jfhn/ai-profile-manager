@@ -47,13 +47,34 @@
         : 'Served by the machine running apm.',
   );
 
+  /**
+   * A remote instance's profile ids belong to its target, so they are resolved
+   * against that target's list — looking them up in this machine's profiles
+   * would report every correct remote binding as missing.
+   */
   const bound = $derived(
     (Object.entries(instance.profiles) as Array<[ProviderId, string | undefined]>)
       .filter((entry): entry is [ProviderId, string] => Boolean(entry[1]))
-      .map(([provider, profileId]) => ({
-        provider,
-        label: app.profile(profileId)?.label ?? 'missing profile',
-      })),
+      .map(([provider, profileId]) => {
+        const resolved = app.boundProfile(instance.targetId, profileId);
+        return {
+          provider,
+          state: resolved.state,
+          // 'unknown' means we could not ask the target, which is not the same
+          // as the profile being gone — so it never reads as an error.
+          label:
+            resolved.label ??
+            (resolved.state === 'missing'
+              ? 'missing profile'
+              : `profile on ${app.targetLabel(instance.targetId)}`),
+          tone:
+            resolved.state === 'missing'
+              ? ('warning' as const)
+              : provider === 'claude'
+                ? ('claude' as const)
+                : ('codex' as const),
+        };
+      }),
   );
 
   async function run(action: 'start' | 'stop'): Promise<void> {
@@ -144,7 +165,7 @@
           <span class="muted">none</span>
         {:else}
           {#each bound as entry (entry.provider)}
-            <Badge tone={entry.provider === 'claude' ? 'claude' : 'codex'}>
+            <Badge tone={entry.tone}>
               {app.providerLabel(entry.provider)} · {entry.label}
             </Badge>
           {/each}

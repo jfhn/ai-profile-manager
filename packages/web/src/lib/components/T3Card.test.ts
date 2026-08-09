@@ -1,6 +1,7 @@
-import { render, screen } from '@testing-library/svelte';
+import type { Profile } from '@apm/shared';
+import { render, screen, waitFor } from '@testing-library/svelte';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { app } from '../stores.svelte';
+import { app, loadTargetProfiles } from '../stores.svelte';
 import { FakeDaemon } from '../test-support/fake-daemon';
 import T3Card from './T3Card.svelte';
 
@@ -17,13 +18,33 @@ vi.mock('../api', () => ({
     startT3: (id: string) => mocks.daemon.startT3(id),
     stopT3: (id: string) => mocks.daemon.stopT3(id),
     deleteT3: (id: string) => mocks.daemon.deleteT3(id),
+    targetProfiles: (id: string) => mocks.daemon.targetProfiles(id),
   },
 }));
+
+function localProfile(): Profile {
+  return {
+    id: 'claude-local',
+    provider: 'claude',
+    label: 'work',
+    home: '/home/tester/.claude',
+    homeKind: 'external',
+    identity: null,
+    status: 'active',
+    statusReason: null,
+    enabled: true,
+    createdAt: '2026-01-01T00:00:00.000Z',
+  };
+}
 
 beforeEach(() => {
   mocks.daemon = new FakeDaemon();
   app.targets = [];
   app.profiles = [];
+  app.providers = [];
+  // Shared with the create modal and outliving any one component, so each test
+  // starts from an unread cache.
+  app.targetProfiles = {};
 });
 
 describe('T3Card: which machine an instance runs on', () => {
@@ -89,5 +110,111 @@ describe('T3Card: which machine an instance runs on', () => {
     const instance = mocks.daemon.seedT3Instance({ label: 'dev', targetId: 'dev-box' });
     render(T3Card, { instance });
     expect(screen.getByText('dev-box')).toBeDefined();
+  });
+});
+
+describe('T3Card: which machine owns the bound profile', () => {
+  beforeEach(() => {
+    mocks.daemon.seedTarget({ id: 'local', label: 'workstation' });
+    mocks.daemon.seedTarget({ id: 'dev-box', label: 'dev box' });
+    app.targets = mocks.daemon.targets;
+    mocks.daemon.targetProfileLists = {
+      'dev-box': [
+        {
+          id: 'd4f5751f-remote',
+          provider: 'claude',
+          label: 'hidden-logic',
+          status: 'active',
+          enabled: true,
+        },
+      ],
+    };
+  });
+
+  it('reads a local instance’s profile from this machine', () => {
+    app.profiles = [localProfile()];
+    const instance = mocks.daemon.seedT3Instance({
+      label: 'work',
+      profiles: { claude: 'claude-local' },
+    });
+
+    render(T3Card, { instance });
+    expect(screen.getByText(/Claude · work/)).toBeDefined();
+  });
+
+  it('reads a remote instance’s profile from its own target', async () => {
+    // The id only exists over there — resolving it against this machine's
+    // profiles is exactly the bug this covers.
+    app.profiles = [localProfile()];
+    const instance = mocks.daemon.seedT3Instance({
+      label: 'dev',
+      targetId: 'dev-box',
+      profiles: { claude: 'd4f5751f-remote' },
+    });
+    await loadTargetProfiles('dev-box');
+
+    render(T3Card, { instance });
+    expect(screen.getByText(/Claude · hidden-logic/)).toBeDefined();
+    expect(screen.queryByText(/missing profile/)).toBeNull();
+  });
+
+  it('still warns when the target really does not have the profile', async () => {
+    const instance = mocks.daemon.seedT3Instance({
+      label: 'dev',
+      targetId: 'dev-box',
+      profiles: { claude: 'deleted-over-there' },
+    });
+    await loadTargetProfiles('dev-box');
+
+    render(T3Card, { instance });
+    expect(screen.getByText(/Claude · missing profile/)).toBeDefined();
+  });
+
+  it('stays neutral while the target cannot be asked', async () => {
+    mocks.daemon.targetProfileLists = {}; // the target is unreachable
+    const instance = mocks.daemon.seedT3Instance({
+      label: 'dev',
+      targetId: 'dev-box',
+      profiles: { claude: 'd4f5751f-remote' },
+    });
+    await loadTargetProfiles('dev-box');
+    expect(app.targetProfiles['dev-box']?.state).toBe('error');
+
+    render(T3Card, { instance });
+    // Not knowing is not the same as the binding being broken.
+    expect(screen.getByText(/Claude · profile on dev box/)).toBeDefined();
+    expect(screen.queryByText(/missing profile/)).toBeNull();
+  });
+
+  it('resolves the label as soon as the target answers', async () => {
+    const instance = mocks.daemon.seedT3Instance({
+      label: 'dev',
+      targetId: 'dev-box',
+      profiles: { claude: 'd4f5751f-remote' },
+    });
+
+    render(T3Card, { instance });
+    expect(screen.getByText(/Claude · profile on dev box/)).toBeDefined();
+
+    await loadTargetProfiles('dev-box');
+    await waitFor(() => expect(screen.getByText(/Claude · hidden-logic/)).toBeDefined());
+  });
+
+  it('asks each target once however many cards it has', async () => {
+    const asked: string[] = [];
+    const real = mocks.daemon.targetProfiles.bind(mocks.daemon);
+    mocks.daemon.targetProfiles = async (id: string) => {
+      asked.push(id);
+      return real(id);
+    };
+
+    await Promise.all([
+      loadTargetProfiles('dev-box'),
+      loadTargetProfiles('dev-box'),
+      loadTargetProfiles('dev-box'),
+    ]);
+    await loadTargetProfiles('dev-box');
+
+    expect(asked).toEqual(['dev-box']);
   });
 });

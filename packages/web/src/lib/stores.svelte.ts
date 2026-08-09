@@ -7,6 +7,7 @@ import type {
   ServerEvent,
   StatusResponse,
   T3Instance,
+  TargetProfileSummary,
   TerminalSession,
   UsageSnapshot,
 } from '@apm/shared';
@@ -25,6 +26,26 @@ export const LOCAL_TARGET_ID = 'local';
 
 export type ConnectionState = 'connecting' | 'live' | 'offline';
 
+/** One target's profile list, cached per target id. */
+export interface TargetProfiles {
+  state: 'loading' | 'ready' | 'error';
+  profiles: TargetProfileSummary[];
+  /** Why the list could not be read, when it could not. */
+  reason: string | null;
+}
+
+/**
+ * A profile an instance is bound to, resolved on the machine that owns it.
+ *
+ * 'missing' means the owning machine really does not have it any more.
+ * 'unknown' means we could not ask — an unreachable target must not be
+ * reported as a broken binding.
+ */
+export interface BoundProfile {
+  state: 'resolved' | 'missing' | 'unknown';
+  label: string | null;
+}
+
 class AppStore {
   /** First overview fetch is still in flight — the UI shows skeletons. */
   loading = $state(true);
@@ -40,6 +61,12 @@ class AppStore {
   discovery = $state<DiscoveryCandidate[]>([]);
   /** Execution targets the daemon knows; the local one is always among them. */
   targets = $state<ExecutionTarget[]>([]);
+  /**
+   * Profiles as each target reports them, keyed by target id. Profile ids are
+   * target-scoped, so this is the only place a remote instance's binding can
+   * be resolved — the hub's own profile list says nothing about it.
+   */
+  targetProfiles = $state<Record<string, TargetProfiles>>({});
 
   connection = $state<ConnectionState>('connecting');
 
@@ -83,6 +110,27 @@ class AppStore {
     if (target) return target.label;
     return id === LOCAL_TARGET_ID || !id ? 'this machine' : id;
   }
+
+  /**
+   * Resolve one of an instance's bound profile ids against the machine that
+   * owns it: this hub for a local instance, the target's own list for a remote
+   * one. A target whose list has not been read answers 'unknown', never
+   * 'missing' — a binding is not broken just because we could not ask.
+   */
+  boundProfile(targetId: string, profileId: string): BoundProfile {
+    if (targetId === LOCAL_TARGET_ID) {
+      const profile = this.profile(profileId);
+      return profile
+        ? { state: 'resolved', label: profile.label }
+        : { state: 'missing', label: null };
+    }
+    const entry = this.targetProfiles[targetId];
+    if (entry?.state !== 'ready') return { state: 'unknown', label: null };
+    const profile = entry.profiles.find((candidate) => candidate.id === profileId);
+    return profile
+      ? { state: 'resolved', label: profile.label }
+      : { state: 'missing', label: null };
+  }
 }
 
 export const app = new AppStore();
@@ -104,6 +152,40 @@ export async function loadTargets(): Promise<void> {
     // is what an empty list means to the pickers.
     app.targets = [];
   }
+}
+
+/** In-flight profile requests, so N cards on one target cost one round trip. */
+const targetProfileRequests = new Map<string, Promise<void>>();
+
+function setTargetProfiles(targetId: string, entry: TargetProfiles): void {
+  app.targetProfiles = { ...app.targetProfiles, [targetId]: entry };
+}
+
+/**
+ * Read one target's profile list into the cache. Already-loaded targets and
+ * requests still in flight are not asked again; a target that failed is
+ * retried on the next call, because it may just have been offline.
+ */
+export function loadTargetProfiles(targetId: string): Promise<void> {
+  if (!targetId || targetId === LOCAL_TARGET_ID) return Promise.resolve();
+  const pending = targetProfileRequests.get(targetId);
+  if (pending) return pending;
+  if (app.targetProfiles[targetId]?.state === 'ready') return Promise.resolve();
+
+  setTargetProfiles(targetId, { state: 'loading', profiles: [], reason: null });
+  const request = api
+    .targetProfiles(targetId)
+    .then((profiles) => setTargetProfiles(targetId, { state: 'ready', profiles, reason: null }))
+    .catch((error: unknown) =>
+      setTargetProfiles(targetId, {
+        state: 'error',
+        profiles: [],
+        reason: errorMessage(error),
+      }),
+    )
+    .finally(() => void targetProfileRequests.delete(targetId));
+  targetProfileRequests.set(targetId, request);
+  return request;
 }
 
 export async function loadDiscovery(): Promise<void> {
