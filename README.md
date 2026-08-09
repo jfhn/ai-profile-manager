@@ -3,7 +3,8 @@
 Local-first companion app for managing AI provider profiles (Claude, Codex),
 viewing quota usage, and launching tools with the correct account. See
 [PLAN.md](PLAN.md) for goals and architecture, [docs/API.md](docs/API.md) for
-the daemon API.
+the daemon API, and [docs/TARGETS.md](docs/TARGETS.md) for the execution-target
+and transport contract.
 
 > **Status: early.** Built for my own setup and so far only exercised against
 > my accounts (one Claude, one Codex). Linux/WSL is the primary platform.

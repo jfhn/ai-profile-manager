@@ -14,6 +14,7 @@ import type {
   WizardStateResponse,
 } from '@apm/shared';
 import type { DaemonConfig } from './config.js';
+import type { TargetRegistry } from './targets/registry.js';
 
 /**
  * Service seams between daemon modules. Implementations live in:
@@ -94,6 +95,8 @@ export interface AppContext {
   usage: UsageService;
   sessions: SessionHost;
   t3: T3Manager;
+  /** Execution targets and their transports; the local one is the default. */
+  targets: TargetRegistry;
 }
 
 /** Error with an HTTP status + stable code; routes map it to ApiError. */
