@@ -13,6 +13,7 @@ import {
   parseFunnelPorts,
   parseSelfDnsName,
   parseServedPorts,
+  parseServeEntries,
   pickPort,
   serveArgv,
   serveOffArgv,
@@ -26,14 +27,30 @@ const STATUS_JSON = JSON.stringify({
   MagicDNSSuffix: 'tailnet.ts.net',
 });
 
-function serveStatusJson(options: { web?: number[]; funnel?: number[] } = {}): string {
+/** One published listener and what it proxies to, as serve status reports it. */
+interface Entry {
+  https: number;
+  backend: number;
+}
+
+function serveStatusJson(
+  options: { web?: number[]; entries?: Entry[]; tcp?: number[]; funnel?: number[] } = {},
+): string {
   const web: Record<string, unknown> = {};
-  for (const port of options.web ?? []) {
-    web[`${DNS_NAME}:${port}`] = { Handlers: { '/': { Proxy: `http://127.0.0.1:${port}` } } };
+  const entries = [
+    ...(options.web ?? []).map((port) => ({ https: port, backend: port })),
+    ...(options.entries ?? []),
+  ];
+  for (const entry of entries) {
+    web[`${DNS_NAME}:${entry.https}`] = {
+      Handlers: { '/': { Proxy: `http://127.0.0.1:${entry.backend}` } },
+    };
   }
+  const tcp: Record<string, unknown> = {};
+  for (const port of options.tcp ?? []) tcp[String(port)] = { HTTPS: true };
   const allowFunnel: Record<string, boolean> = {};
   for (const port of options.funnel ?? []) allowFunnel[`${DNS_NAME}:${port}`] = true;
-  return JSON.stringify({ TCP: {}, Web: web, AllowFunnel: allowFunnel });
+  return JSON.stringify({ TCP: tcp, Web: web, AllowFunnel: allowFunnel });
 }
 
 interface Harness {
@@ -127,6 +144,19 @@ describe('tailscale status parsing', () => {
     expect(pickPort(8443, new Set())).toBe(8443);
     expect(pickPort(8443, new Set([8443, 8444]))).toBe(8445);
   });
+
+  it('reads each listener together with the loopback port behind it', () => {
+    const status = serveStatusJson({
+      entries: [{ https: 8443, backend: 4800 }],
+      tcp: [9000],
+    });
+    expect(parseServeEntries(status)).toEqual([
+      { httpsPort: 8443, backendPort: 4800 },
+      // A TCP forward owns its port but names no backend we can read.
+      { httpsPort: 9000, backendPort: null },
+    ]);
+    expect(parseServeEntries('')).toEqual([]);
+  });
 });
 
 describe('openTailscaleEndpoint', () => {
@@ -192,6 +222,52 @@ describe('openTailscaleEndpoint', () => {
     expect(second.endpoint.port).toBe(4801);
     expect(await first.health()).toMatchObject({ state: 'healthy' });
     expect(first.endpoint.url).not.toBe(second.endpoint.url);
+  });
+
+  it('steps over a service port an earlier run is still holding', async () => {
+    // Exactly the state a daemon restart met live: the previous instance
+    // outlived it, still bound to 4800, still published on 8443.
+    const h = harness(serveStatusJson({ entries: [{ https: 8443, backend: 4800 }] }));
+    const handle = await openTailscaleEndpoint(
+      { port: null },
+      deps(h, async () => true), // the orphan answers, so its entry is not stale
+    );
+
+    expect(handle.endpoint.port).toBe(4801);
+    expect(h.calls).toContainEqual(serveArgv(8444, 4801));
+    // The live listener is left exactly as it was.
+    expect(h.calls.some((argv) => argv.includes('off'))).toBe(false);
+  });
+
+  it('reclaims its own listener once nothing answers behind it', async () => {
+    const h = harness(serveStatusJson({ entries: [{ https: 8443, backend: 4800 }] }));
+    const handle = await openTailscaleEndpoint(
+      { port: null },
+      deps(h, async () => false), // nothing is serving it any more
+    );
+
+    // The dead entry is withdrawn and both of its ports come back into use,
+    // so a crashed daemon cannot leave listeners piling up one port at a time.
+    expect(h.calls).toContainEqual(serveOffArgv(8443, 4800));
+    expect(handle.endpoint.port).toBe(4800);
+    expect(h.calls).toContainEqual(serveArgv(8443, 4800));
+  });
+
+  it('never withdraws an entry outside its own port ranges', async () => {
+    const h = harness(
+      serveStatusJson({
+        // Somebody's own site on 443, and a TCP forward apm knows nothing about.
+        entries: [{ https: 443, backend: 3000 }],
+        tcp: [9000],
+      }),
+    );
+    await openTailscaleEndpoint(
+      { port: null },
+      deps(h, async () => false),
+    );
+
+    expect(h.calls.some((argv) => argv.includes('off'))).toBe(false);
+    expect(h.calls).toContainEqual(serveArgv(8443, 4800));
   });
 
   it('honours a port the caller asked for', async () => {

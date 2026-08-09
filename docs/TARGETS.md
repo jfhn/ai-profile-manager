@@ -190,9 +190,13 @@ Implemented in `packages/daemon/src/t3/manager.ts`; the user-facing side is
 - `endpoint`, `pty`, `signal` and `profiles` are all required. A target missing
   any of them cannot host managed T3 instances and is filtered out of the
   picker (`GET /api/targets` exposes the capability list for exactly this).
-- Nothing outlives the daemon on a remote target: the pty and the endpoint die
-  with the transport, so `adopt()` reports remote instances as stopped instead
-  of re-adopting them.
+- Nothing outlives the daemon on a remote target, and that is enforced rather
+  than assumed. `shutdown()` terminates every remote runtime and revokes its
+  endpoint before the transports are released; the agent kills its own process
+  group on hangup, stdin EOF and exit, so even a killed daemon leaves nothing
+  behind; and a start steps over service ports an existing serve entry already
+  proxies to. `adopt()` then reports remote instances as stopped rather than
+  re-adopting them.
 - Existing local instances keep their loopback URL: they still use the detached
   spawn + HTTP probe path (`packages/daemon/src/targets/net.ts`), because only a
   detached process survives a daemon restart, and their endpoint is recorded
@@ -211,10 +215,15 @@ Implemented in `packages/daemon/src/t3/manager.ts`; the user-facing side is
   resolution, unreachable/closed connections and the error mapping.
 - `routes.test.ts` covers the read-only `/api/targets` endpoints.
 - `tailscale.test.ts` drives the SSH transport's endpoint through a scripted
-  exec channel: serve argv, MagicDNS and serve-status parsing, port allocation,
-  health, revocation on close, the missing-Tailscale message and the refusal to
-  hand out a funnelled port. The SSH spawn underneath it stays untested, like
-  the rest of `ssh.ts` — the two-device live check covers that.
+  exec channel: serve argv, MagicDNS and serve-status parsing, port allocation
+  around live and stale entries, health, revocation on close, the
+  missing-Tailscale message and the refusal to hand out a funnelled port. The
+  SSH spawn underneath it stays untested, like the rest of `ssh.ts` — the
+  two-device live check covers that.
+- `agent.test.ts` runs a real agent process and kills it the way sshd does, to
+  prove nothing it spawned is left behind. Its pty child ignores `SIGHUP` on
+  purpose: a child that dies on hangup passes with no teardown at all, because
+  the kernel hangs the terminal up by itself, so it would prove nothing.
 
 `packages/daemon/src/t3/manager.remote.test.ts` drives the whole managed-T3
 lifecycle on a target through the fake remote transport; the local behaviour it

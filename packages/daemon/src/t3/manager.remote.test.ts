@@ -427,11 +427,56 @@ describe('t3 manager on a remote target', () => {
     expect(localPortScans.at(-1)).toEqual([]);
   });
 
+  it('terminates remote instances and revokes their endpoints on shutdown', async () => {
+    const { manager, transport } = harness();
+    const created = await create(manager);
+    await startHealthy(manager, transport, created.id);
+    const pty = transport.lastPty();
+    const endpoint = transport.lastEndpoint();
+
+    await manager.shutdown();
+
+    // Nothing on the target may outlive the daemon that was supervising it:
+    // leaving either behind is how a restart met an occupied port and a
+    // published URL nobody was watching.
+    expect(pty.exited).toBe(true);
+    expect(endpoint.closed).toBe(true);
+  });
+
+  it('leaves a local instance running when the daemon shuts down', async () => {
+    const { manager, spawns } = harness();
+    const local = await manager.create({ label: 'local', profiles: { claude: 'claude-local' } });
+    await manager.start(local.id);
+
+    await manager.shutdown();
+    // Local instances are detached on purpose and are re-adopted on the way up.
+    expect(spawns).toHaveLength(1);
+    expect(manager.list()[0]?.status).toBe('running');
+  });
+
+  it('names the port when t3 dies before it ever answers', async () => {
+    const { manager, transport } = harness({}, { startTimeoutMs: 40 });
+    const created = await create(manager);
+
+    const starting = manager.start(created.id);
+    await waitFor(() => transport.ptys.length > 0);
+    // What EADDRINUSE looks like from here: the process starts and exits
+    // straight away instead of binding the port.
+    transport.lastPty().exit({ exitCode: 1 });
+    const result = await starting;
+
+    expect(result.status).toBe('exited');
+    expect(result.statusReason).toContain('port 9100');
+    expect(result.statusReason).toContain('still held');
+    // The endpoint does not stay published behind a process that is gone.
+    expect(transport.lastEndpoint().closed).toBe(true);
+  });
+
   it('reports remote instances as stopped after a daemon restart', async () => {
     const first = harness();
     const created = await create(first.manager);
     await startHealthy(first.manager, first.transport, created.id);
-    first.manager.shutdown();
+    await first.manager.shutdown();
 
     const adopted = harness();
     await adopted.manager.adopt();

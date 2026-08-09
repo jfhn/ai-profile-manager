@@ -113,6 +113,27 @@ describe('local transport', () => {
     expect(exits[0]).toEqual({ exitCode: null, signal: 'SIGTERM' });
   });
 
+  it('takes a pty’s whole process group down with it', async () => {
+    // A pty child is a session leader, so a server it spawned survives a kill
+    // aimed at the child alone — and then holds its port with nobody watching.
+    const handle = await transport.openPty({
+      argv: ['sh', '-c', 'sleep 60 & echo $!; wait'],
+      cols: 80,
+      rows: 24,
+      cwd: dir,
+    });
+    let output = '';
+    handle.onData((data) => void (output += data));
+    await waitFor(() => /\d/.test(output));
+    const grandchild = Number(/(\d+)/.exec(output)?.[1]);
+    expect(grandchild).toBeGreaterThan(1);
+    expect(alive(grandchild)).toBe(true);
+
+    await handle.close();
+    await waitFor(() => !alive(grandchild));
+    expect(alive(grandchild)).toBe(false);
+  });
+
   it('allocates a free port when the request does not name one', async () => {
     const handle = await transport.openEndpoint({ port: null });
     expect(handle.endpoint.port).toBeGreaterThan(0);
@@ -132,6 +153,16 @@ describe('local transport', () => {
     await handle.close();
   });
 });
+
+/** Signal 0 only checks existence; EPERM means it exists but is not ours. */
+function alive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error: unknown) {
+    return (error as NodeJS.ErrnoException).code === 'EPERM';
+  }
+}
 
 async function waitFor(predicate: () => boolean, timeoutMs = 5_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;

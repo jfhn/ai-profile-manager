@@ -58,6 +58,8 @@ export function createSshTransport(options: SshTargetOptions): TargetTransport {
     status: 'unknown',
   };
   const handles = new Set<PtyHandle>();
+  /** Endpoints published on the target, so close() can revoke every one. */
+  const endpoints = new Set<EndpointHandle>();
   /** Ports this transport published on the target, so two never collide. */
   const reservedPorts = new Set<number>();
   let closed = false;
@@ -106,12 +108,15 @@ export function createSshTransport(options: SshTargetOptions): TargetTransport {
       guard();
       // The service stays on the target's loopback address; Tailscale is what
       // makes it reachable, and it is driven over this same exec channel.
-      return openTailscaleEndpoint(request, {
+      const handle = await openTailscaleEndpoint(request, {
         targetId: target.id,
         exec: execOnTarget,
         probe: (url, timeoutMs) => urlProbe(url, timeoutMs),
         reserved: reservedPorts,
       });
+      endpoints.add(handle);
+      handle.onClose(() => void endpoints.delete(handle));
+      return handle;
     },
 
     async profiles(): Promise<TargetProfileSummary[]> {
@@ -122,6 +127,13 @@ export function createSshTransport(options: SshTargetOptions): TargetTransport {
 
     async close(): Promise<void> {
       if (closed) return;
+      // Endpoints first, while exec still works: closing one runs
+      // `tailscale serve … off` on the target, so a connection torn down
+      // beforehand would leave the listener published with nothing behind it.
+      for (const endpoint of [...endpoints]) {
+        await endpoint.close().catch(() => undefined);
+      }
+      endpoints.clear();
       closed = true;
       for (const handle of [...handles]) await handle.close();
       handles.clear();

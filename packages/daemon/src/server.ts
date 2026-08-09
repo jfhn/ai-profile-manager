@@ -162,7 +162,9 @@ export async function startDaemon(config: DaemonConfig): Promise<DaemonHandle> {
     closed = true;
     ctx.usage.stop();
     ctx.sessions.shutdown();
-    ctx.t3.shutdown();
+    // Ahead of the transports, because terminating remote instances and
+    // revoking their endpoints needs the connections close() releases.
+    await ctx.t3.shutdown();
     await ctx.targets.close();
     removeRunFile(config);
     await app.close();
