@@ -2,6 +2,7 @@ import type { Profile } from './profile.js';
 import type { AdapterCapabilities, ProviderId, ProviderIdentity } from './provider.js';
 import type { UsageSnapshot } from './usage.js';
 import type { TerminalSession } from './sessions.js';
+import type { TargetProfileSummary } from './target.js';
 import type { T3Instance } from './t3.js';
 
 /**
@@ -102,12 +103,19 @@ export interface T3ListResponse {
 
 /** POST /api/sessions */
 export interface CreateSessionRequest {
+  /** Omitted means the daemon's local target. */
+  targetId?: string;
   profileId: string;
   app: string;
   args?: string[];
   cwd?: string;
   cols?: number;
   rows?: number;
+}
+
+/** GET /api/targets/:targetId/profiles */
+export interface TargetProfilesResponse {
+  profiles: TargetProfileSummary[];
 }
 
 /** GET /api/recent-dirs — recently used working directories for the picker. */

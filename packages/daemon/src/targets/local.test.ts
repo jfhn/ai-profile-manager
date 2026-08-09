@@ -105,12 +105,12 @@ describe('local transport', () => {
 
   it('delivers a real signal to a pty and reports it as the exit status', async () => {
     const handle = await transport.openPty({ argv: ['cat'], cols: 80, rows: 24, cwd: dir });
-    const exits: Array<string | null> = [];
-    handle.onExit((status) => void exits.push(status.signal));
+    const exits: Array<{ exitCode: number | null; signal: string | null }> = [];
+    handle.onExit((status) => void exits.push(status));
 
     handle.signal('SIGTERM');
     await waitFor(() => exits.length === 1);
-    expect(exits[0]).toBe('SIGTERM');
+    expect(exits[0]).toEqual({ exitCode: null, signal: 'SIGTERM' });
   });
 
   it('allocates a free port when the request does not name one', async () => {

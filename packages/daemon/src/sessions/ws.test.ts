@@ -7,6 +7,12 @@ import WebSocket from 'ws';
 import type { Profile, TerminalServerMessage } from '@apm/shared';
 import { resolveConfig } from '../config.js';
 import type { AppContext, EventBus, ProfileService } from '../context.js';
+import { createLocalTransport } from '../targets/local.js';
+import { createTargetRegistry } from '../targets/registry.js';
+import {
+  createFakeRemoteTransport,
+  type FakeRemoteTransport,
+} from '../targets/test-support/fake-remote.js';
 import { createSessionHost, type SessionHostInternals } from './host.js';
 import { attachTerminalWs } from './ws.js';
 
@@ -47,16 +53,31 @@ describe('terminal websocket', () => {
   let host: SessionHostInternals;
   let server: http.Server;
   let port: number;
+  let remote: FakeRemoteTransport;
 
   beforeEach(async () => {
     dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'apm-ws-'));
     const config = { ...resolveConfig({ dataDir }), token: TOKEN };
-    host = createSessionHost(config, events, profiles);
+    remote = createFakeRemoteTransport({
+      id: 'workstation',
+      profiles: [
+        {
+          id: 'remote-profile',
+          provider: 'claude',
+          label: 'remote',
+          status: 'active',
+          enabled: true,
+        },
+      ],
+    });
+    const targets = createTargetRegistry(createLocalTransport({ profiles }), [remote]);
+    host = createSessionHost(config, events, profiles, { targets });
     const ctx = {
       config,
       events,
       profiles,
       sessions: host,
+      targets,
       usage: {},
       t3: {},
     } as unknown as AppContext;
@@ -154,7 +175,7 @@ describe('terminal websocket', () => {
     await new Promise<void>((resolve) => ws.on('open', resolve));
     await waitFor(() => messages.length >= 2);
     expect(messages[0]?.type).toBe('scrollback');
-    expect(messages[1]).toEqual({ type: 'exit', exitCode: 7 });
+    expect(messages[1]).toEqual({ type: 'exit', exitCode: 7, signal: null });
     ws.close();
   });
 
@@ -174,8 +195,50 @@ describe('terminal websocket', () => {
     expect(messages.find((message) => message.type === 'exit')).toEqual({
       type: 'exit',
       exitCode: 5,
+      signal: null,
     });
     ws.close();
+  });
+
+  it('keeps a remote pty across disconnects and forwards runtime failures', async () => {
+    const session = await host.create({
+      targetId: 'workstation',
+      profileId: 'remote-profile',
+      app: 'claude',
+    });
+    const first = connect(session.id);
+    await new Promise<void>((resolve) => first.ws.on('open', resolve));
+    await waitFor(() => host.streams(session.id)?.session().attachedClients === 1);
+
+    remote.lastPty().emit('before detach\n');
+    await waitFor(() =>
+      first.messages.some((message) => message.type === 'data' && message.data.includes('before')),
+    );
+    first.ws.close();
+    await waitFor(() => host.streams(session.id)?.session().attachedClients === 0);
+    expect(remote.lastPty().exited).toBe(false);
+
+    remote.lastPty().emit('while detached\n');
+    const second = connect(session.id);
+    await new Promise<void>((resolve) => second.ws.on('open', resolve));
+    await waitFor(() => second.messages.length > 0);
+    expect(second.messages[0]).toMatchObject({ type: 'scrollback' });
+    expect(second.messages[0]?.type === 'scrollback' ? second.messages[0].data : '').toContain(
+      'while detached',
+    );
+
+    second.ws.send(JSON.stringify({ type: 'input', data: 'hello' }));
+    second.ws.send(JSON.stringify({ type: 'resize', cols: 100, rows: 35 }));
+    await waitFor(() => remote.lastPty().writes.length === 1);
+    expect(remote.lastPty().writes).toEqual(['hello']);
+    await waitFor(() => remote.lastPty().resizes.length === 1);
+    expect(remote.lastPty().resizes).toEqual([{ cols: 100, rows: 35 }]);
+
+    remote.lastPty().fail('unreachable', 'remote connection failed');
+    await waitFor(() => second.messages.some((message) => message.type === 'error'));
+    expect(second.messages).toContainEqual({ type: 'error', message: 'remote connection failed' });
+    expect(second.messages).toContainEqual({ type: 'exit', exitCode: 1, signal: null });
+    second.ws.close();
   });
 
   it('rejects bad tokens, foreign origins and unknown sessions before touching a pty', async () => {

@@ -242,6 +242,18 @@ describe.each(IMPLEMENTATIONS)('transport contract ($name)', ({ create }) => {
     expect(exits).toHaveLength(1);
   });
 
+  it('normalizes signal exits to a null exit code', async () => {
+    const { transport, interactive } = await setup();
+    const handle = await transport.openPty(interactive());
+    let status: { exitCode: number | null; signal: string | null } | null = null;
+    handle.onExit((next) => void (status = next));
+
+    await handle.close();
+    await waitFor(() => status !== null);
+    expect(status?.signal).not.toBeNull();
+    expect(status?.exitCode).toBeNull();
+  });
+
   it('publishes an endpoint that becomes healthy and then closed', async () => {
     const { transport, endpointRequest, serve } = await setup();
     const handle = await transport.openEndpoint(await endpointRequest());

@@ -2,9 +2,12 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type { Profile, ServerEvent } from '@apm/shared';
+import type { Profile, ServerEvent, TargetProfileSummary } from '@apm/shared';
 import { resolveConfig, type DaemonConfig } from '../config.js';
 import { ApiFailure, type EventBus, type ProfileService } from '../context.js';
+import { createLocalTransport } from '../targets/local.js';
+import { createTargetRegistry } from '../targets/registry.js';
+import { createFakeRemoteTransport } from '../targets/test-support/fake-remote.js';
 import { createSessionHost, type SessionHostInternals, type SessionHostOptions } from './host.js';
 
 function makeProfile(overrides: Partial<Profile> = {}): Profile {
@@ -166,6 +169,7 @@ describe('session host', () => {
     let seen = '';
     const detach = streams.attach({
       onData: (data) => void (seen += data),
+      onError: () => undefined,
       onExit: () => undefined,
     });
     expect(streams.session().attachedClients).toBe(1);
@@ -189,6 +193,107 @@ describe('session host', () => {
 
     await waitFor(() => host.streams(session.id)?.session().status === 'exited');
     expect(events.filter((event) => event.type === 'sessions-changed').length).toBeGreaterThan(1);
+  });
+
+  it('selects a remote target and preserves its profile, argv and pty events', async () => {
+    const localProfiles = [makeProfile()];
+    const remoteProfile: TargetProfileSummary = {
+      id: 'remote-1',
+      provider: 'claude',
+      label: 'remote-work',
+      status: 'active',
+      enabled: true,
+    };
+    const remote = createFakeRemoteTransport({ id: 'workstation', profiles: [remoteProfile] });
+    const targets = createTargetRegistry(
+      createLocalTransport({ profiles: fakeProfiles(localProfiles) }),
+      [remote],
+    );
+    const host = makeHost(localProfiles, { targets });
+
+    await expect(
+      host.create({ targetId: 'workstation', profileId: 'profile-1', app: 'claude' }),
+    ).rejects.toMatchObject({ code: 'profile-not-found', statusCode: 404 });
+
+    const session = await host.create({
+      targetId: 'workstation',
+      profileId: remoteProfile.id,
+      app: 'claude',
+      args: ['--prompt', 'spaces; $(stay-an-argument)', '--', '-x'],
+      cols: 90,
+      rows: 30,
+    });
+    expect(session).toMatchObject({ targetId: 'workstation', cwd: '~', status: 'running' });
+    expect(remote.lastPty().spec).toEqual({
+      argv: ['claude', '--prompt', 'spaces; $(stay-an-argument)', '--', '-x'],
+      cwd: undefined,
+      cols: 90,
+      rows: 30,
+      profileId: remoteProfile.id,
+    });
+
+    const streams = host.streams(session.id);
+    if (!streams) throw new Error('no streams');
+    let output = '';
+    const errors: string[] = [];
+    const exits: Array<{ exitCode: number | null; signal: string | null }> = [];
+    streams.attach({
+      onData: (data) => void (output += data),
+      onError: (message) => void errors.push(message),
+      onExit: (status) => void exits.push(status),
+    });
+
+    remote.lastPty().emit('remote output');
+    streams.write('remote input');
+    host.resize(session.id, 120, 40);
+    host.kill(session.id);
+    expect(output).toBe('remote output');
+    expect(remote.lastPty().writes).toEqual(['remote input']);
+    expect(remote.lastPty().resizes).toEqual([{ cols: 120, rows: 40 }]);
+    expect(remote.lastPty().signals).toEqual(['SIGHUP']);
+
+    remote.lastPty().fail('unreachable', 'remote link dropped');
+    expect(errors).toEqual(['remote link dropped']);
+    expect(exits).toEqual([{ exitCode: 1, signal: null }]);
+    expect(streams.session().status).toBe('exited');
+  });
+
+  it('maps unknown, unapproved and unreachable target failures for session creation', async () => {
+    const localProfiles = [makeProfile()];
+    const remote = createFakeRemoteTransport({
+      id: 'workstation',
+      profiles: [
+        {
+          id: 'remote-1',
+          provider: 'claude',
+          label: 'remote',
+          status: 'active',
+          enabled: true,
+        },
+      ],
+    });
+    const targets = createTargetRegistry(
+      createLocalTransport({ profiles: fakeProfiles(localProfiles) }),
+      [remote],
+    );
+    const host = makeHost(localProfiles, { targets });
+    const request = { targetId: 'workstation', profileId: 'remote-1', app: 'claude' };
+
+    await expect(host.create({ ...request, targetId: 'unknown' })).rejects.toMatchObject({
+      code: 'target-not-found',
+      statusCode: 404,
+    });
+    remote.setApproved(false);
+    await expect(host.create(request)).rejects.toMatchObject({
+      code: 'target-not-approved',
+      statusCode: 403,
+    });
+    remote.setApproved(true);
+    remote.setOnline(false);
+    await expect(host.create(request)).rejects.toMatchObject({
+      code: 'target-unreachable',
+      statusCode: 502,
+    });
   });
 
   it('rejects unusable profiles, mismatched providers, bad cwd and unknown apps', async () => {
