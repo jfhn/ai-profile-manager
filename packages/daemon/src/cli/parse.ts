@@ -6,7 +6,7 @@
  * provider). Everything after <app> is passed to the app verbatim; a literal
  * `--` directly after <profile> or after <app> is an optional escape hatch.
  */
-import type { Profile, ProviderId } from '@apm/shared';
+import type { ProviderId } from '@apm/shared';
 
 /** An error meant for the user, printed as `apm: <message>`. */
 export class CliError extends Error {}
@@ -99,12 +99,26 @@ export function parseRunArgv(argv: string[]): RunInvocation {
   return { profile, app, args: rest };
 }
 
+/** The bit of a profile this resolution needs — a local Profile or a target's summary. */
+export interface ResolvableProfile {
+  id: string;
+  label: string;
+  provider: ProviderId;
+}
+
 /**
  * Resolve a profile name for `apm run`. Known apps scope the lookup to their
  * provider; anything else searches every provider and refuses to guess when
  * the same label exists twice.
+ *
+ * The candidate list is always the profiles of one target, so the same rules
+ * apply whether they came from this machine or from a remote one.
  */
-export function resolveProfile(profiles: Profile[], name: string, app: string): Profile {
+export function resolveProfile<T extends ResolvableProfile>(
+  profiles: T[],
+  name: string,
+  app: string,
+): T {
   const provider = APP_PROVIDERS[app];
   const scope = provider ? profiles.filter((profile) => profile.provider === provider) : profiles;
 

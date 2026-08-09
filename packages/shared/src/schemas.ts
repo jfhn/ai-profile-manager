@@ -50,6 +50,28 @@ export const createT3InstanceRequestSchema = z.object({
     .refine((v) => Object.keys(v).length > 0, { message: 'at least one profile required' }),
 });
 
+/**
+ * Target selection is always an explicit id, never a host string that could
+ * end up in a command line.
+ */
+export const targetIdSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(64)
+  .regex(/^[a-z0-9][a-z0-9._-]*$/i, 'target ids are alphanumeric with . _ -');
+
+/**
+ * A command as it crosses the transport seam: argv + env + cwd, so a request
+ * can never smuggle in a shell string.
+ */
+export const commandSpecSchema = z.object({
+  argv: z.array(z.string().min(1)).min(1),
+  env: z.record(z.string(), z.string()).optional(),
+  cwd: z.string().min(1).optional(),
+  profileId: z.string().min(1).optional(),
+});
+
 export const terminalClientMessageSchema = z.union([
   z.object({ type: z.literal('input'), data: z.string() }),
   z.object({

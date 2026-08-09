@@ -1,0 +1,143 @@
+/**
+ * Local-transport specifics: the things only the real machine can show —
+ * profile env injection, cwd defaults, port allocation, real signals.
+ */
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import {
+  LOCAL_TARGET_ID,
+  TARGET_CAPABILITIES,
+  type Profile,
+  type TargetTransport,
+} from '@apm/shared';
+import type { ProfileService } from '../context.js';
+import { createLocalTarget, createLocalTransport } from './local.js';
+
+const PROFILE: Profile = {
+  id: 'profile-1',
+  provider: 'claude',
+  label: 'work',
+  home: '/tmp/apm-local-home',
+  homeKind: 'external',
+  identity: null,
+  status: 'active',
+  statusReason: null,
+  enabled: true,
+  createdAt: new Date().toISOString(),
+};
+
+function profiles(): Pick<ProfileService, 'list' | 'envFor'> {
+  return {
+    list: () => [PROFILE],
+    envFor: (id) => (id === PROFILE.id ? { CLAUDE_CONFIG_DIR: PROFILE.home } : {}),
+  };
+}
+
+describe('local transport', () => {
+  let transport: TargetTransport;
+  let dir: string;
+
+  beforeEach(() => {
+    transport = createLocalTransport({ profiles: profiles(), pollIntervalMs: 20 });
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'apm-local-'));
+  });
+
+  afterEach(async () => {
+    await transport.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('describes this machine as an approved local target with every capability', () => {
+    const target = createLocalTarget();
+    expect(target.id).toBe(LOCAL_TARGET_ID);
+    expect(target.kind).toBe('local');
+    expect(target.approved).toBe(true);
+    expect(target.capabilities).toEqual([...TARGET_CAPABILITIES]);
+    expect(target.identity.fingerprint).toBeNull();
+  });
+
+  it('injects the named profile’s env on the target and lets spec env win', async () => {
+    const bound = await transport.exec({
+      argv: ['sh', '-c', 'printf %s "$CLAUDE_CONFIG_DIR"'],
+      profileId: PROFILE.id,
+      cwd: dir,
+    });
+    expect(bound.stdout).toBe(PROFILE.home);
+
+    const overridden = await transport.exec({
+      argv: ['sh', '-c', 'printf %s "$APM_TEST_VALUE"'],
+      env: { APM_TEST_VALUE: 'from-spec' },
+      cwd: dir,
+    });
+    expect(overridden.stdout).toBe('from-spec');
+
+    const unbound = await transport.exec({
+      argv: ['sh', '-c', 'printf %s "$CLAUDE_CONFIG_DIR"'],
+      cwd: dir,
+    });
+    expect(unbound.stdout).toBe('');
+  });
+
+  it('runs in the requested cwd and defaults to the home directory', async () => {
+    const explicit = await transport.exec({ argv: ['pwd'], cwd: dir });
+    expect(fs.realpathSync(explicit.stdout.trim())).toBe(fs.realpathSync(dir));
+
+    const fallback = await transport.exec({ argv: ['pwd'] });
+    expect(fs.realpathSync(fallback.stdout.trim())).toBe(fs.realpathSync(os.homedir()));
+  });
+
+  it('pipes stdin into the command', async () => {
+    const result = await transport.exec({ argv: ['cat'], cwd: dir }, { stdin: 'piped-in' });
+    expect(result.stdout).toBe('piped-in');
+  });
+
+  it('kills a command that outruns its timeout', async () => {
+    await expect(
+      transport.exec({ argv: ['sleep', '30'], cwd: dir }, { timeoutMs: 100 }),
+    ).rejects.toMatchObject({ code: 'timeout', targetId: LOCAL_TARGET_ID });
+  });
+
+  it('refuses an empty argv', async () => {
+    await expect(transport.exec({ argv: [] })).rejects.toMatchObject({ code: 'spawn-failed' });
+  });
+
+  it('delivers a real signal to a pty and reports it as the exit status', async () => {
+    const handle = await transport.openPty({ argv: ['cat'], cols: 80, rows: 24, cwd: dir });
+    const exits: Array<string | null> = [];
+    handle.onExit((status) => void exits.push(status.signal));
+
+    handle.signal('SIGTERM');
+    await waitFor(() => exits.length === 1);
+    expect(exits[0]).toBe('SIGTERM');
+  });
+
+  it('allocates a free port when the request does not name one', async () => {
+    const handle = await transport.openEndpoint({ port: null });
+    expect(handle.endpoint.port).toBeGreaterThan(0);
+    expect(handle.endpoint.scope).toBe('loopback');
+    expect(handle.endpoint.targetId).toBe(LOCAL_TARGET_ID);
+    // Nothing is listening, so the URL stays hidden until it answers.
+    expect((await handle.health()).state).toBe('unhealthy');
+    expect(handle.endpoint.url).toBeNull();
+    await handle.close();
+  });
+
+  it('gives up on an endpoint that never answers', async () => {
+    const handle = await transport.openEndpoint({ port: null });
+    const health = await handle.waitUntilHealthy(150);
+    expect(health.state).toBe('unhealthy');
+    expect(health.reason).toContain('No HTTP response');
+    await handle.close();
+  });
+});
+
+async function waitFor(predicate: () => boolean, timeoutMs = 5_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error('timed out waiting for condition');
+}

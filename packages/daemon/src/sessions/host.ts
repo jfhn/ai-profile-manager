@@ -5,15 +5,26 @@
  *
  * A session outlives every client: closing a socket only detaches. Exited
  * sessions stay listed until they are disposed explicitly.
+ *
+ * The pty itself is opened through a target transport, which defaults to the
+ * local one — so sessions keep behaving exactly as before while the seam a
+ * remote target would plug into already exists.
  */
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { spawn as spawnPty, type IPty } from 'node-pty';
-import type { CreateSessionRequest, ProviderId, TerminalSession } from '@apm/shared';
+import type {
+  CreateSessionRequest,
+  ProviderId,
+  PtyHandle,
+  TargetTransport,
+  TerminalSession,
+} from '@apm/shared';
 import type { DaemonConfig } from '../config.js';
 import { ApiFailure, type EventBus, type ProfileService, type SessionHost } from '../context.js';
+import { toApiFailure } from '../targets/errors.js';
+import { createLocalTransport } from '../targets/local.js';
 
 /** Scrollback kept per session; oldest whole chunks are dropped past this. */
 export const DEFAULT_SCROLLBACK_BYTES = 1024 * 1024;
@@ -58,11 +69,13 @@ export interface SessionHostInternals extends SessionHost {
 export interface SessionHostOptions {
   /** Override the scrollback cap (tests). */
   scrollbackBytes?: number;
+  /** Target the ptys are opened on; defaults to this machine. */
+  transport?: TargetTransport;
 }
 
 interface SessionRecord {
   session: TerminalSession;
-  pty: IPty | null;
+  pty: PtyHandle | null;
   chunks: string[];
   bytes: number;
   listeners: Set<SessionListener>;
@@ -75,6 +88,7 @@ export function createSessionHost(
   options: SessionHostOptions = {},
 ): SessionHostInternals {
   const scrollbackBytes = options.scrollbackBytes ?? DEFAULT_SCROLLBACK_BYTES;
+  const transport = options.transport ?? createLocalTransport({ profiles });
   const recentDirsFile = path.join(config.dataDir, 'recent-dirs.json');
   const sessions = new Map<string, SessionRecord>();
   const nameCounters = new Map<string, number>();
@@ -167,34 +181,23 @@ export function createSessionHost(
       }
 
       const cwd = req.cwd ?? os.homedir();
-      if (!isDirectory(cwd)) {
-        throw new ApiFailure(400, 'bad-cwd', `Working directory does not exist: ${cwd}`);
-      }
-
       const args = req.args ?? [];
       const cols = req.cols ?? 80;
       const rows = req.rows ?? 24;
-      const env = { ...process.env, ...profiles.envFor(profile.id) };
 
-      if (!isExecutable(app, env.PATH)) {
-        throw new ApiFailure(400, 'app-not-found', `Command not found: ${app}`);
-      }
-
-      let pty: IPty;
+      // The transport validates cwd and the executable on the target machine
+      // and reports both as transport errors; the API codes are unchanged.
+      let pty: PtyHandle;
       try {
-        pty = spawnPty(app, args, {
-          name: 'xterm-256color',
+        pty = await transport.openPty({
+          argv: [app, ...args],
+          cwd,
           cols,
           rows,
-          cwd,
-          env,
+          profileId: profile.id,
         });
       } catch (error: unknown) {
-        throw new ApiFailure(
-          400,
-          'spawn-failed',
-          `Could not start ${app}: ${error instanceof Error ? error.message : String(error)}`,
-        );
+        throw toApiFailure(error);
       }
 
       const id = crypto.randomUUID();
@@ -234,7 +237,8 @@ export function createSessionHost(
 
     kill(id) {
       const entry = requireRecord(id);
-      entry.pty?.kill();
+      // SIGHUP, as node-pty's own kill() default was.
+      entry.pty?.signal('SIGHUP');
     },
 
     dispose(id) {
@@ -254,20 +258,14 @@ export function createSessionHost(
       const entry = requireRecord(id);
       entry.session.cols = cols;
       entry.session.rows = rows;
-      try {
-        entry.pty?.resize(cols, rows);
-      } catch {
-        /* pty already gone — the recorded size is still useful for reattach */
-      }
+      // A pty that is already gone ignores the resize; the recorded size is
+      // still useful for reattach.
+      entry.pty?.resize(cols, rows);
     },
 
     shutdown() {
       for (const entry of sessions.values()) {
-        try {
-          entry.pty?.kill();
-        } catch {
-          /* already dead */
-        }
+        void entry.pty?.close().catch(() => undefined);
       }
     },
 
@@ -306,32 +304,6 @@ function sanitize(value: string): string {
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '');
   return cleaned || 'session';
-}
-
-function isDirectory(dir: string): boolean {
-  try {
-    return fs.statSync(dir).isDirectory();
-  } catch {
-    return false;
-  }
-}
-
-/** PATH lookup so a typo fails as a 400 instead of a session that instantly exits. */
-function isExecutable(app: string, pathEnv: string | undefined): boolean {
-  if (app.includes('/')) return canExecute(app);
-  for (const dir of (pathEnv ?? '').split(path.delimiter)) {
-    if (dir && canExecute(path.join(dir, app))) return true;
-  }
-  return false;
-}
-
-function canExecute(file: string): boolean {
-  try {
-    fs.accessSync(file, fs.constants.X_OK);
-    return fs.statSync(file).isFile();
-  } catch {
-    return false;
-  }
 }
 
 function readRecentDirs(file: string): string[] {

@@ -8,8 +8,6 @@
  */
 import crypto from 'node:crypto';
 import fs from 'node:fs';
-import http from 'node:http';
-import net from 'node:net';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { z } from 'zod';
@@ -22,6 +20,7 @@ import {
 } from '@apm/shared';
 import type { DaemonConfig } from '../config.js';
 import { ApiFailure, type EventBus, type ProfileService, type T3Manager } from '../context.js';
+import { httpProbe, portIsFree } from '../targets/net.js';
 
 /** First port tried for a new instance; T3's own default (4700) is left alone. */
 export const T3_PORT_BASE = 4800;
@@ -78,7 +77,7 @@ export function createT3Manager(
 ): T3Manager {
   const resolveBinary = deps.resolveBinary ?? findOnPath;
   const spawnDetached = deps.spawnDetached ?? spawnDetachedProcess;
-  const healthCheck = deps.healthCheck ?? httpAnswers;
+  const healthCheck = deps.healthCheck ?? ((port: number) => httpProbe({ port }));
   const isAlive = deps.isAlive ?? processAlive;
   const signal = deps.signal ?? ((pid, sig) => process.kill(pid, sig));
   const findPort = deps.findPort ?? ((exclude) => findFreePort(T3_PORT_BASE, exclude));
@@ -355,34 +354,6 @@ export async function findFreePort(
     if (await portIsFree(port, host)) return port;
   }
   throw new ApiFailure(500, 'no-free-port', `No free port in ${from}..${from + PORT_SCAN_LIMIT}`);
-}
-
-function portIsFree(port: number, host: string): Promise<boolean> {
-  return new Promise((resolve) => {
-    const server = net.createServer();
-    server.once('error', () => resolve(false));
-    server.listen({ port, host, exclusive: true }, () => {
-      server.close(() => resolve(true));
-    });
-  });
-}
-
-function httpAnswers(port: number): Promise<boolean> {
-  return new Promise((resolve) => {
-    const req = http.request(
-      { host: '127.0.0.1', port, path: '/', method: 'GET', timeout: 2_000 },
-      (res) => {
-        res.resume();
-        resolve(true); // any HTTP status means the server is up
-      },
-    );
-    req.on('timeout', () => {
-      req.destroy();
-      resolve(false);
-    });
-    req.on('error', () => resolve(false));
-    req.end();
-  });
 }
 
 function processAlive(pid: number): boolean {

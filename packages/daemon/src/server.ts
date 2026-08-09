@@ -16,6 +16,8 @@ import { attachTerminalWs } from './sessions/ws.js';
 import { registerSessionRoutes } from './sessions/routes.js';
 import { createT3Manager } from './t3/manager.js';
 import { registerT3Routes } from './t3/routes.js';
+import { createLocalTransport } from './targets/local.js';
+import { createTargetRegistry } from './targets/registry.js';
 
 export interface DaemonHandle {
   config: DaemonConfig;
@@ -43,9 +45,13 @@ export async function createContext(config: DaemonConfig): Promise<AppContext> {
   const events = createEventBus();
   const profiles = createProfileService(config, events);
   const usage = createUsageService(config, events, profiles);
-  const sessions = createSessionHost(config, events, profiles);
+  // One local transport for the whole daemon; remote targets are registered
+  // on top of it once a target store exists.
+  const localTransport = createLocalTransport({ profiles });
+  const targets = createTargetRegistry(localTransport);
+  const sessions = createSessionHost(config, events, profiles, { transport: localTransport });
   const t3 = createT3Manager(config, events, profiles);
-  return { config, events, profiles, usage, sessions, t3 };
+  return { config, events, profiles, usage, sessions, t3, targets };
 }
 
 export async function startDaemon(config: DaemonConfig): Promise<DaemonHandle> {
@@ -154,6 +160,7 @@ export async function startDaemon(config: DaemonConfig): Promise<DaemonHandle> {
     ctx.usage.stop();
     ctx.sessions.shutdown();
     ctx.t3.shutdown();
+    await ctx.targets.close();
     removeRunFile(config);
     await app.close();
   };
