@@ -18,6 +18,7 @@ import { createT3Manager } from './t3/manager.js';
 import { registerT3Routes } from './t3/routes.js';
 import { createLocalTransport } from './targets/local.js';
 import { createTargetRegistry } from './targets/registry.js';
+import { createConfiguredTransports } from './targets/config.js';
 
 export interface DaemonHandle {
   config: DaemonConfig;
@@ -45,11 +46,11 @@ export async function createContext(config: DaemonConfig): Promise<AppContext> {
   const events = createEventBus();
   const profiles = createProfileService(config, events);
   const usage = createUsageService(config, events, profiles);
-  // One local transport for the whole daemon; remote targets are registered
-  // on top of it once a target store exists.
+  // One local transport for the whole daemon; configured remotes are resolved
+  // only through the same approved registry.
   const localTransport = createLocalTransport({ profiles });
-  const targets = createTargetRegistry(localTransport);
-  const sessions = createSessionHost(config, events, profiles, { transport: localTransport });
+  const targets = createTargetRegistry(localTransport, createConfiguredTransports(config));
+  const sessions = createSessionHost(config, events, profiles, { targets });
   const t3 = createT3Manager(config, events, profiles);
   return { config, events, profiles, usage, sessions, t3, targets };
 }

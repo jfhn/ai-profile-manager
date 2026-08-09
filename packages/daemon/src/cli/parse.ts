@@ -1,10 +1,11 @@
 /**
  * Pure argv/profile resolution for the CLI — no I/O, so it can be unit tested.
  *
- * Grammar: `apm run <profile> <app> [args...]`. Both positionals are always
- * required (the app decides the provider, so profile names are only unique per
- * provider). Everything after <app> is passed to the app verbatim; a literal
- * `--` directly after <profile> or after <app> is an optional escape hatch.
+ * Grammar: `apm run [--target <target>] <profile> <app> [args...]`. Both
+ * positionals are always required (the app decides the provider, so profile
+ * names are only unique per provider). Everything after <app> is passed to the
+ * app verbatim; a literal `--` directly after <profile> or after <app> is an
+ * optional escape hatch.
  */
 import type { ProviderId } from '@apm/shared';
 
@@ -15,7 +16,8 @@ export const USAGE =
   `usage: apm [start|run|attach|sessions|status|url|stop]\n` +
   `  apm [start] [--port N] [--no-open] [--foreground]   start or reuse the daemon, open the UI\n` +
   `  apm url                                             print the authenticated URL, open nothing\n` +
-  `  apm run <profile> <app> [args...]                   run an app bound to a profile\n` +
+  `  apm run [--target <target>] <profile> <app> [args...]\n` +
+  `                                                      run an app bound to a profile\n` +
   `  apm attach <session>                                attach to a running session\n` +
   `  apm sessions | status | stop`;
 
@@ -23,6 +25,7 @@ export const USAGE =
 const COMMANDS = new Set([
   'start',
   '__daemon',
+  '__target-agent',
   'run',
   'attach',
   'sessions',
@@ -56,12 +59,13 @@ export function parseCommand(argv: string[]): CommandInvocation {
 }
 
 export interface RunInvocation {
+  target?: string;
   profile: string;
   app: string;
   args: string[];
 }
 
-const RUN_USAGE = 'usage: apm run <profile> <app> [args...]';
+const RUN_USAGE = 'usage: apm run [--target <target>] <profile> <app> [args...]';
 
 /** Known provider apps — these scope the profile lookup to one provider. */
 export const APP_PROVIDERS: Record<string, ProviderId> = {
@@ -71,6 +75,15 @@ export const APP_PROVIDERS: Record<string, ProviderId> = {
 
 export function parseRunArgv(argv: string[]): RunInvocation {
   const rest = [...argv];
+  let target: string | undefined;
+
+  if (rest[0] === '--target') {
+    rest.shift();
+    target = rest.shift();
+    if (target === undefined || target.startsWith('-')) {
+      throw new CliError(`--target requires <target>\n${RUN_USAGE}`);
+    }
+  }
 
   const profile = rest.shift();
   if (profile === undefined) throw new CliError(`run requires <profile> and <app>\n${RUN_USAGE}`);
@@ -96,7 +109,7 @@ export function parseRunArgv(argv: string[]): RunInvocation {
   // further `--` belongs to the app.
   if (rest[0] === '--') rest.shift();
 
-  return { profile, app, args: rest };
+  return target === undefined ? { profile, app, args: rest } : { target, profile, app, args: rest };
 }
 
 /** The bit of a profile this resolution needs — a local Profile or a target's summary. */

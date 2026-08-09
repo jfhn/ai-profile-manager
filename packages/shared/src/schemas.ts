@@ -11,6 +11,14 @@ export const providerIdSchema = z.enum(PROVIDER_IDS);
 
 const label = z.string().trim().min(1).max(64);
 
+/** Target selection is always an id, never an ad-hoc host string. */
+export const targetIdSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(64)
+  .regex(/^[a-z0-9][a-z0-9._-]*$/i, 'target ids are alphanumeric with . _ -');
+
 export const createProfileRequestSchema = z.object({
   provider: providerIdSchema,
   label,
@@ -35,6 +43,7 @@ export const confirmWizardRequestSchema = z.object({
 });
 
 export const createSessionRequestSchema = z.object({
+  targetId: targetIdSchema.optional(),
   profileId: z.string().min(1),
   app: z.string().min(1),
   args: z.array(z.string()).default([]),
@@ -49,17 +58,6 @@ export const createT3InstanceRequestSchema = z.object({
     .record(providerIdSchema, z.string().min(1))
     .refine((v) => Object.keys(v).length > 0, { message: 'at least one profile required' }),
 });
-
-/**
- * Target selection is always an explicit id, never a host string that could
- * end up in a command line.
- */
-export const targetIdSchema = z
-  .string()
-  .trim()
-  .min(1)
-  .max(64)
-  .regex(/^[a-z0-9][a-z0-9._-]*$/i, 'target ids are alphanumeric with . _ -');
 
 /**
  * A command as it crosses the transport seam: argv + env + cwd, so a request

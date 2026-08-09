@@ -8,6 +8,8 @@ export interface DaemonConfig {
   dataDir: string;
   /** profiles.json — the human-editable profile store. */
   profilesFile: string;
+  /** targets.json — explicitly configured and approved remote targets. */
+  targetsFile: string;
   /** SQLite database for usage snapshots. */
   usageDb: string;
   /** Managed profile homes live under here, one dir per profile id. */
@@ -52,6 +54,7 @@ export function resolveConfig(
   return {
     dataDir,
     profilesFile: path.join(dataDir, 'profiles.json'),
+    targetsFile: path.join(dataDir, 'targets.json'),
     usageDb: path.join(dataDir, 'usage.db'),
     homesDir: path.join(dataDir, 'homes'),
     cacheDir: path.join(dataDir, 'cache'),

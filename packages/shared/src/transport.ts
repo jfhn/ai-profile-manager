@@ -43,7 +43,7 @@ export interface ExecOptions {
   timeoutMs?: number;
 }
 
-/** How a process ended. Exactly one of the two is set for a real exit. */
+/** How a process ended. Exactly one field is set; a signal always means a null exitCode. */
 export interface ExitStatus {
   exitCode: number | null;
   /** Signal name (e.g. 'SIGHUP') when the process was killed. */
@@ -81,6 +81,8 @@ export interface PtyHandle {
   /** Deliver a signal to the process. A no-op once it exited. */
   signal(signal: TargetSignal): void;
   onData(listener: (data: string) => void): () => void;
+  /** Runtime transport failure after the pty was opened. */
+  onError(listener: (error: TransportError) => void): () => void;
   /** Fires exactly once. Late listeners receive the recorded status immediately. */
   onExit(listener: (status: ExitStatus) => void): () => void;
   /** Terminate the process if it is still running and release the handle. */

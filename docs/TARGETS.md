@@ -117,9 +117,16 @@ exposed as `AppContext.targets`:
 - the local target cannot be replaced
 - `close()` releases remote connections; open handles belong to their owner
 
-Persisting approved remote targets is deliberately not implemented yet — the
-registry takes them as constructor arguments, so a store can be added without
-touching the contract.
+Remote targets are persisted in `<dataDir>/targets.json`. Version 1 contains a
+`targets` array whose entries have `id`, `label`, `transport: "ssh"`, `address`
+and an explicit `approved` boolean. Invalid files fail daemon startup; omitted
+files mean no remote targets. Unapproved entries are registered so selection
+gets `target-not-approved`, but the registry never hands out their transport.
+
+The SSH transport starts the fixed `apm __target-agent` command in batch mode.
+All dynamic profile, argv, cwd, env, input, resize and signal values cross that
+connection as JSON fields. They never become part of the SSH command. SSH
+authentication and host verification stay with the user's normal SSH setup.
 
 ## What consumers may assume
 
@@ -137,6 +144,10 @@ touching the contract.
   line, and do not put the target address anywhere near one.
 - Map failures with `toApiFailure` so the CLI prints the same errors the API
   returns.
+- A client WebSocket only attaches to a daemon-owned session. Disconnecting it
+  does not close the target PTY, and a later `apm attach` replays scrollback and
+  resumes live I/O. A target transport failure emits a terminal error and a
+  recorded exit, so no process is silently left untracked.
 
 ### Managed T3 on a target (issue #19)
 

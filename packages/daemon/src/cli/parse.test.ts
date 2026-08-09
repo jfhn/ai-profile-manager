@@ -28,6 +28,15 @@ describe('parseRunArgv', () => {
     });
   });
 
+  it('accepts one target flag before the existing positionals', () => {
+    expect(parseRunArgv(['--target', 'workstation', 'work', 'claude', '--resume'])).toEqual({
+      target: 'workstation',
+      profile: 'work',
+      app: 'claude',
+      args: ['--resume'],
+    });
+  });
+
   it('accepts `--` after the profile and after the app', () => {
     expect(parseRunArgv(['work', '--', 'claude', '--resume'])).toEqual({
       profile: 'work',
@@ -64,6 +73,19 @@ describe('parseRunArgv', () => {
     expect(() => parseRunArgv(['--port', '1', 'claude'])).toThrow(/unknown flag: --port/);
     expect(() => parseRunArgv(['work', '--resume'])).toThrow(/unknown flag: --resume/);
     expect(parseRunArgv(['work', '--', '--weird-app']).app).toBe('--weird-app');
+  });
+
+  it('keeps old flag errors and rejects an incomplete target option clearly', () => {
+    expect(() => parseRunArgv(['--port', '1', 'claude'])).toThrow(
+      'unknown flag: --port (apm flags go before the positionals)',
+    );
+    expect(() => parseRunArgv(['work', '--target', 'box', 'claude'])).toThrow(
+      'unknown flag: --target (apm flags go before the positionals)',
+    );
+    expect(() => parseRunArgv(['--target'])).toThrow('--target requires <target>');
+    expect(() => parseRunArgv(['--target', '--', 'work', 'claude'])).toThrow(
+      '--target requires <target>',
+    );
   });
 });
 

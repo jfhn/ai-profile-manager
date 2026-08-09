@@ -12,10 +12,12 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { StringDecoder } from 'node:string_decoder';
 import WebSocket from 'ws';
+import { LOCAL_TARGET_ID } from '@apm/shared';
 import type {
   ApiError,
   OverviewResponse,
   StatusResponse,
+  TargetProfilesResponse,
   TerminalClientMessage,
   TerminalServerMessage,
   TerminalSession,
@@ -48,19 +50,32 @@ export async function runCommand(argv: string[]): Promise<void> {
 
   const run = await daemonOrStart();
   const overview = await api<OverviewResponse>(run, 'GET', '/api/overview');
+  const candidates = invocation.target
+    ? (
+        await api<TargetProfilesResponse>(
+          run,
+          'GET',
+          `/api/targets/${encodeURIComponent(invocation.target)}/profiles`,
+        )
+      ).profiles
+    : overview.profiles;
 
   let profile;
   try {
-    profile = resolveProfile(overview.profiles, invocation.profile, invocation.app);
+    profile = resolveProfile(candidates, invocation.profile, invocation.app);
   } catch (error: unknown) {
-    fail(errorMessage(error));
+    const target = invocation.target ? ` on target "${invocation.target}"` : '';
+    fail(`${errorMessage(error)}${target}`);
   }
 
   const session = await api<TerminalSession>(run, 'POST', '/api/sessions', {
+    ...(invocation.target === undefined ? {} : { targetId: invocation.target }),
     profileId: profile.id,
     app: invocation.app,
     args: invocation.args,
-    cwd: process.cwd(),
+    ...(invocation.target === undefined || invocation.target === LOCAL_TARGET_ID
+      ? { cwd: process.cwd() }
+      : {}),
     cols: terminalSize().cols,
     rows: terminalSize().rows,
   });
@@ -96,7 +111,9 @@ export async function sessionsCommand(_argv: string[]): Promise<void> {
     session.name,
     labels.get(session.profileId) ?? session.profileId,
     [session.app, ...session.args].join(' '),
-    session.status === 'exited' ? `exited(${session.exitCode ?? '?'})` : session.status,
+    session.status === 'exited'
+      ? `exited(${session.signal ?? session.exitCode ?? '?'})`
+      : session.status,
     String(session.attachedClients),
     new Date(session.createdAt).toLocaleString(),
   ]);
@@ -170,6 +187,7 @@ async function attachSession(run: RunFileData, session: TerminalSession): Promis
   let restored = false;
   let detaching = false;
   let exitCode: number | null = null;
+  let signal: string | null = null;
   let exited = false;
 
   const onStdin = (chunk: Buffer): void => {
@@ -232,6 +250,7 @@ async function attachSession(run: RunFileData, session: TerminalSession): Promis
         case 'exit':
           exited = true;
           exitCode = message.exitCode;
+          signal = message.signal;
           ws.close();
           break;
         case 'error':
@@ -256,12 +275,20 @@ async function attachSession(run: RunFileData, session: TerminalSession): Promis
   restore();
 
   if (exited) {
-    process.stderr.write(`\r\n[apm] ${session.name} exited with code ${exitCode ?? 0}\r\n`);
-    process.exitCode = exitCode ?? 0;
+    if (signal) {
+      process.stderr.write(`\r\n[apm] ${session.name} exited from signal ${signal}\r\n`);
+      process.exitCode = 1;
+    } else {
+      process.stderr.write(`\r\n[apm] ${session.name} exited with code ${exitCode ?? 1}\r\n`);
+      process.exitCode = exitCode ?? 1;
+    }
   } else if (detaching) {
     process.stdout.write(`\r\ndetached: ${session.name}\r\n`);
   } else {
-    process.stderr.write(`\r\n[apm] connection to ${session.name} closed\r\n`);
+    process.stderr.write(
+      `\r\n[apm] connection to ${session.name} closed; ` +
+        `reattach with: apm attach ${session.name}\r\n`,
+    );
     process.exitCode = 1;
   }
   // Safety net: fires only if something still holds the event loop open.
