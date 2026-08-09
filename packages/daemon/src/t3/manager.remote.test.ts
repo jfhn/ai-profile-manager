@@ -320,6 +320,37 @@ describe('t3 manager on a remote target', () => {
     expect(started.url).toBeNull();
   });
 
+  it('retires the first attempt when an unhealthy instance is started again', async () => {
+    const { manager, transport } = harness({}, { startTimeoutMs: 30 });
+    const created = await create(manager);
+
+    // First attempt: the endpoint never answers, which leaves the instance
+    // startable again with its pty and endpoint still open on the target.
+    expect((await manager.start(created.id)).status).toBe('unhealthy');
+    const stale = { pty: transport.lastPty(), endpoint: transport.lastEndpoint() };
+
+    const restarted = await startHealthy(manager, transport, created.id);
+    expect(restarted.status).toBe('running');
+    expect(transport.ptys).toHaveLength(2);
+
+    // The abandoned attempt was torn down rather than left running over there.
+    expect(stale.pty.exited).toBe(true);
+    expect(stale.endpoint.closed).toBe(true);
+    expect(stale.pty).not.toBe(transport.lastPty());
+
+    // Its late events belong to a runtime nobody is served by any more, so the
+    // healthy instance must not notice them at all.
+    stale.pty.exit({ exitCode: 1 });
+    stale.endpoint.drop('stale forward lost');
+    const instance = manager.list()[0];
+    expect(instance).toMatchObject({
+      status: 'running',
+      url: `http://${TARGET_HOST}:9101`,
+      statusReason: null,
+    });
+    expect(transport.lastEndpoint().closed).toBe(false);
+  });
+
   it('reports an exit by status only, never by output', async () => {
     const { manager, transport } = harness();
     const created = await create(manager);

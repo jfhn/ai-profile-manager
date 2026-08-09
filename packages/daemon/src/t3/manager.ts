@@ -326,6 +326,16 @@ export function createT3Manager(
     return { scope, protocol, port, url };
   }
 
+  /**
+   * True while `runtime` is the one this instance is actually being served by.
+   * A superseded runtime — start() after a failed start, say — still emits its
+   * own exit and close events later, and those must not touch the instance the
+   * *current* runtime owns.
+   */
+  function isCurrent(id: string, runtime: RemoteRuntime): boolean {
+    return remotes.get(id) === runtime && !runtime.stopping;
+  }
+
   /** Detach a remote instance's handles without claiming anything about status. */
   function releaseRemote(id: string): void {
     const runtime = remotes.get(id);
@@ -334,17 +344,30 @@ export function createT3Manager(
     void runtime.endpoint.close().catch(() => undefined);
   }
 
-  /** A live transport failure; the pty's own exit follows and reports it. */
-  function onRemoteError(id: string, error: TransportError): void {
+  /**
+   * Tear down a runtime that is being replaced. Nothing about the instance is
+   * touched: the caller is starting it again and owns its status.
+   */
+  async function discardRemote(id: string): Promise<void> {
     const runtime = remotes.get(id);
-    if (!runtime || runtime.stopping) return;
+    if (!runtime) return;
+    // Both flags matter: `stopping` silences its late events even for a
+    // listener that captured the runtime before it was replaced.
+    runtime.stopping = true;
+    remotes.delete(id);
+    await runtime.pty.close().catch(() => undefined);
+    await runtime.endpoint.close().catch(() => undefined);
+  }
+
+  /** A live transport failure; the pty's own exit follows and reports it. */
+  function onRemoteError(id: string, runtime: RemoteRuntime, error: TransportError): void {
+    if (!isCurrent(id, runtime)) return;
     runtime.failure = error.message;
   }
 
-  function onRemoteExit(id: string, status: ExitStatus): void {
+  function onRemoteExit(id: string, runtime: RemoteRuntime, status: ExitStatus): void {
     const instance = instances.get(id);
-    const runtime = remotes.get(id);
-    if (!instance || !runtime || runtime.stopping) return;
+    if (!instance || !isCurrent(id, runtime)) return;
     releaseRemote(id);
     instance.status = 'exited';
     instance.pid = null;
@@ -358,10 +381,9 @@ export function createT3Manager(
     changed();
   }
 
-  function onEndpointClosed(id: string, reason: string | null): void {
+  function onEndpointClosed(id: string, runtime: RemoteRuntime, reason: string | null): void {
     const instance = instances.get(id);
-    const runtime = remotes.get(id);
-    if (!instance || !runtime || runtime.stopping) return;
+    if (!instance || !isCurrent(id, runtime)) return;
     if (instance.status !== 'running' && instance.status !== 'starting') return;
     instance.status = 'unhealthy';
     instance.url = null;
@@ -427,9 +449,9 @@ export function createT3Manager(
 
     const runtime: RemoteRuntime = { pty, endpoint, stopping: false, failure: null };
     remotes.set(instance.id, runtime);
-    pty.onError((error) => onRemoteError(instance.id, error));
-    pty.onExit((status) => onRemoteExit(instance.id, status));
-    endpoint.onClose((reason) => onEndpointClosed(instance.id, reason));
+    pty.onError((error) => onRemoteError(instance.id, runtime, error));
+    pty.onExit((status) => onRemoteExit(instance.id, runtime, status));
+    endpoint.onClose((reason) => onEndpointClosed(instance.id, runtime, reason));
 
     instance.status = 'starting';
     instance.pid = null;
@@ -642,7 +664,13 @@ export function createT3Manager(
           `${instance.label} is already ${instance.status}`,
         );
       }
-      return instance.targetId === LOCAL_TARGET_ID ? startLocal(instance) : startRemote(instance);
+      if (instance.targetId === LOCAL_TARGET_ID) return startLocal(instance);
+      // An instance can be restarted while an earlier attempt's pty and
+      // endpoint are still open on the target — 'unhealthy' and 'exited' are
+      // both startable. Retire that runtime before opening another one, or it
+      // leaks over there and its late events land on the new one.
+      await discardRemote(instance.id);
+      return startRemote(instance);
     },
 
     async stop(id: string): Promise<T3Instance> {
@@ -698,7 +726,9 @@ export function createT3Manager(
             instance.port = null;
             instance.url = null;
             instance.endpoint = null;
-            instance.statusReason = null;
+            instance.statusReason =
+              `apm restarted, which ended the connection supervising this instance on ` +
+              `"${instance.targetId}" — start it again`;
           }
           continue;
         }

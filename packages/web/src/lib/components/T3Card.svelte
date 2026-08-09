@@ -31,6 +31,7 @@
   );
 
   const remote = $derived(instance.targetId !== LOCAL_TARGET_ID);
+  const failed = $derived(instance.status === 'unhealthy' || instance.status === 'exited');
   const scope = $derived<EndpointScope | null>(instance.endpoint?.scope ?? null);
 
   /**
@@ -156,8 +157,10 @@
     <p class="hint">{endpointHint}</p>
   {/if}
 
-  {#if instance.statusReason && (instance.status === 'unhealthy' || instance.status === 'exited')}
-    <p class="reason">{instance.statusReason}</p>
+  {#if instance.statusReason}
+    <!-- A reason on a stopped instance explains why it is stopped, which is
+         information rather than a failure. -->
+    <p class={failed ? 'reason' : 'hint'}>{instance.statusReason}</p>
   {/if}
 
   <div class="foot">
@@ -188,7 +191,9 @@
 {#if removing}
   <ConfirmDialog
     title={`Remove ${instance.label}?`}
-    message="The instance is removed from apm. Its base directory stays on disk."
+    message={remote
+      ? `The instance is removed from apm. Its base directory stays on ${app.targetLabel(instance.targetId)}.`
+      : 'The instance is removed from apm and its base directory is deleted from this machine.'}
     confirmLabel="Remove"
     busy={removeBusy}
     onconfirm={() => void remove()}

@@ -128,6 +128,17 @@ All dynamic profile, argv, cwd, env, input, resize and signal values cross that
 connection as JSON fields. They never become part of the SSH command. SSH
 authentication and host verification stay with the user's normal SSH setup.
 
+Its `endpoint` capability is Tailscale Serve, run on the target through that
+same exec channel (`packages/daemon/src/targets/tailscale.ts`): the service
+stays on the target's loopback address and `tailscale serve --bg --https=<port>
+http://127.0.0.1:<service>` publishes it as HTTPS on the machine's own MagicDNS
+name, which is what makes the endpoint `'published'` and reachable from another
+device. `close()` runs the same invocation with `off`, so closing an endpoint is
+also the revocation path. Funnel is never enabled, and a port that comes back
+funnelled is withdrawn instead of handed out. The capability is declared
+unconditionally because capabilities are static; a target without Tailscale
+fails `openEndpoint` with `endpoint-failed` naming the prerequisite.
+
 ## What consumers may assume
 
 ### `apm run --target <target>` (issue #18)
@@ -199,6 +210,11 @@ Implemented in `packages/daemon/src/t3/manager.ts`; the user-facing side is
 - `registry.test.ts` covers target selection, approval, target-scoped profile
   resolution, unreachable/closed connections and the error mapping.
 - `routes.test.ts` covers the read-only `/api/targets` endpoints.
+- `tailscale.test.ts` drives the SSH transport's endpoint through a scripted
+  exec channel: serve argv, MagicDNS and serve-status parsing, port allocation,
+  health, revocation on close, the missing-Tailscale message and the refusal to
+  hand out a funnelled port. The SSH spawn underneath it stays untested, like
+  the rest of `ssh.ts` — the two-device live check covers that.
 
 `packages/daemon/src/t3/manager.remote.test.ts` drives the whole managed-T3
 lifecycle on a target through the fake remote transport; the local behaviour it

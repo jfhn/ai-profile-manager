@@ -3,6 +3,7 @@
  * apm-specific lives here — just "is this port free" and "does it answer".
  */
 import http from 'node:http';
+import https from 'node:https';
 import net from 'node:net';
 
 export function portIsFree(port: number, host = '127.0.0.1'): Promise<boolean> {
@@ -51,6 +52,33 @@ export function httpProbe(options: HttpProbeOptions): Promise<boolean> {
         resolve(true); // any HTTP status means the server is up
       },
     );
+    req.on('timeout', () => {
+      req.destroy();
+      resolve(false);
+    });
+    req.on('error', () => resolve(false));
+    req.end();
+  });
+}
+
+/**
+ * True as soon as `url` answers with any HTTP response. Unlike httpProbe this
+ * follows the URL's own scheme, so a published HTTPS endpoint is probed over
+ * TLS with the usual certificate verification.
+ */
+export function urlProbe(url: string, timeoutMs = 2_000): Promise<boolean> {
+  return new Promise((resolve) => {
+    let parsed: URL;
+    try {
+      parsed = new URL(url);
+    } catch {
+      return resolve(false);
+    }
+    const client = parsed.protocol === 'https:' ? https : http;
+    const req = client.request(url, { method: 'GET', timeout: timeoutMs }, (res) => {
+      res.resume();
+      resolve(true);
+    });
     req.on('timeout', () => {
       req.destroy();
       resolve(false);
