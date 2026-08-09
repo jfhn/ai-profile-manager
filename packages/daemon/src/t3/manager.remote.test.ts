@@ -333,6 +333,20 @@ describe('t3 manager on a remote target', () => {
     expect(instance?.endpoint).toBeNull();
   });
 
+  it('blames a live transport failure rather than the exit it causes', async () => {
+    const { manager, transport } = harness();
+    const created = await create(manager);
+    await startHealthy(manager, transport, created.id);
+
+    // onError first, then the exit the dead connection synthesizes.
+    transport.lastPty().fail('unreachable', 'connection reset');
+    const instance = manager.list()[0];
+    expect(instance?.status).toBe('exited');
+    expect(instance?.statusReason).toBe(
+      `The connection to target "${TARGET_ID}" failed: connection reset`,
+    );
+  });
+
   it('marks the instance unhealthy when the endpoint drops on its own', async () => {
     const { manager, transport } = harness();
     const created = await create(manager);

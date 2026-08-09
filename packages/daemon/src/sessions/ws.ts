@@ -42,11 +42,12 @@ export function attachTerminalWs(server: Server, ctx: AppContext): void {
       send(ws, { type: 'scrollback', data: streams.scrollback() });
       const current = streams.session();
       if (current.status === 'exited') {
-        send(ws, { type: 'exit', exitCode: current.exitCode });
+        send(ws, { type: 'exit', exitCode: current.exitCode, signal: current.signal });
       }
       const detach = streams.attach({
         onData: (data) => send(ws, { type: 'data', data }),
-        onExit: (exitCode) => send(ws, { type: 'exit', exitCode }),
+        onError: (message) => send(ws, { type: 'error', message }),
+        onExit: (status) => send(ws, { type: 'exit', ...status }),
       });
 
       ws.on('message', (raw) => {

@@ -190,6 +190,7 @@ export function createLocalTransport(deps: LocalTransportDeps): TargetTransport 
 
 function localPtyHandle(pty: IPty): PtyHandle {
   const dataListeners = new Set<(data: string) => void>();
+  const errorListeners = new Set<(error: TransportError) => void>();
   const exitListeners = new Set<(status: ExitStatus) => void>();
   let exited: ExitStatus | null = null;
 
@@ -197,8 +198,10 @@ function localPtyHandle(pty: IPty): PtyHandle {
     for (const listener of dataListeners) listener(data);
   });
   pty.onExit(({ exitCode, signal }) => {
-    exited = { exitCode, signal: signalName(signal) };
+    const normalizedSignal = signalName(signal);
+    exited = { exitCode: normalizedSignal === null ? exitCode : null, signal: normalizedSignal };
     for (const listener of exitListeners) listener(exited);
+    errorListeners.clear();
     exitListeners.clear();
   });
 
@@ -232,6 +235,11 @@ function localPtyHandle(pty: IPty): PtyHandle {
     onData(listener) {
       dataListeners.add(listener);
       return () => void dataListeners.delete(listener);
+    },
+
+    onError(listener) {
+      errorListeners.add(listener);
+      return () => void errorListeners.delete(listener);
     },
 
     onExit(listener) {

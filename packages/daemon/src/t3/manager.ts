@@ -35,6 +35,7 @@ import {
   type TargetCapability,
   type TargetId,
   type TargetTransport,
+  type TransportError,
 } from '@apm/shared';
 import type { DaemonConfig } from '../config.js';
 import { ApiFailure, type EventBus, type ProfileService, type T3Manager } from '../context.js';
@@ -91,6 +92,12 @@ interface RemoteRuntime {
   endpoint: EndpointHandle;
   /** Set while stop() is tearing the instance down, so it owns the final state. */
   stopping: boolean;
+  /**
+   * Transport failure reported through `onError`, kept for the exit that
+   * follows it: "the connection died" beats the exit code a dead connection
+   * happens to synthesize.
+   */
+  failure: string | null;
 }
 
 const endpointSchema = z.object({
@@ -327,6 +334,13 @@ export function createT3Manager(
     void runtime.endpoint.close().catch(() => undefined);
   }
 
+  /** A live transport failure; the pty's own exit follows and reports it. */
+  function onRemoteError(id: string, error: TransportError): void {
+    const runtime = remotes.get(id);
+    if (!runtime || runtime.stopping) return;
+    runtime.failure = error.message;
+  }
+
   function onRemoteExit(id: string, status: ExitStatus): void {
     const instance = instances.get(id);
     const runtime = remotes.get(id);
@@ -336,8 +350,11 @@ export function createT3Manager(
     instance.pid = null;
     instance.url = null;
     instance.endpoint = null;
-    // Only the exit status: t3's own output can contain its pairing token.
-    instance.statusReason = `t3 ${describeExit(status)} on target "${instance.targetId}"`;
+    // Only the transport's own words or the exit status — never t3's output,
+    // which can contain its pairing token.
+    instance.statusReason = runtime.failure
+      ? `The connection to target "${instance.targetId}" failed: ${runtime.failure}`
+      : `t3 ${describeExit(status)} on target "${instance.targetId}"`;
     changed();
   }
 
@@ -408,8 +425,9 @@ export function createT3Manager(
     // t3's startup output carries a one-time pairing token, so it is
     // deliberately neither read, stored nor logged here.
 
-    const runtime: RemoteRuntime = { pty, endpoint, stopping: false };
+    const runtime: RemoteRuntime = { pty, endpoint, stopping: false, failure: null };
     remotes.set(instance.id, runtime);
+    pty.onError((error) => onRemoteError(instance.id, error));
     pty.onExit((status) => onRemoteExit(instance.id, status));
     endpoint.onClose((reason) => onEndpointClosed(instance.id, reason));
 

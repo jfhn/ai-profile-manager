@@ -4,7 +4,8 @@
  *
  *   apm [start] [--port N] [--no-open] [--foreground]   start or reuse the daemon, open the UI
  *   apm url                                             print the authenticated URL, open nothing
- *   apm run <profile> <app> [args...]                   run an app bound to a profile
+ *   apm run [--target <target>] <profile> <app> [args...]
+ *                                                       run an app bound to a profile
  *   apm attach <session>                                attach to a running session
  *   apm sessions                                        list sessions
  *   apm status                                          show daemon status
@@ -28,6 +29,7 @@ import {
   urlCommand,
 } from './cli/commands.js';
 import { parseCommand, USAGE } from './cli/parse.js';
+import { runTargetAgent } from './targets/agent.js';
 
 interface StartFlags {
   port: number;
@@ -132,6 +134,8 @@ async function main(): Promise<void> {
       return startCommand(argv);
     case '__daemon':
       return daemonMain(argv);
+    case '__target-agent':
+      return runTargetAgent();
     case 'run':
       return runCommand(argv);
     case 'attach':

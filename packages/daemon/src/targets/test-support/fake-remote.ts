@@ -67,6 +67,8 @@ export interface FakePty {
   emit(data: string): void;
   /** End the process with the given status (defaults to a clean exit). */
   exit(status?: Partial<ExitStatus>): void;
+  /** Fail the live transport, then end the process as failed. */
+  fail(code: TransportErrorCode, message?: string): void;
   readonly exited: boolean;
 }
 
@@ -143,6 +145,7 @@ export function createFakeRemoteTransport(options: FakeRemoteOptions = {}): Fake
 
   function makePty(spec: PtySpec, index: number): FakePty {
     const dataListeners = new Set<(data: string) => void>();
+    const errorListeners = new Set<(error: TransportError) => void>();
     const exitListeners = new Set<(status: ExitStatus) => void>();
     const writes: string[] = [];
     const resizes: Array<{ cols: number; rows: number }> = [];
@@ -151,8 +154,10 @@ export function createFakeRemoteTransport(options: FakeRemoteOptions = {}): Fake
 
     function finish(status: Partial<ExitStatus>): void {
       if (exited) return;
-      exited = { exitCode: status.exitCode ?? 0, signal: status.signal ?? null };
+      const signal = status.signal ?? null;
+      exited = { exitCode: signal === null ? (status.exitCode ?? 0) : null, signal };
       for (const listener of exitListeners) listener(exited);
+      errorListeners.clear();
       exitListeners.clear();
     }
 
@@ -174,6 +179,10 @@ export function createFakeRemoteTransport(options: FakeRemoteOptions = {}): Fake
       onData(listener) {
         dataListeners.add(listener);
         return () => void dataListeners.delete(listener);
+      },
+      onError(listener) {
+        errorListeners.add(listener);
+        return () => void errorListeners.delete(listener);
       },
       onExit(listener) {
         if (exited) {
@@ -199,6 +208,12 @@ export function createFakeRemoteTransport(options: FakeRemoteOptions = {}): Fake
         for (const listener of dataListeners) listener(data);
       },
       exit: finish,
+      fail(code, message) {
+        if (exited) return;
+        const error = new TransportError(code, id, message ?? `${code}: live pty`);
+        for (const listener of errorListeners) listener(error);
+        finish({ exitCode: 1, signal: null });
+      },
       get exited() {
         return exited !== null;
       },
@@ -304,9 +319,10 @@ export function createFakeRemoteTransport(options: FakeRemoteOptions = {}): Fake
       scripted(spec.argv);
       execs.push({ spec, options: execOptions });
       const result = results.get(key(spec.argv)) ?? {};
+      const signal = result.signal ?? null;
       return {
-        exitCode: result.exitCode ?? 0,
-        signal: result.signal ?? null,
+        exitCode: signal === null ? (result.exitCode ?? 0) : null,
+        signal,
         stdout: result.stdout ?? '',
         stderr: result.stderr ?? '',
       };

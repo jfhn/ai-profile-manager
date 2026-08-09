@@ -73,14 +73,43 @@ apm                       # start (or reuse) the daemon and open the dashboard
 apm url                   # print the authenticated dashboard URL, open nothing
 apm run work claude       # run claude bound to profile "work"
 apm run work bash         # any command; children inherit the profile env
+apm run --target devbox work claude --resume
+                          # run on the approved target "devbox"
 apm attach claude-work-1  # reattach to a running session
 apm sessions | status | stop
 ```
 
+Remote targets are declared in `~/.local/share/apm/targets.json` (or under
+`APM_DATA_DIR`) and are selected only by their configured id:
+
+```json
+{
+  "version": 1,
+  "targets": [
+    {
+      "id": "devbox",
+      "label": "Development box",
+      "transport": "ssh",
+      "address": "devbox.example",
+      "approved": true
+    }
+  ]
+}
+```
+
+SSH uses batch mode and runs the fixed `apm __target-agent` entry point; set up
+SSH authentication separately and make `apm` available on the remote login
+PATH. The target machine must have the selected profile and tool configured.
+Setting `approved` to `false` keeps the declaration visible to the registry but
+prevents it from running anything. A dropped terminal connection only detaches;
+use `apm attach <session>` to reconnect while the remote process is still
+running or to see its recorded exit.
+
 State lives in `~/.local/share/apm` (override with `APM_DATA_DIR`): profiles
-in `profiles.json`, usage snapshots in SQLite, managed provider homes under
-`homes/`. Raw credentials stay inside provider homes; apm never copies them,
-never refreshes OAuth tokens, and never sends them to the browser.
+in `profiles.json`, approved remote declarations in `targets.json`, usage
+snapshots in SQLite, and managed provider homes under `homes/`. Raw credentials
+stay inside provider homes; apm never copies them, never refreshes OAuth tokens,
+and never sends them to the browser or another target.
 
 ## Credits
 

@@ -6,16 +6,17 @@
  * A session outlives every client: closing a socket only detaches. Exited
  * sessions stay listed until they are disposed explicitly.
  *
- * The pty itself is opened through a target transport, which defaults to the
- * local one — so sessions keep behaving exactly as before while the seam a
- * remote target would plug into already exists.
+ * The pty is opened through the approved target registry. An omitted target
+ * still resolves to the daemon's local transport.
  */
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { LOCAL_TARGET_ID } from '@apm/shared';
 import type {
   CreateSessionRequest,
+  ExitStatus,
   ProviderId,
   PtyHandle,
   TargetTransport,
@@ -25,6 +26,7 @@ import type { DaemonConfig } from '../config.js';
 import { ApiFailure, type EventBus, type ProfileService, type SessionHost } from '../context.js';
 import { toApiFailure } from '../targets/errors.js';
 import { createLocalTransport } from '../targets/local.js';
+import { createTargetRegistry, type TargetRegistry } from '../targets/registry.js';
 
 /** Scrollback kept per session; oldest whole chunks are dropped past this. */
 export const DEFAULT_SCROLLBACK_BYTES = 1024 * 1024;
@@ -39,7 +41,8 @@ const KNOWN_APPS: Record<string, ProviderId> = {
 /** Live view of one session, used by the terminal WebSocket. */
 export interface SessionListener {
   onData(data: string): void;
-  onExit(exitCode: number | null): void;
+  onError(message: string): void;
+  onExit(status: ExitStatus): void;
 }
 
 export interface SessionStreams {
@@ -71,6 +74,8 @@ export interface SessionHostOptions {
   scrollbackBytes?: number;
   /** Target the ptys are opened on; defaults to this machine. */
   transport?: TargetTransport;
+  /** Approved target registry; production supplies the daemon-wide instance. */
+  targets?: TargetRegistry;
 }
 
 interface SessionRecord {
@@ -88,7 +93,9 @@ export function createSessionHost(
   options: SessionHostOptions = {},
 ): SessionHostInternals {
   const scrollbackBytes = options.scrollbackBytes ?? DEFAULT_SCROLLBACK_BYTES;
-  const transport = options.transport ?? createLocalTransport({ profiles });
+  const targets =
+    options.targets ??
+    createTargetRegistry(options.transport ?? createLocalTransport({ profiles }));
   const recentDirsFile = path.join(config.dataDir, 'recent-dirs.json');
   const sessions = new Map<string, SessionRecord>();
   const nameCounters = new Map<string, number>();
@@ -155,9 +162,13 @@ export function createSessionHost(
     },
 
     async create(req: CreateSessionRequest): Promise<TerminalSession> {
-      const profile = profiles.get(req.profileId);
-      if (!profile) {
-        throw new ApiFailure(404, 'profile-not-found', `No profile ${req.profileId}`);
+      let profile;
+      let transport: TargetTransport;
+      try {
+        transport = targets.transportFor(req.targetId);
+        profile = await targets.resolveProfile(req.targetId, req.profileId);
+      } catch (error: unknown) {
+        throw toApiFailure(error);
       }
       if (!profile.enabled) {
         throw new ApiFailure(409, 'profile-disabled', `Profile ${profile.label} is disabled`);
@@ -180,7 +191,7 @@ export function createSessionHost(
         );
       }
 
-      const cwd = req.cwd ?? os.homedir();
+      const cwd = req.cwd ?? (transport.target.id === LOCAL_TARGET_ID ? os.homedir() : '~');
       const args = req.args ?? [];
       const cols = req.cols ?? 80;
       const rows = req.rows ?? 24;
@@ -191,7 +202,7 @@ export function createSessionHost(
       try {
         pty = await transport.openPty({
           argv: [app, ...args],
-          cwd,
+          cwd: req.cwd,
           cols,
           rows,
           profileId: profile.id,
@@ -204,12 +215,14 @@ export function createSessionHost(
       const session: TerminalSession = {
         id,
         name: nextName(app, profile.label),
+        targetId: transport.target.id,
         profileId: profile.id,
         app,
         args,
         cwd,
         status: 'running',
         exitCode: null,
+        signal: null,
         cols,
         rows,
         attachedClients: 0,
@@ -219,18 +232,24 @@ export function createSessionHost(
       sessions.set(id, { session, pty, chunks: [], bytes: 0, listeners: new Set() });
 
       pty.onData((data) => record(id, data));
-      pty.onExit(({ exitCode }) => {
+      pty.onError((error) => {
+        const entry = sessions.get(id);
+        if (!entry) return;
+        for (const listener of entry.listeners) listener.onError(error.message);
+      });
+      pty.onExit((status) => {
         const entry = sessions.get(id);
         if (!entry) return;
         entry.pty = null;
         entry.session.status = 'exited';
-        entry.session.exitCode = exitCode;
+        entry.session.exitCode = status.exitCode;
+        entry.session.signal = status.signal;
         entry.session.exitedAt = new Date().toISOString();
-        for (const listener of entry.listeners) listener.onExit(exitCode);
+        for (const listener of entry.listeners) listener.onExit(status);
         changed();
       });
 
-      rememberDir(cwd);
+      if (transport.target.id === LOCAL_TARGET_ID) rememberDir(cwd);
       changed();
       return { ...session };
     },

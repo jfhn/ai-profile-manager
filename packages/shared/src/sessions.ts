@@ -10,14 +10,18 @@ export interface TerminalSession {
   id: string;
   /** Short human handle for `apm attach <name>`, e.g. "claude-work-1". */
   name: string;
+  /** Execution target that owns the process. */
+  targetId: string;
   profileId: string;
   /** The command being run, e.g. "claude" or "bash". */
   app: string;
   args: string[];
   cwd: string;
   status: SessionStatus;
-  /** Exit code once status === 'exited'. */
+  /** Exit code once status === 'exited', unless a signal ended it. */
   exitCode: number | null;
+  /** Signal name when a signal ended it. */
+  signal: string | null;
   cols: number;
   rows: number;
   /** Number of currently attached clients (web + CLI). */
@@ -37,5 +41,5 @@ export type TerminalClientMessage =
 export type TerminalServerMessage =
   | { type: 'scrollback'; data: string }
   | { type: 'data'; data: string }
-  | { type: 'exit'; exitCode: number | null }
+  | { type: 'exit'; exitCode: number | null; signal: string | null }
   | { type: 'error'; message: string };

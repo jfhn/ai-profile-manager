@@ -5,6 +5,10 @@
  *   GET /api/targets              -> { targets: ExecutionTarget[] }
  *   GET /api/targets/:id/profiles -> { profiles: TargetProfileSummary[] }
  *
+ * This module owns the whole /api/targets namespace, and the profile list is
+ * the one both consumers share: `apm run --target` resolves a profile name
+ * through it, and the web T3 picker fills its select from it.
+ *
  * The registry is the single source of truth here — nothing is filtered or
  * enriched, and nothing on either payload is secret (an ExecutionTarget carries
  * identity and capabilities only, a TargetProfileSummary neither home nor

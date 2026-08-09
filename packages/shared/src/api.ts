@@ -103,6 +103,8 @@ export interface T3ListResponse {
 
 /** POST /api/sessions */
 export interface CreateSessionRequest {
+  /** Omitted means the daemon's local target. */
+  targetId?: string;
   profileId: string;
   app: string;
   args?: string[];
