@@ -1,7 +1,7 @@
 <script lang="ts">
-  import type { ProviderId, T3Instance } from '@apm/shared';
+  import type { EndpointScope, ProviderId, T3Instance } from '@apm/shared';
   import { api } from '../api';
-  import { app } from '../stores.svelte';
+  import { app, LOCAL_TARGET_ID } from '../stores.svelte';
   import { toast, toastError } from '../toasts.svelte';
   import Badge from './Badge.svelte';
   import Button from './Button.svelte';
@@ -28,6 +28,22 @@
       : instance.status === 'starting' || instance.status === 'unhealthy'
         ? 'warning'
         : 'muted',
+  );
+
+  const remote = $derived(instance.targetId !== LOCAL_TARGET_ID);
+  const scope = $derived<EndpointScope | null>(instance.endpoint?.scope ?? null);
+
+  /**
+   * Spelled out rather than implied by the URL: a forwarded endpoint also looks
+   * like a localhost link, and only the scope says whether another device can
+   * reach it.
+   */
+  const endpointHint = $derived(
+    scope === 'published'
+      ? `Published on ${app.targetLabel(instance.targetId)}'s own address — reachable from your trusted network.`
+      : scope === 'forwarded'
+        ? 'Forwarded through the machine running apm — this link only opens here.'
+        : 'Served by the machine running apm.',
   );
 
   const bound = $derived(
@@ -93,6 +109,26 @@
 
   <dl class="rows">
     <div class="row">
+      <dt>target</dt>
+      <dd class="inline">
+        <span class="truncate" title={instance.targetId}>{app.targetLabel(instance.targetId)}</span>
+        <Badge tone={remote ? 'primary' : 'neutral'}>{remote ? 'remote' : 'local'}</Badge>
+      </dd>
+    </div>
+    {#if instance.endpoint}
+      <div class="row">
+        <dt>endpoint</dt>
+        <dd class="inline">
+          <Badge tone={scope === 'published' ? 'success' : 'warning'} title={endpointHint}>
+            {scope}
+          </Badge>
+          <span class="mono truncate" title={instance.url ?? undefined}>
+            {instance.url ?? 'no URL yet'}
+          </span>
+        </dd>
+      </div>
+    {/if}
+    <div class="row">
       <dt>port</dt>
       <dd class="mono">{instance.port ?? '—'}</dd>
     </div>
@@ -115,6 +151,10 @@
       </dd>
     </div>
   </dl>
+
+  {#if instance.endpoint}
+    <p class="hint">{endpointHint}</p>
+  {/if}
 
   {#if instance.statusReason && (instance.status === 'unhealthy' || instance.status === 'exited')}
     <p class="reason">{instance.statusReason}</p>
@@ -198,7 +238,7 @@
   }
 
   dt {
-    width: 58px;
+    width: 64px;
     flex: none;
     color: var(--muted-fg);
   }
@@ -212,6 +252,19 @@
     display: flex;
     flex-wrap: wrap;
     gap: 4px;
+  }
+
+  .inline {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+  }
+
+  .hint {
+    margin-top: 12px;
+    font-size: 11px;
+    color: var(--muted-fg);
   }
 
   .reason {
@@ -231,6 +284,7 @@
   }
 
   .rows,
+  .hint,
   .reason {
     margin-bottom: 16px;
   }

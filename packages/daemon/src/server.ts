@@ -18,6 +18,7 @@ import { createT3Manager } from './t3/manager.js';
 import { registerT3Routes } from './t3/routes.js';
 import { createLocalTransport } from './targets/local.js';
 import { createTargetRegistry } from './targets/registry.js';
+import { registerTargetRoutes } from './targets/routes.js';
 
 export interface DaemonHandle {
   config: DaemonConfig;
@@ -50,7 +51,7 @@ export async function createContext(config: DaemonConfig): Promise<AppContext> {
   const localTransport = createLocalTransport({ profiles });
   const targets = createTargetRegistry(localTransport);
   const sessions = createSessionHost(config, events, profiles, { transport: localTransport });
-  const t3 = createT3Manager(config, events, profiles);
+  const t3 = createT3Manager(config, events, profiles, { targets });
   return { config, events, profiles, usage, sessions, t3, targets };
 }
 
@@ -127,6 +128,7 @@ export async function startDaemon(config: DaemonConfig): Promise<DaemonHandle> {
   // ---- module routes ------------------------------------------------------
   registerCoreRoutes(app, ctx);
   registerSessionRoutes(app, ctx);
+  registerTargetRoutes(app, ctx);
   registerT3Routes(app, ctx);
 
   // ---- static web app -----------------------------------------------------

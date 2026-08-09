@@ -43,13 +43,6 @@ export const createSessionRequestSchema = z.object({
   rows: z.number().int().min(2).max(500).default(24),
 });
 
-export const createT3InstanceRequestSchema = z.object({
-  label,
-  profiles: z
-    .record(providerIdSchema, z.string().min(1))
-    .refine((v) => Object.keys(v).length > 0, { message: 'at least one profile required' }),
-});
-
 /**
  * Target selection is always an explicit id, never a host string that could
  * end up in a command line.
@@ -60,6 +53,15 @@ export const targetIdSchema = z
   .min(1)
   .max(64)
   .regex(/^[a-z0-9][a-z0-9._-]*$/i, 'target ids are alphanumeric with . _ -');
+
+export const createT3InstanceRequestSchema = z.object({
+  label,
+  profiles: z
+    .record(providerIdSchema, z.string().min(1))
+    .refine((v) => Object.keys(v).length > 0, { message: 'at least one profile required' }),
+  // Omitted means the local target, so an existing client keeps working.
+  targetId: targetIdSchema.optional(),
+});
 
 /**
  * A command as it crosses the transport seam: argv + env + cwd, so a request

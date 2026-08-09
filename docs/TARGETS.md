@@ -140,19 +140,38 @@ touching the contract.
 
 ### Managed T3 on a target (issue #19)
 
-- `openEndpoint({ port, healthPath })` for the instance's port; use
-  `endpoint.url` for the dashboard link and `waitUntilHealthy` for the current
-  start-up wait. Never build `http://127.0.0.1:<port>` by hand — a remote
-  instance is reached through a forward, and only the endpoint knows its URL.
+Implemented in `packages/daemon/src/t3/manager.ts`; the user-facing side is
+[T3-REMOTE.md](T3-REMOTE.md).
+
+- `openEndpoint({ port: null, healthPath })` for the instance's port. The target
+  allocates it, which makes port allocation per-target by construction, and the
+  manager names that port on T3's own command line afterwards.
+- `endpoint.url` is the dashboard link and `waitUntilHealthy` is the start-up
+  wait. Never build `http://127.0.0.1:<port>` by hand — a remote instance is
+  reached through a forward or the target's own address, and only the endpoint
+  knows which. A remote instance whose endpoint reports scope `'loopback'` is
+  rejected outright; `'forwarded'` is accepted but flagged in the UI as
+  reachable from the daemon's machine only.
 - `onClose` means the endpoint is gone (forward dropped, connection lost); the
-  instance should be shown as unhealthy, not silently linked.
-- Launch T3 with `exec`/argv and a `profileId`; the bound profile's credentials
-  stay on the target, and the browser only ever sees the endpoint URL.
-- The `endpoint` capability is optional. A target without it cannot host managed
-  T3 instances and must be filtered out of the picker.
-- Existing local instances keep their loopback URL: the local transport's
-  endpoint scope is `'loopback'` and its health check is the same HTTP probe
-  (`packages/daemon/src/targets/net.ts`) the manager uses today.
+  instance is shown as unhealthy, not silently linked.
+- Launch T3 through `openPty` with argv and a `profileId`, not `exec`: a managed
+  instance has to be stoppable, and `signal`/`onExit` on the pty handle are the
+  only lifecycle the contract offers. The bound profile's credentials stay on
+  the target — the pty's output is never read, because `t3 serve` prints a
+  one-time pairing token into it.
+- A remote instance binds exactly one profile: a `CommandSpec` carries one
+  `profileId`, and a second provider's env could only come from moving
+  credentials.
+- `endpoint`, `pty`, `signal` and `profiles` are all required. A target missing
+  any of them cannot host managed T3 instances and is filtered out of the
+  picker (`GET /api/targets` exposes the capability list for exactly this).
+- Nothing outlives the daemon on a remote target: the pty and the endpoint die
+  with the transport, so `adopt()` reports remote instances as stopped instead
+  of re-adopting them.
+- Existing local instances keep their loopback URL: they still use the detached
+  spawn + HTTP probe path (`packages/daemon/src/targets/net.ts`), because only a
+  detached process survives a daemon restart, and their endpoint is recorded
+  with scope `'loopback'`.
 
 ## Tests
 
@@ -165,6 +184,11 @@ touching the contract.
   cwd defaults, stdin, timeouts, real signals, port allocation.
 - `registry.test.ts` covers target selection, approval, target-scoped profile
   resolution, unreachable/closed connections and the error mapping.
+- `routes.test.ts` covers the read-only `/api/targets` endpoints.
+
+`packages/daemon/src/t3/manager.remote.test.ts` drives the whole managed-T3
+lifecycle on a target through the fake remote transport; the local behaviour it
+must not disturb stays in `manager.test.ts`.
 
 New transports should be added to the `IMPLEMENTATIONS` list in
 `contract.test.ts`; if a transport cannot satisfy the suite, it should not

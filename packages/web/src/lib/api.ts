@@ -5,12 +5,14 @@ import type {
   CreateSessionRequest,
   CreateT3InstanceRequest,
   DiscoveryResponse,
+  ExecutionTarget,
   OverviewResponse,
   Profile,
   RecentDirsResponse,
   StartWizardRequest,
   StatusResponse,
   T3Instance,
+  TargetProfileSummary,
   TerminalSession,
   UpdateProfileRequest,
   UsageSnapshot,
@@ -166,6 +168,15 @@ export const api = {
   deleteSession: (id: string) =>
     request<void>(`/api/sessions/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   recentDirs: () => request<RecentDirsResponse>('/api/recent-dirs'),
+
+  targets: async () =>
+    unwrapList<ExecutionTarget>(await request<unknown>('/api/targets'), 'targets'),
+  /** Profile ids are target-scoped, so a picker must ask the target itself. */
+  targetProfiles: async (id: string) =>
+    unwrapList<TargetProfileSummary>(
+      await request<unknown>(`/api/targets/${encodeURIComponent(id)}/profiles`),
+      'profiles',
+    ),
 
   t3List: async () => unwrapList<T3Instance>(await request<unknown>('/api/t3'), 'instances'),
   createT3: (body: CreateT3InstanceRequest) =>

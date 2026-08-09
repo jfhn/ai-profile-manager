@@ -48,7 +48,10 @@
         <T3Card {instance} />
       {/each}
     </div>
-    <p class="note">Each instance is a separate T3 Code server bound to the selected profiles.</p>
+    <p class="note">
+      Each instance is a separate T3 Code server bound to the selected profiles, running on its own
+      target. A remote instance is opened through the endpoint its target publishes.
+    </p>
   {/if}
 </div>
 

@@ -1,5 +1,6 @@
 import type {
   DiscoveryCandidate,
+  ExecutionTarget,
   Profile,
   ProviderId,
   ProviderInfo,
@@ -16,6 +17,12 @@ export const PROVIDER_LABELS: Record<ProviderId, string> = {
   codex: 'Codex',
 };
 
+/**
+ * Mirror of shared's LOCAL_TARGET_ID. The web app imports types only from
+ * @apm/shared so the bundle stays free of zod, hence the copy.
+ */
+export const LOCAL_TARGET_ID = 'local';
+
 export type ConnectionState = 'connecting' | 'live' | 'offline';
 
 class AppStore {
@@ -31,12 +38,25 @@ class AppStore {
   sessions = $state<TerminalSession[]>([]);
   t3Instances = $state<T3Instance[]>([]);
   discovery = $state<DiscoveryCandidate[]>([]);
+  /** Execution targets the daemon knows; the local one is always among them. */
+  targets = $state<ExecutionTarget[]>([]);
 
   connection = $state<ConnectionState>('connecting');
 
   /** Profiles that can back a new session or T3 instance. */
   launchable = $derived(
     this.profiles.filter((profile) => profile.enabled && profile.status === 'active'),
+  );
+
+  /** Targets that can host a managed T3 instance (see docs/TARGETS.md). */
+  t3Targets = $derived(
+    this.targets.filter(
+      (target) =>
+        target.approved &&
+        (['endpoint', 'pty', 'signal', 'profiles'] as const).every((capability) =>
+          target.capabilities.includes(capability),
+        ),
+    ),
   );
 
   profile(id: string | null | undefined): Profile | undefined {
@@ -51,6 +71,18 @@ class AppStore {
   providerLabel(provider: ProviderId): string {
     return this.providers.find((info) => info.id === provider)?.label ?? PROVIDER_LABELS[provider];
   }
+
+  target(id: string | null | undefined): ExecutionTarget | undefined {
+    if (!id) return undefined;
+    return this.targets.find((candidate) => candidate.id === id);
+  }
+
+  /** The target's own name, falling back to its id so a link is never nameless. */
+  targetLabel(id: string | null | undefined): string {
+    const target = this.target(id);
+    if (target) return target.label;
+    return id === LOCAL_TARGET_ID || !id ? 'this machine' : id;
+  }
 }
 
 export const app = new AppStore();
@@ -62,6 +94,16 @@ export async function loadOverview(): Promise<void> {
   app.usage = overview.usage;
   app.sessions = overview.sessions;
   app.t3Instances = overview.t3Instances;
+}
+
+export async function loadTargets(): Promise<void> {
+  try {
+    app.targets = await api.targets();
+  } catch {
+    // An older daemon has no /api/targets; everything then runs locally, which
+    // is what an empty list means to the pickers.
+    app.targets = [];
+  }
 }
 
 export async function loadDiscovery(): Promise<void> {
@@ -96,6 +138,7 @@ export async function boot(): Promise<void> {
     app.loading = false;
   }
   void loadDiscovery();
+  void loadTargets();
   connectEvents();
 }
 

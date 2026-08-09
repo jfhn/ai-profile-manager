@@ -3,6 +3,7 @@ import type { AdapterCapabilities, ProviderId, ProviderIdentity } from './provid
 import type { UsageSnapshot } from './usage.js';
 import type { TerminalSession } from './sessions.js';
 import type { T3Instance } from './t3.js';
+import type { ExecutionTarget, TargetId, TargetProfileSummary } from './target.js';
 
 /**
  * REST API contract (see docs/API.md for the full prose spec).
@@ -119,6 +120,22 @@ export interface RecentDirsResponse {
 export interface CreateT3InstanceRequest {
   label: string;
   profiles: Partial<Record<ProviderId, string>>;
+  /** Execution target to run the instance on; omitted means the local machine. */
+  targetId?: TargetId;
+}
+
+/** GET /api/targets — read-only view of the registry, for the target picker. */
+export interface TargetsResponse {
+  targets: ExecutionTarget[];
+}
+
+/**
+ * GET /api/targets/:id/profiles — profiles as that target reports them.
+ * Profile ids are target-scoped, so the picker must ask the target rather than
+ * reuse the local profile list.
+ */
+export interface TargetProfilesResponse {
+  profiles: TargetProfileSummary[];
 }
 
 /**
