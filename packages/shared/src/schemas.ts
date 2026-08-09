@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { PROVIDER_IDS } from './provider.js';
+import { LOCAL_TARGET_ID } from './target.js';
 
 /**
  * Zod schemas for API request validation (daemon-side) and persisted state.
@@ -18,6 +19,32 @@ export const targetIdSchema = z
   .min(1)
   .max(64)
   .regex(/^[a-z0-9][a-z0-9._-]*$/i, 'target ids are alphanumeric with . _ -');
+
+/** A remote machine's id — the local target's id is reserved for this machine. */
+export const remoteTargetIdSchema = targetIdSchema.refine((id) => id !== LOCAL_TARGET_ID, {
+  message: `"${LOCAL_TARGET_ID}" is reserved for this machine`,
+});
+
+/**
+ * A transport-level address (tailnet name, ssh host). It is handed to a
+ * transport as a structured value, and the leading-dash ban keeps it from ever
+ * reading as an option should it end up next to one.
+ */
+export const targetAddressSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(255)
+  .regex(/^[^-\s][^\s]*$/, 'SSH addresses cannot start with - or contain whitespace');
+
+/** POST /api/targets — approving one discovered machine as an execution target. */
+export const addTargetRequestSchema = z
+  .object({
+    id: remoteTargetIdSchema,
+    label,
+    address: targetAddressSchema,
+  })
+  .strict();
 
 export const createProfileRequestSchema = z.object({
   provider: providerIdSchema,

@@ -79,8 +79,14 @@ apm attach claude-work-1  # reattach to a running session
 apm sessions | status | stop
 ```
 
-Remote targets are declared in `~/.local/share/apm/targets.json` (or under
-`APM_DATA_DIR`) and are selected only by their configured id:
+Remote targets are added on the dashboard's **Targets** page: it lists the
+machines on your tailnet, and **Add** on the one you want approves that machine
+and makes it usable straight away. Discovery shows machines; only you turn one
+into a target.
+
+The approved set is stored in `~/.local/share/apm/targets.json` (or under
+`APM_DATA_DIR`), which stays hand-editable, and targets are selected only by
+their configured id:
 
 ```json
 {
@@ -101,7 +107,8 @@ SSH uses batch mode and runs the fixed `apm __target-agent` entry point; set up
 SSH authentication separately and make `apm` available on the remote login
 PATH. The target machine must have the selected profile and tool configured.
 Setting `approved` to `false` keeps the declaration visible to the registry but
-prevents it from running anything. A dropped terminal connection only detaches;
+prevents it from running anything; revoking on the Targets page removes the
+entry and closes the connection immediately. A dropped terminal connection only detaches;
 use `apm attach <session>` to reconnect while the remote process is still
 running or to see its recorded exit.
 

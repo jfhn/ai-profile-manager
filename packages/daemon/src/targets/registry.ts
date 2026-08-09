@@ -30,6 +30,18 @@ export interface TargetRegistry {
    * transport cannot be replaced.
    */
   register(transport: TargetTransport): void;
+  /**
+   * Approve a machine while the daemon runs: the target becomes selectable
+   * immediately, without a restart. Refuses an id something already occupies —
+   * an approval must never quietly repoint an existing target somewhere else.
+   */
+  addRemote(transport: TargetTransport): void;
+  /**
+   * Revoke a machine while the daemon runs: it disappears from the registry and
+   * its transport is closed, so anything still in flight fails with that
+   * transport's own 'closed' error rather than reaching a revoked machine.
+   */
+  removeRemote(id: TargetId): Promise<void>;
   /** Profiles as one target reports them — profile resolution is target-scoped. */
   profiles(id?: TargetId | null): Promise<TargetProfileSummary[]>;
   /** Resolve one profile id on a target, failing if that target does not have it. */
@@ -77,6 +89,28 @@ export function createTargetRegistry(
         throw new TransportError('target-not-approved', id, 'The local target cannot be replaced');
       }
       transports.set(id, transport);
+    },
+
+    addRemote(transport) {
+      const id = transport.target.id;
+      if (transports.has(id)) {
+        // Callers check first and answer with a proper API error; this is the
+        // invariant underneath them.
+        throw new Error(`Target "${id}" is already registered`);
+      }
+      registry.register(transport);
+    },
+
+    async removeRemote(id) {
+      if (id === LOCAL_TARGET_ID) {
+        throw new TransportError('target-not-approved', id, 'The local target cannot be removed');
+      }
+      const transport = transports.get(id);
+      if (!transport) {
+        throw new TransportError('target-not-found', id, `No target "${id}"`);
+      }
+      transports.delete(id);
+      await transport.close();
     },
 
     profiles: (id) => transportFor(id).profiles(),

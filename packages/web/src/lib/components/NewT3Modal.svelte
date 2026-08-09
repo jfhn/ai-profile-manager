@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { CreateT3InstanceRequest, ProviderId, TargetProfileSummary } from '@apm/shared';
   import { api, errorMessage } from '../api';
+  import { navigate } from '../router.svelte';
   import { app, LOCAL_TARGET_ID } from '../stores.svelte';
   import { toast, toastError } from '../toasts.svelte';
   import Button from './Button.svelte';
@@ -116,6 +117,12 @@
     event.preventDefault();
     void create();
   }
+
+  /** The picker only offers approved machines, so adding one is its own page. */
+  function manageTargets(): void {
+    onclose();
+    navigate('/targets');
+  }
 </script>
 
 <Modal
@@ -145,6 +152,10 @@
           <option value={choice.id}>{choice.label}</option>
         {/each}
       </select>
+      <p class="hint">
+        Only machines you approved appear here.
+        <button type="button" class="link" onclick={manageTargets}>Add a target…</button>
+      </p>
     </div>
 
     {#if remote}
@@ -235,5 +246,16 @@
   .error {
     font-size: 12px;
     color: color-mix(in oklab, var(--destructive) 82%, var(--tint-contrast));
+  }
+
+  .link {
+    font: inherit;
+    color: var(--fg);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+
+  .link:hover {
+    color: var(--primary);
   }
 </style>

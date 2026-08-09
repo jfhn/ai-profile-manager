@@ -1,4 +1,5 @@
 import type {
+  AddTargetRequest,
   ConfirmWizardRequest,
   CreateT3InstanceRequest,
   EndpointScope,
@@ -8,6 +9,7 @@ import type {
   ProviderIdentity,
   StartWizardRequest,
   T3Instance,
+  TargetCandidate,
   TargetProfileSummary,
   WizardStateResponse,
 } from '@apm/shared';
@@ -36,6 +38,13 @@ export class FakeDaemon implements WizardApi {
   wizardStateCalls: string[] = [];
 
   targets: ExecutionTarget[] = [];
+  /** Machines the hub's tailnet reports; approving one is a separate act. */
+  candidates: TargetCandidate[] = [];
+  /** Set to make the tailnet scan fail the way a stopped tailscaled does. */
+  scanError: string | null = null;
+  /** Every approval the UI sent, so a test can read back what it approved. */
+  addedTargets: AddTargetRequest[] = [];
+  revokedTargets: string[] = [];
   /** Profiles per target id — a profile id on one target means nothing on another. */
   targetProfileLists: Record<string, TargetProfileSummary[]> = {};
   t3Instances: T3Instance[] = [];
@@ -176,8 +185,69 @@ export class FakeDaemon implements WizardApi {
     return running;
   }
 
+  /** A machine on the tailnet — display-only until somebody approves it. */
+  seedCandidate(
+    candidate: Partial<TargetCandidate> & Pick<TargetCandidate, 'hostname'>,
+  ): TargetCandidate {
+    const dnsName = candidate.dnsName ?? `${candidate.hostname}.tailnet.ts.net`;
+    const full: TargetCandidate = {
+      dnsName,
+      address: dnsName,
+      online: true,
+      os: 'linux',
+      registeredTargetId: null,
+      suggestedId: candidate.hostname,
+      ...candidate,
+    };
+    this.candidates = [...this.candidates, full];
+    return full;
+  }
+
   async listTargets(): Promise<ExecutionTarget[]> {
     return this.targets.map((target) => ({ ...target }));
+  }
+
+  async listCandidates(): Promise<TargetCandidate[]> {
+    if (this.scanError) throw new Error(this.scanError);
+    return this.candidates.map((candidate) => ({ ...candidate }));
+  }
+
+  /**
+   * The approval act, as the daemon performs it: the machine is registered and
+   * persisted at once, and every candidate for it flips to "already added".
+   */
+  async addTarget(body: AddTargetRequest): Promise<ExecutionTarget> {
+    if (this.targets.some((target) => target.id === body.id)) {
+      throw new Error(`A target named "${body.id}" already exists`);
+    }
+    this.addedTargets.push(body);
+    const target = this.seedTarget({
+      id: body.id,
+      label: body.label,
+      transport: 'ssh',
+      identity: { hostname: null, address: body.address, fingerprint: null },
+      status: 'unknown',
+    });
+    this.markRegistered(body.address, target.id);
+    return target;
+  }
+
+  async deleteTarget(targetId: string): Promise<void> {
+    const target = this.targets.find((it) => it.id === targetId);
+    if (!target) throw new Error(`No target "${targetId}"`);
+    this.revokedTargets.push(targetId);
+    this.targets = this.targets.filter((it) => it.id !== targetId);
+    this.candidates = this.candidates.map((candidate) =>
+      candidate.registeredTargetId === targetId
+        ? { ...candidate, registeredTargetId: null }
+        : candidate,
+    );
+  }
+
+  private markRegistered(address: string, targetId: string): void {
+    this.candidates = this.candidates.map((candidate) =>
+      candidate.address === address ? { ...candidate, registeredTargetId: targetId } : candidate,
+    );
   }
 
   async targetProfiles(targetId: string): Promise<TargetProfileSummary[]> {

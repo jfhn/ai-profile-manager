@@ -1,6 +1,6 @@
-/** Hand-rolled hash routing: #/ · #/sessions · #/t3 */
+/** Hand-rolled hash routing: #/ · #/sessions · #/t3 · #/targets */
 
-export const ROUTES = ['/', '/sessions', '/t3'] as const;
+export const ROUTES = ['/', '/sessions', '/t3', '/targets'] as const;
 export type RoutePath = (typeof ROUTES)[number];
 
 function readHash(): RoutePath {

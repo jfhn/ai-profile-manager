@@ -3,7 +3,7 @@ import type { AdapterCapabilities, ProviderId, ProviderIdentity } from './provid
 import type { UsageSnapshot } from './usage.js';
 import type { TerminalSession } from './sessions.js';
 import type { T3Instance } from './t3.js';
-import type { ExecutionTarget, TargetId, TargetProfileSummary } from './target.js';
+import type { ExecutionTarget, TargetCandidate, TargetId, TargetProfileSummary } from './target.js';
 
 /**
  * REST API contract (see docs/API.md for the full prose spec).
@@ -129,6 +129,26 @@ export interface CreateT3InstanceRequest {
 /** GET /api/targets — read-only view of the registry, for the target picker. */
 export interface TargetsResponse {
   targets: ExecutionTarget[];
+}
+
+/**
+ * GET /api/targets/candidates — machines on the hub's tailnet, display-only.
+ * Seeing a machine here grants nothing: it becomes a target only through an
+ * explicit POST /api/targets for that one machine.
+ */
+export interface TargetCandidatesResponse {
+  candidates: TargetCandidate[];
+}
+
+/**
+ * POST /api/targets — approve one machine as a target and register it now.
+ * The address is a tailnet name that came from a candidate, never a free-form
+ * host somebody typed; approval is written as `approved: true` in targets.json.
+ */
+export interface AddTargetRequest {
+  id: TargetId;
+  label: string;
+  address: string;
 }
 
 /**

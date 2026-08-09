@@ -21,8 +21,13 @@ path.
 
 ## Prerequisites on the target
 
-1. The machine is registered as an execution target and **approved** on this
-   machine. An unapproved target runs nothing (`target-not-approved`, HTTP 403).
+1. The machine is registered as an execution target and **approved** here. The
+   dashboard's **Targets** page lists the machines on your tailnet; **Add** on
+   the one you want is the approval, and it takes effect immediately — no
+   daemon restart, and no file to edit (the approved set is still stored in
+   `<dataDir>/targets.json`, see [TARGETS.md](TARGETS.md)). Nothing is ever
+   approved for you, and an unapproved target runs nothing
+   (`target-not-approved`, HTTP 403).
 2. Its transport reports the `endpoint`, `pty`, `signal` and `profiles`
    capabilities. A target missing any of them is filtered out of the picker and
    refused by the API (`target-unsupported`, HTTP 400).
@@ -125,9 +130,11 @@ neither ever appears in the other's UI.
 
 From the widest hammer to the narrowest:
 
-- **Un-approve the target** in apm's target configuration. The registry then
-  refuses every command for it (`target-not-approved`), so nothing can be
-  started there again.
+- **Revoke the target** on the dashboard's Targets page. The entry leaves
+  `targets.json` and apm closes the connection right away, so nothing can be
+  started there again and work still in flight fails with `target-closed`.
+  (Setting `approved: false` by hand has the same effect on selection —
+  `target-not-approved` — but only from the next daemon start.)
 - **Remove the device from your tailnet** (or revoke its node key). The
   transport can no longer reach the target and the endpoint stops resolving.
 - **Stop the instance** from the dashboard: apm sends `SIGTERM`, escalates to
@@ -163,8 +170,10 @@ The live test this feature is gated on, in order:
 1. On the target: install T3 Code, confirm `t3 --version` works, make sure an
    apm profile there is active, and confirm `tailscale serve status` runs
    without sudo (`sudo tailscale set --operator=$USER` if it does not).
-2. On the hub: approve the target and confirm it appears in
-   `GET /api/targets` with `approved: true` and the four capabilities.
+2. On the hub: open **Targets**, find the machine under "On your tailnet",
+   press **Add**, and confirm it appears under Registered and in
+   `GET /api/targets` with `approved: true` and the four capabilities — without
+   restarting the daemon.
 3. Dashboard → **T3 Instances** → **New instance**. Pick the remote target; the
    profile select must fill with the **target's** profiles, not this machine's.
 4. Create, then **Start**. The card must show the target's name, a `remote`
@@ -187,3 +196,9 @@ The live test this feature is gated on, in order:
     again. The second attempt must go healthy and stay healthy, and
     `tailscale serve status` on the target must not accumulate a stale entry
     from the abandoned attempt.
+11. **Revoke** the target on the Targets page. It must disappear from the T3
+    target picker at once, `targets.json` must no longer list it, and starting
+    anything on it afterwards must fail rather than reach the machine. Stop
+    Tailscale on the hub and reload the Targets page: it must say it cannot
+    read the tailnet instead of showing an empty one, and the registered
+    targets must still be listed.
