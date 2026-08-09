@@ -368,6 +368,10 @@ export function createT3Manager(
   function onRemoteExit(id: string, runtime: RemoteRuntime, status: ExitStatus): void {
     const instance = instances.get(id);
     if (!instance || !isCurrent(id, runtime)) return;
+    // A process that never reached 'running' almost always failed to bind, and
+    // "exited with code 1" is a useless thing to show for that.
+    const duringStartup = instance.status === 'starting';
+    const port = instance.port;
     releaseRemote(id);
     instance.status = 'exited';
     instance.pid = null;
@@ -377,7 +381,12 @@ export function createT3Manager(
     // which can contain its pairing token.
     instance.statusReason = runtime.failure
       ? `The connection to target "${instance.targetId}" failed: ${runtime.failure}`
-      : `t3 ${describeExit(status)} on target "${instance.targetId}"`;
+      : `t3 ${describeExit(status)} on target "${instance.targetId}"` +
+        (duringStartup && port !== null
+          ? ` before it answered — port ${port} is most likely still held over there by an ` +
+            'earlier instance. Start it again to take the next free port, or stop that process ' +
+            'on the target.'
+          : '');
     changed();
   }
 
@@ -757,12 +766,16 @@ export function createT3Manager(
       if (dirty) changed();
     },
 
-    shutdown() {
-      // Instances are detached on purpose: only stop watching them.
+    async shutdown(): Promise<void> {
+      // Local instances are detached on purpose: only stop watching them.
       for (const watcher of watchers) watcher.cancelled = true;
       watchers.clear();
-      // Remote handles belong to the transport, which the daemon closes itself.
-      remotes.clear();
+      // Remote ones are not detached and must not be left behind. Clearing the
+      // map alone used to leak both the process and its published endpoint:
+      // the pty child survived its connection and the tailnet listener stayed
+      // up, so a restart met an occupied port and a URL nobody was watching.
+      const running = [...remotes.keys()];
+      await Promise.all(running.map((id) => discardRemote(id)));
     },
   };
 }

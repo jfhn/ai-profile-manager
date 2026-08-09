@@ -108,20 +108,39 @@ apm never assembles a remote URL. `T3Instance.url` is copied from
 
 ## Pairing and authentication
 
-Authentication is T3's own, and apm stays out of it:
+Authentication is T3's own, and apm stays out of it.
 
-1. Start the instance from the dashboard. `t3 serve` issues a **one-time owner
-   pairing token** on the target.
-2. Open the instance's URL on the device you want to use (the same URL the card
-   shows) and complete T3's pairing with that token. T3 then keeps a session
-   for that device.
-3. Every later visit from that device uses the session, not the token.
+`t3 serve` prints a one-time owner pairing token when it starts — but apm
+starts it headlessly and deliberately never reads its output, so that first
+token is not something you can go and look at. **Mint a fresh one on the
+target instead:**
 
-**apm never reads, stores, logs or forwards the pairing token.** A remote
+```sh
+# on the target, for a running instance
+t3 pair --base-dir <base dir> --ttl 15m
+```
+
+The base dir is on the instance's card in the dashboard, next to its port —
+copy it from there. `t3 pair` prints a pairing URL on `localhost`; the token in
+it is what matters, and you enter it against the endpoint URL the card shows,
+not against the localhost URL it printed.
+
+So, end to end:
+
+1. Start the instance from the dashboard and copy its **base dir** and **URL**
+   from the card.
+2. On the target, run the `t3 pair` command above and copy the token out of the
+   URL it prints.
+3. On the device you want to use, open the instance's URL from the card and
+   complete T3's pairing with that token. T3 then keeps a session for that
+   device.
+4. Every later visit from that device uses the session, not the token. Mint a
+   new token per device; the short `--ttl` keeps an unused one from lingering.
+
+**apm never reads, stores, logs or forwards a pairing token.** A remote
 instance's output is not streamed, not written to a log file on this machine and
 not part of any API response — failures are reported from the process' exit
-status instead. Read the token on the target, in the terminal or service log
-where `t3 serve` prints it.
+status instead.
 
 The apm dashboard's own bearer token is unrelated to T3's pairing token, and
 neither ever appears in the other's UI.
@@ -131,10 +150,12 @@ neither ever appears in the other's UI.
 From the widest hammer to the narrowest:
 
 - **Revoke the target** on the dashboard's Targets page. The entry leaves
-  `targets.json` and apm closes the connection right away, so nothing can be
-  started there again and work still in flight fails with `target-closed`.
-  (Setting `approved: false` by hand has the same effect on selection —
-  `target-not-approved` — but only from the next daemon start.)
+  `targets.json` and apm closes the connection right away: closing a transport
+  revokes the endpoints it published and ends the ptys it opened, so an
+  instance running there is torn down on the target rather than left behind,
+  nothing can be started there again, and work still in flight fails with
+  `target-closed`. (Setting `approved: false` by hand has the same effect on
+  selection — `target-not-approved` — but only from the next daemon start.)
 - **Remove the device from your tailnet** (or revoke its node key). The
   transport can no longer reach the target and the endpoint stops resolving.
 - **Stop the instance** from the dashboard: apm sends `SIGTERM`, escalates to
@@ -151,17 +172,40 @@ From the widest hammer to the narrowest:
 
 ## Known limitations
 
-- A remote instance does not survive an apm restart. Its supervision is the
-  transport's pty and endpoint, and both end with the daemon, so `adopt()`
-  reports remote instances as stopped rather than linking an endpoint nobody is
-  watching. Start it again from the dashboard.
+- A remote instance does not survive an apm restart. Stopping apm terminates it
+  and withdraws its serve entry, and `adopt()` reports remote instances as
+  stopped rather than linking an endpoint nobody is watching. Start it again
+  from the dashboard.
 - One bound profile per remote instance (see above).
 - The instance's working directory is its base dir on the target, as it is
   locally; per-instance project directories are not modelled yet.
-- apm cannot see which TCP ports are busy on the target, so it picks the
-  instance's port from its own bookkeeping. If something else already holds it,
-  `t3` fails to bind and the instance is reported unhealthy — stop it and start
-  it again to take the next port.
+- apm cannot enumerate the target's busy TCP ports, so it picks a port that no
+  serve entry is already proxying to. That covers instances it published
+  itself; if something unrelated holds the port, `t3` fails to bind and the
+  card says so, naming the port. Starting again takes the next one.
+
+## When a target keeps a process it should not have
+
+Nothing apm starts on a target is meant to outlive the daemon that started it,
+and three things enforce that:
+
+- the remote agent kills its whole process group on `SIGHUP`, on stdin EOF and
+  on its own exit, so a dropped SSH connection cannot leave a server behind
+  even if that server ignores hangups;
+- apm's shutdown terminates remote instances and revokes their serve entries
+  before it lets go of the connections;
+- a start steps over ports an existing serve entry already proxies to, and
+  withdraws entries in apm's own port ranges whose URL no longer answers, so
+  leftovers get reclaimed instead of accumulating.
+
+If a machine was left in a bad state by an older build, clean it by hand:
+
+```sh
+# on the target
+tailscale serve status          # what is still published
+tailscale serve reset           # drop every serve entry on this machine
+pkill -f 't3 serve'             # and any server left holding a port
+```
 
 ## Manual two-device check
 
@@ -178,9 +222,10 @@ The live test this feature is gated on, in order:
    profile select must fill with the **target's** profiles, not this machine's.
 4. Create, then **Start**. The card must show the target's name, a `remote`
    badge, a `published` endpoint badge, and a URL that is not `127.0.0.1`.
-5. On a second tailnet device, open that URL, complete T3 pairing with the token
-   printed on the target, open a project and confirm the expected provider
-   account is the one in use.
+5. On the target, run `t3 pair --base-dir <base dir from the card> --ttl 15m`
+   and copy the token. On a second tailnet device, open the card's URL,
+   complete pairing with that token, open a project and confirm the expected
+   provider account is the one in use.
 6. Confirm the URL is **not** reachable from outside the tailnet, and that
    `tailscale serve status` on the target lists it without any Funnel entry.
 7. **Stop** from the hub. The card returns to `stopped` with no link, the URL
@@ -196,9 +241,17 @@ The live test this feature is gated on, in order:
     again. The second attempt must go healthy and stay healthy, and
     `tailscale serve status` on the target must not accumulate a stale entry
     from the abandoned attempt.
-11. **Revoke** the target on the Targets page. It must disappear from the T3
-    target picker at once, `targets.json` must no longer list it, and starting
-    anything on it afterwards must fail rather than reach the machine. Stop
+11. **The orphan check.** With an instance running, restart apm on the hub —
+    once gracefully (`apm stop`) and once by killing it outright
+    (`pkill -9 -f 'apm'`). After each, on the target: no `t3 serve` process is
+    left (`pgrep -af 't3 serve'`), and `tailscale serve status` lists no entry
+    for the instance. Then press **Start** again on the hub; it must come up
+    healthy rather than failing with an occupied port.
+12. **Revoke** the target on the Targets page while an instance runs on it. It
+    must disappear from the T3 target picker at once, `targets.json` must no
+    longer list it, and on the target the same orphan check as step 11 must
+    hold: no `t3 serve` process and no serve entry left. Starting anything on
+    it afterwards must fail rather than reach the machine. Stop
     Tailscale on the hub and reload the Targets page: it must say it cannot
     read the tailnet instead of showing an empty one, and the registered
     targets must still be listed.

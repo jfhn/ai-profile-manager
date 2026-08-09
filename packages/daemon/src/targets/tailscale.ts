@@ -37,6 +37,8 @@ const DEFAULT_HEALTH_TIMEOUT_MS = 30_000;
 const DEFAULT_POLL_INTERVAL_MS = 500;
 /** `tailscale` calls are local to the target and should never hang a start. */
 const COMMAND_TIMEOUT_MS = 15_000;
+/** Short: this only decides whether a leftover listener is worth reclaiming. */
+const RECLAIM_PROBE_TIMEOUT_MS = 2_000;
 
 export interface TailscaleEndpointDeps {
   targetId: TargetId;
@@ -77,18 +79,63 @@ export function parseSelfDnsName(stdout: string): string | null {
  * or unparsable config simply means nothing is served yet.
  */
 export function parseServedPorts(stdout: string): number[] {
+  return [...new Set(parseServeEntries(stdout).map((entry) => entry.httpsPort))].sort(
+    (a, b) => a - b,
+  );
+}
+
+/** One published listener and the loopback port it proxies to, when it has one. */
+export interface ServeEntry {
+  httpsPort: number;
+  /** Port behind `http://127.0.0.1:<port>`; null for anything else (files, TCP). */
+  backendPort: number | null;
+}
+
+/**
+ * The target's serve configuration as listener/backend pairs.
+ *
+ * The backends matter as much as the listeners: a service port that something
+ * is already proxied to is a port a new instance must not try to bind, which
+ * is exactly how a restart used to collide with a process that outlived it.
+ */
+export function parseServeEntries(stdout: string): ServeEntry[] {
   const config = parseJson(stdout);
   if (!config) return [];
-  const ports = new Set<number>();
-  for (const section of ['Web', 'TCP'] as const) {
-    const entries = config[section];
-    if (!isRecord(entries)) continue;
-    for (const key of Object.keys(entries)) {
-      const port = portOfKey(key);
-      if (port !== null) ports.add(port);
+  const entries = new Map<number, ServeEntry>();
+
+  const web = config['Web'];
+  if (isRecord(web)) {
+    for (const [key, value] of Object.entries(web)) {
+      const httpsPort = portOfKey(key);
+      if (httpsPort === null) continue;
+      entries.set(httpsPort, { httpsPort, backendPort: backendOf(value) });
     }
   }
-  return [...ports].sort((a, b) => a - b);
+  // TCP forwards have no proxy target we can read; they still own their port.
+  const tcp = config['TCP'];
+  if (isRecord(tcp)) {
+    for (const key of Object.keys(tcp)) {
+      const httpsPort = portOfKey(key);
+      if (httpsPort === null || entries.has(httpsPort)) continue;
+      entries.set(httpsPort, { httpsPort, backendPort: null });
+    }
+  }
+  return [...entries.values()].sort((a, b) => a.httpsPort - b.httpsPort);
+}
+
+/** `{ Handlers: { '/': { Proxy: 'http://127.0.0.1:4800' } } }` -> 4800. */
+function backendOf(value: unknown): number | null {
+  if (!isRecord(value)) return null;
+  const handlers = value['Handlers'];
+  if (!isRecord(handlers)) return null;
+  for (const handler of Object.values(handlers)) {
+    if (!isRecord(handler)) continue;
+    const proxy = handler['Proxy'];
+    if (typeof proxy !== 'string') continue;
+    const match = /^https?:\/\/(?:127\.0\.0\.1|localhost):(\d+)/.exec(proxy);
+    if (match?.[1]) return Number(match[1]);
+  }
+  return null;
 }
 
 /** Ports exposed to the public internet by Funnel — always expected empty. */
@@ -122,21 +169,33 @@ export async function openTailscaleEndpoint(
   const pollIntervalMs = deps.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
 
   const dnsName = await readDnsName();
-  const servedPorts = await readServedPorts();
+  const entries = await reclaimStaleEntries(dnsName, await readServeEntries());
+  const listeners = entries.map((entry) => entry.httpsPort);
+  // A backend port is a port something on the target is already expected to be
+  // listening on. Stepping over those is what keeps a new run from colliding
+  // with an instance that outlived the daemon which started it.
+  const backends = entries.flatMap((entry) =>
+    entry.backendPort === null ? [] : [entry.backendPort],
+  );
 
   const servicePort =
-    request.port ?? pickPort(TAILSCALE_SERVICE_PORT_BASE, reserved) ?? fail('no free service port');
+    request.port ??
+    pickPort(TAILSCALE_SERVICE_PORT_BASE, union(reserved, backends)) ??
+    fail('no free service port');
   // A separate range for the tailnet listener: the HTTPS port belongs to
   // tailscaled and the service port to the service, and keeping them apart
   // means a service that binds more than loopback cannot collide with it.
   const httpsPort =
-    pickPort(TAILSCALE_HTTPS_PORT_BASE, union(reserved, servedPorts)) ??
+    pickPort(TAILSCALE_HTTPS_PORT_BASE, union(reserved, listeners)) ??
     fail('no free tailnet HTTPS port');
 
   reserved.add(servicePort);
   reserved.add(httpsPort);
 
   try {
+    // No replace step is needed: an HTTPS port that still has a handler is in
+    // `listeners` and was skipped above, and a handler whose service is gone
+    // was already withdrawn by reclaimStaleEntries.
     await run(serveArgv(httpsPort, servicePort), 'publish the endpoint');
     await assertTailnetOnly(httpsPort);
   } catch (error: unknown) {
@@ -256,16 +315,58 @@ export async function openTailscaleEndpoint(
   }
 
   /** A missing or empty serve config is a normal state, not a failure. */
-  async function readServedPorts(): Promise<number[]> {
+  async function readServeEntries(): Promise<ServeEntry[]> {
     try {
       const result = await exec(
         { argv: ['tailscale', 'serve', 'status', '--json'] },
         { timeoutMs: COMMAND_TIMEOUT_MS },
       );
-      return result.exitCode === 0 ? parseServedPorts(result.stdout) : [];
+      return result.exitCode === 0 ? parseServeEntries(result.stdout) : [];
     } catch {
       return [];
     }
+  }
+
+  function offQuietly(httpsPort: number, servicePort: number): Promise<unknown> {
+    return exec(
+      { argv: serveOffArgv(httpsPort, servicePort) },
+      { timeoutMs: COMMAND_TIMEOUT_MS },
+    ).catch(() => undefined);
+  }
+
+  /**
+   * Withdraw serve entries this feature left behind.
+   *
+   * Only entries in both of apm's own port ranges are considered, and only
+   * when the published URL no longer answers — a live instance keeps its
+   * listener, and anything a human published is never touched. Without this
+   * step a crashed daemon's listeners would pile up one port at a time.
+   */
+  async function reclaimStaleEntries(
+    dnsName: string,
+    entries: ServeEntry[],
+  ): Promise<ServeEntry[]> {
+    const kept: ServeEntry[] = [];
+    for (const entry of entries) {
+      if (!isOurs(entry) || reserved.has(entry.httpsPort)) {
+        kept.push(entry);
+        continue;
+      }
+      if (await probe(`https://${dnsName}:${entry.httpsPort}`, RECLAIM_PROBE_TIMEOUT_MS)) {
+        kept.push(entry); // something is still serving there
+        continue;
+      }
+      await offQuietly(entry.httpsPort, entry.backendPort ?? entry.httpsPort);
+    }
+    return kept;
+  }
+
+  function isOurs(entry: ServeEntry): boolean {
+    return (
+      inRange(entry.httpsPort, TAILSCALE_HTTPS_PORT_BASE) &&
+      entry.backendPort !== null &&
+      inRange(entry.backendPort, TAILSCALE_SERVICE_PORT_BASE)
+    );
   }
 
   /**
@@ -318,16 +419,21 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-/** `host:port` or `host:port/path` -> port. */
+/** `host:port`, `host:port/path` or a bare `port` (the TCP section) -> port. */
 function portOfKey(key: string): number | null {
-  const match = /:(\d+)(?:\/|$)/.exec(key);
+  const match = /^(?:.*:)?(\d+)(?:\/.*)?$/.exec(key.trim());
   if (!match?.[1]) return null;
   const port = Number(match[1]);
-  return Number.isInteger(port) && port > 0 ? port : null;
+  return Number.isInteger(port) && port > 0 && port < 65_536 ? port : null;
 }
 
 function union(a: ReadonlySet<number>, b: readonly number[]): Set<number> {
   return new Set([...a, ...b]);
+}
+
+/** Inside one of apm's own allocation ranges. */
+function inRange(port: number, from: number): boolean {
+  return port >= from && port < from + PORT_SCAN_LIMIT;
 }
 
 function describe(error: unknown): string {

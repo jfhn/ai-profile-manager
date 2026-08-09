@@ -117,8 +117,10 @@ exposed as `AppContext.targets`:
 - the local target cannot be replaced
 - `addRemote(transport)` / `removeRemote(id)` are the mutation seam: a target
   approved while the daemon runs is selectable immediately, and a revoked one
-  is dropped and its transport closed, so work still in flight fails with that
-  transport's own `closed` error instead of reaching a revoked machine
+  is dropped and its transport closed — which revokes the endpoints that
+  transport published and ends the ptys it opened, so nothing is left running
+  on a machine whose approval was just withdrawn, and work still in flight
+  fails with that transport's own `closed` error instead of reaching it
 - `close()` releases remote connections; open handles belong to their owner
 
 ## Adding and removing targets
@@ -245,9 +247,13 @@ Implemented in `packages/daemon/src/t3/manager.ts`; the user-facing side is
 - `endpoint`, `pty`, `signal` and `profiles` are all required. A target missing
   any of them cannot host managed T3 instances and is filtered out of the
   picker (`GET /api/targets` exposes the capability list for exactly this).
-- Nothing outlives the daemon on a remote target: the pty and the endpoint die
-  with the transport, so `adopt()` reports remote instances as stopped instead
-  of re-adopting them.
+- Nothing outlives the daemon on a remote target, and that is enforced rather
+  than assumed. `shutdown()` terminates every remote runtime and revokes its
+  endpoint before the transports are released; the agent kills its own process
+  group on hangup, stdin EOF and exit, so even a killed daemon leaves nothing
+  behind; and a start steps over service ports an existing serve entry already
+  proxies to. `adopt()` then reports remote instances as stopped rather than
+  re-adopting them.
 - Existing local instances keep their loopback URL: they still use the detached
   spawn + HTTP probe path (`packages/daemon/src/targets/net.ts`), because only a
   detached process survives a daemon restart, and their endpoint is recorded
@@ -273,10 +279,15 @@ Implemented in `packages/daemon/src/t3/manager.ts`; the user-facing side is
   entry _and_ closes the transport, and reserved/duplicate/option-shaped
   requests are refused without writing anything.
 - `tailscale.test.ts` drives the SSH transport's endpoint through a scripted
-  exec channel: serve argv, MagicDNS and serve-status parsing, port allocation,
-  health, revocation on close, the missing-Tailscale message and the refusal to
-  hand out a funnelled port. The SSH spawn underneath it stays untested, like
-  the rest of `ssh.ts` — the two-device live check covers that.
+  exec channel: serve argv, MagicDNS and serve-status parsing, port allocation
+  around live and stale entries, health, revocation on close, the
+  missing-Tailscale message and the refusal to hand out a funnelled port. The
+  SSH spawn underneath it stays untested, like the rest of `ssh.ts` — the
+  two-device live check covers that.
+- `agent.test.ts` runs a real agent process and kills it the way sshd does, to
+  prove nothing it spawned is left behind. Its pty child ignores `SIGHUP` on
+  purpose: a child that dies on hangup passes with no teardown at all, because
+  the kernel hangs the terminal up by itself, so it would prove nothing.
 
 `packages/daemon/src/t3/manager.remote.test.ts` drives the whole managed-T3
 lifecycle on a target through the fake remote transport; the local behaviour it

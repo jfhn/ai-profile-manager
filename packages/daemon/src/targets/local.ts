@@ -253,6 +253,10 @@ function localPtyHandle(pty: IPty): PtyHandle {
 
     async close() {
       if (exited) return;
+      // A pty child is a session leader, so its pid is also its process-group
+      // id: signalling the group reaches anything the child spawned, which a
+      // kill of the child alone would leave behind holding its ports.
+      killProcessGroup(pty.pid, 'SIGHUP');
       try {
         pty.kill();
       } catch {
@@ -260,6 +264,20 @@ function localPtyHandle(pty: IPty): PtyHandle {
       }
     },
   };
+}
+
+/**
+ * Signal a whole process group, best effort. Used on teardown so no descendant
+ * of a pty outlives the handle that owns it — an orphaned server would keep
+ * its port and answer requests nobody is supervising any more.
+ */
+export function killProcessGroup(pid: number, signal: NodeJS.Signals): void {
+  if (!Number.isInteger(pid) || pid <= 1) return;
+  try {
+    process.kill(-pid, signal);
+  } catch {
+    /* no such group, or it is already gone */
+  }
 }
 
 /**
