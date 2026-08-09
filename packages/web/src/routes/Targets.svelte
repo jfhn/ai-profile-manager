@@ -1,7 +1,7 @@
 <script lang="ts">
   import type { ExecutionTarget, TargetCandidate } from '@apm/shared';
   import { api, errorMessage } from '../lib/api';
-  import { app, loadTargets, LOCAL_TARGET_ID } from '../lib/stores.svelte';
+  import { app, forgetTargetProfiles, loadTargets, LOCAL_TARGET_ID } from '../lib/stores.svelte';
   import { toast, toastError } from '../lib/toasts.svelte';
   import AddTargetModal from '../lib/components/AddTargetModal.svelte';
   import Badge from '../lib/components/Badge.svelte';
@@ -57,6 +57,8 @@
   /** After an approval both lists change: the registry and the "already added" state. */
   async function added(target: ExecutionTarget): Promise<void> {
     adding = null;
+    // A reused id must not inherit the previous machine's profile list.
+    forgetTargetProfiles(target.id);
     // The T3 picker reads the same store, so the machine is offered there the
     // moment it is approved rather than after the next refetch.
     if (!app.target(target.id)) app.targets = [...app.targets, target];
@@ -71,6 +73,8 @@
     try {
       await api.deleteTarget(target.id);
       revoking = null;
+      // Its profile list came from a machine apm may no longer ask.
+      forgetTargetProfiles(target.id);
       toast('Target revoked', `apm closed its connection to ${target.label}.`);
       await loadTargets();
       await scan();

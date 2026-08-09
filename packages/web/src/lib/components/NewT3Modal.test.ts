@@ -52,6 +52,9 @@ beforeEach(() => {
   app.providers = [];
   app.profiles = [localProfile()];
   app.t3Instances = [];
+  // The target-profile cache is shared with the instance cards and outlives
+  // any one component, so every test starts from an unread one.
+  app.targetProfiles = {};
 });
 
 describe('NewT3Modal: choosing where an instance runs', () => {

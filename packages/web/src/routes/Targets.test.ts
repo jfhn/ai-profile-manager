@@ -39,7 +39,22 @@ beforeEach(() => {
   mocks.daemon.seedCandidate({ hostname: 'dev-box' });
   mocks.daemon.seedCandidate({ hostname: 'laptop', online: false, os: 'macOS' });
   app.targets = mocks.daemon.targets;
+  app.targetProfiles = {};
 });
+
+/** A target's profile list as the shared cache holds it once it was read. */
+function cacheProfilesFor(targetId: string): void {
+  app.targetProfiles = {
+    ...app.targetProfiles,
+    [targetId]: {
+      state: 'ready',
+      profiles: [
+        { id: 'claude-remote', provider: 'claude', label: 'dev', status: 'active', enabled: true },
+      ],
+      reason: null,
+    },
+  };
+}
 
 describe('Targets page', () => {
   it('shows the tailnet without approving anything', async () => {
@@ -58,6 +73,9 @@ describe('Targets page', () => {
   });
 
   it('approves one machine and offers it to the pickers right away', async () => {
+    // A target id is the user's to choose and may be reused for a different
+    // machine, so an approval must not inherit a cached profile list.
+    cacheProfilesFor('dev-box');
     render(Targets);
     await screen.findByText('dev-box');
 
@@ -81,6 +99,8 @@ describe('Targets page', () => {
     await waitFor(() =>
       expect(app.targets.map((target) => target.id)).toEqual(['local', 'dev-box']),
     );
+    // The next picker that opens asks the new machine itself.
+    expect(app.targetProfiles['dev-box']).toBeUndefined();
     // And the candidate now reads as taken rather than offering Add again.
     await waitFor(() => expect(screen.getByText('added as dev-box')).toBeDefined());
     expect(within(rowFor('dev-box')).queryByTitle('Add dev-box as a target')).toBeNull();
@@ -95,6 +115,7 @@ describe('Targets page', () => {
       address: 'dev-box.tailnet.ts.net',
     });
     app.targets = mocks.daemon.targets;
+    cacheProfilesFor('dev-box');
 
     render(Targets);
     await screen.findByText('added as dev-box');
@@ -106,6 +127,10 @@ describe('Targets page', () => {
 
     await waitFor(() => expect(mocks.daemon.revokedTargets).toEqual(['dev-box']));
     await waitFor(() => expect(app.targets.map((target) => target.id)).toEqual(['local']));
+    // Its profile list came from a machine apm may no longer ask, so a card
+    // still bound to it reports 'unknown' instead of a stale label.
+    expect(app.targetProfiles['dev-box']).toBeUndefined();
+    expect(app.boundProfile('dev-box', 'claude-remote')).toEqual({ state: 'unknown', label: null });
     // It is a candidate again, offering the same explicit approval as before.
     await waitFor(() =>
       expect(within(rowFor('dev-box')).getByTitle('Add dev-box as a target')).toBeDefined(),
