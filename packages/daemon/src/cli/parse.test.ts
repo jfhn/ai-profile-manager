@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Profile } from '@apm/shared';
-import { CliError, parseCommand, parseRunArgv, resolveProfile } from './parse.js';
+import { CliError, parseCommand, parseProfileArgv, parseRunArgv, resolveProfile } from './parse.js';
 
 function makeProfile(overrides: Partial<Profile> = {}): Profile {
   return {
@@ -85,6 +85,54 @@ describe('parseRunArgv', () => {
     expect(() => parseRunArgv(['--target'])).toThrow('--target requires <target>');
     expect(() => parseRunArgv(['--target', '--', 'work', 'claude'])).toThrow(
       '--target requires <target>',
+    );
+  });
+});
+
+describe('parseProfileArgv', () => {
+  it('parses the minimal add invocation', () => {
+    expect(parseProfileArgv(['add', 'claude'])).toEqual({
+      action: 'add',
+      provider: 'claude',
+      fresh: false,
+      loginArgs: [],
+    });
+  });
+
+  it('takes a label and a fresh-home flag', () => {
+    expect(parseProfileArgv(['add', 'codex', '--label', 'work', '--new'])).toEqual({
+      action: 'add',
+      provider: 'codex',
+      label: 'work',
+      fresh: true,
+      loginArgs: [],
+    });
+  });
+
+  it('passes everything after `--` to the provider login verbatim', () => {
+    expect(parseProfileArgv(['add', 'codex', '--', '--device-auth', '--new'])).toEqual({
+      action: 'add',
+      provider: 'codex',
+      fresh: false,
+      loginArgs: ['--device-auth', '--new'],
+    });
+  });
+
+  it('rejects missing or unknown subcommands and providers', () => {
+    expect(() => parseProfileArgv([])).toThrow(/profile requires a subcommand/);
+    expect(() => parseProfileArgv(['remove', 'claude'])).toThrow(/unknown profile subcommand/);
+    expect(() => parseProfileArgv(['add'])).toThrow(/requires a provider/);
+    expect(() => parseProfileArgv(['add', 'gemini'])).toThrow(
+      'unknown provider: gemini (expected claude or codex)',
+    );
+  });
+
+  it('rejects bad flags with a pointer to the `--` escape hatch', () => {
+    expect(() => parseProfileArgv(['add', 'claude', '--label'])).toThrow(
+      /--label requires a value/,
+    );
+    expect(() => parseProfileArgv(['add', 'codex', '--device-auth'])).toThrow(
+      'unknown flag: --device-auth (provider login arguments go after `--`)',
     );
   });
 });
