@@ -41,6 +41,7 @@ export const claudeAdapter: ProviderAdapter = {
   collectUsage: async (ctx) => collectClaudeUsage(ctx),
   env: (home) => ({ CLAUDE_CONFIG_DIR: home }),
   loginCommand: (home) => `CLAUDE_CONFIG_DIR=${home} claude`,
+  loginArgv: () => ['claude'],
   defaultHome: () => path.join(os.homedir(), '.claude'),
 };
 
@@ -277,8 +278,8 @@ function fromRateLimits(
     ]),
     nowMs,
   );
-  const windows = [fiveHour, weekly, fable].filter(
-    (window): window is UsageWindow => Boolean(window),
+  const windows = [fiveHour, weekly, fable].filter((window): window is UsageWindow =>
+    Boolean(window),
   );
   const updatedMs = Date.parse(updatedAt ?? '');
   const stale =

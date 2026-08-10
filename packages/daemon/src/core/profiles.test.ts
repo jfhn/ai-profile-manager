@@ -152,6 +152,7 @@ function fakeAdapter(provider: ProviderId): ProviderAdapter {
     collectUsage: async (): Promise<CollectResult> => emptyResult(),
     env: (home) => ({ [`${provider.toUpperCase()}_HOME`]: home }),
     loginCommand: (home) => `${provider.toUpperCase()}_HOME=${home} ${provider} login`,
+    loginArgv: () => [provider, 'login'],
     defaultHome: () => path.join(os.tmpdir(), `missing-${provider}`),
   };
 }
