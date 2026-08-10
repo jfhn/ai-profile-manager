@@ -4,10 +4,12 @@ import type {
   CreateProfileRequest,
   CreateSessionRequest,
   CreateT3InstanceRequest,
+  DefaultsResponse,
   DiscoveryResponse,
   ExecutionTarget,
   OverviewResponse,
   Profile,
+  ProviderId,
   RecentDirsResponse,
   StartWizardRequest,
   StatusResponse,
@@ -15,6 +17,7 @@ import type {
   TargetProfileSummary,
   TerminalSession,
   UpdateProfileRequest,
+  UpdateDefaultProfileRequest,
   UsageSnapshot,
   WizardStateResponse,
 } from '@apm/shared';
@@ -130,6 +133,12 @@ export const api = {
   status: () => request<StatusResponse>('/api/status'),
   overview: () => request<OverviewResponse>('/api/overview'),
   discovery: () => request<DiscoveryResponse>('/api/discovery'),
+  defaults: () => request<DefaultsResponse>('/api/defaults'),
+  setDefault: (provider: ProviderId, body: UpdateDefaultProfileRequest) =>
+    request<DefaultsResponse>(`/api/defaults/${encodeURIComponent(provider)}`, {
+      method: 'PUT',
+      ...json(body),
+    }),
 
   createProfile: (body: CreateProfileRequest) =>
     request<Profile>('/api/profiles', { method: 'POST', ...json(body) }),

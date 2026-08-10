@@ -293,3 +293,6 @@ claude` — a fresh home triggers the login flow on first start.
   normally launched apps, and are adopted as the initial default profiles.
   A global default-switch (e.g. shell hook) is a possible later opt-in feature,
   explicitly out of scope for now.
+- Per-provider defaults are launch metadata, not a global switch. They identify
+  the profile external process-owning integrations should use for new work;
+  integrations restore existing work by its exact saved profile id.

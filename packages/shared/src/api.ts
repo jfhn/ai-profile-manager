@@ -1,4 +1,4 @@
-import type { Profile } from './profile.js';
+import type { DefaultProfileIds, Profile, ProfileStatus } from './profile.js';
 import type { AdapterCapabilities, ProviderId, ProviderIdentity } from './provider.js';
 import type { UsageSnapshot } from './usage.js';
 import type { TerminalSession } from './sessions.js';
@@ -36,10 +36,36 @@ export interface ProviderInfo {
 export interface OverviewResponse {
   providers: ProviderInfo[];
   profiles: Profile[];
+  defaultProfileIds: DefaultProfileIds;
   /** Latest snapshot per profile id; absent when never collected. */
   usage: Record<string, UsageSnapshot>;
   sessions: TerminalSession[];
   t3Instances: T3Instance[];
+}
+
+/** GET /api/defaults and PUT /api/defaults/:provider. */
+export interface DefaultsResponse {
+  defaultProfileIds: DefaultProfileIds;
+}
+
+export interface UpdateDefaultProfileRequest {
+  /** null explicitly clears the provider default. */
+  profileId: string | null;
+}
+
+/** Stable stdout contract returned by `apm profiles --json`. */
+export interface ProfilesCliResponse {
+  schemaVersion: 1;
+  defaultProfileIds: DefaultProfileIds;
+  profiles: Array<{
+    id: string;
+    provider: ProviderId;
+    label: string;
+    home: string;
+    status: ProfileStatus;
+    enabled: boolean;
+    usage: UsageSnapshot | null;
+  }>;
 }
 
 /** GET /api/discovery — existing provider homes not yet adopted as profiles. */

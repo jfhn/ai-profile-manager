@@ -11,6 +11,7 @@ import {
   type UsageService,
 } from '../context.js';
 import { UsageDatabase } from './db.js';
+import { profileCacheDirectory } from './profilePaths.js';
 import type { AdapterRegistry } from './profiles.js';
 
 const REFRESH_INTERVAL_MS = 60_000;
@@ -38,7 +39,7 @@ export function createUsageService(
       : profiles.list().filter((profile) => profile.enabled && profile.status !== 'pending');
 
     for (const profile of targets) {
-      const cacheDir = path.resolve(config.cacheDir, profile.id);
+      const cacheDir = profileCacheDirectory(config.cacheDir, profile.id);
       let snapshot: UsageSnapshot;
       try {
         if (!isChildPath(config.cacheDir, cacheDir)) {

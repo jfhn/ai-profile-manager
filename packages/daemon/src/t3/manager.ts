@@ -23,6 +23,7 @@ import { z } from 'zod';
 import {
   LOCAL_TARGET_ID,
   PROVIDER_IDS,
+  profileIdSchema,
   providerIdSchema,
   type CreateT3InstanceRequest,
   type EndpointHandle,
@@ -114,7 +115,7 @@ const instanceSchema = z.object({
   targetId: z.string().min(1).default(LOCAL_TARGET_ID),
   port: z.number().int().nullable(),
   baseDir: z.string().min(1),
-  profiles: z.record(providerIdSchema, z.string()),
+  profiles: z.record(providerIdSchema, profileIdSchema),
   status: z.enum(['stopped', 'starting', 'running', 'unhealthy', 'exited']),
   pid: z.number().int().nullable(),
   url: z.string().nullable(),

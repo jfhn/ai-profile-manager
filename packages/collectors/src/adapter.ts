@@ -50,6 +50,11 @@ export interface ProviderAdapter {
   env(home: string): Record<string, string>;
   /** Exact login command the user runs in a normal terminal for a fresh home. */
   loginCommand(home: string): string;
+  /**
+   * The login command as spawnable argv (no env prefix — combine with env()).
+   * Provider-specific extra arguments may be appended by the caller.
+   */
+  loginArgv(): string[];
   /** Default global home for discovery (e.g. ~/.claude). */
   defaultHome(): string;
 }

@@ -1,9 +1,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import type { UsageSnapshot } from '@apm/shared';
+import { usageSnapshotSchema, type UsageSnapshot } from '@apm/shared';
 
 interface SnapshotRow {
+  profile_id: string;
   snapshot: string;
 }
 
@@ -29,16 +30,15 @@ export class UsageDatabase {
   latest(): Record<string, UsageSnapshot> {
     const latest: Record<string, UsageSnapshot> = {};
     const rows = this.database
-      .prepare('SELECT snapshot FROM snapshots ORDER BY fetched_at ASC, id ASC')
+      .prepare('SELECT profile_id, snapshot FROM snapshots ORDER BY fetched_at ASC, id ASC')
       .all() as unknown as SnapshotRow[];
     for (const row of rows) {
       try {
-        const snapshot = JSON.parse(row.snapshot) as UsageSnapshot;
-        if (snapshot && typeof snapshot.profileId === 'string') {
-          latest[snapshot.profileId] = snapshot;
-        }
+        const parsed = usageSnapshotSchema.safeParse(JSON.parse(row.snapshot));
+        if (!parsed.success || parsed.data.profileId !== row.profile_id) continue;
+        latest[row.profile_id] = parsed.data;
       } catch {
-        // A malformed historical row must not prevent the daemon from starting.
+        // Malformed historical rows remain in SQLite but never enter API/CLI output.
       }
     }
     return latest;

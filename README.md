@@ -35,6 +35,7 @@ reference `dist/` yourself. From any directory:
 ```sh
 apm          # start (or reuse) the daemon, print its URL, open the dashboard
 apm url      # print the authenticated URL, open nothing
+apm profiles --json # stable profile/default/usage contract for integrations
 apm status
 apm stop
 ```
@@ -71,6 +72,11 @@ data dir and port, so a daemon you are already running stays untouched.
 ```sh
 apm                       # start (or reuse) the daemon and open the dashboard
 apm url                   # print the authenticated dashboard URL, open nothing
+apm profile add claude    # log in to a fresh managed profile, no dashboard needed
+apm profiles              # human-readable profiles and provider defaults
+apm profiles --json       # versioned machine contract, JSON only on stdout
+apm profiles --json --refresh
+                          # refresh usage first, then print the contract
 apm run work claude       # run claude bound to profile "work"
 apm run work bash         # any command; children inherit the profile env
 apm run --target devbox work claude --resume
@@ -78,6 +84,40 @@ apm run --target devbox work claude --resume
 apm attach claude-work-1  # reattach to a running session
 apm sessions | status | stop
 ```
+
+### Headless profile onboarding
+
+`apm profile add <claude|codex>` runs the whole add-profile flow in the
+terminal — on an SSH-only machine no dashboard is required. It starts (or
+reuses) the daemon without opening a browser, creates a fresh managed home,
+runs the provider's own login command in your terminal bound to that home
+(`CLAUDE_CONFIG_DIR` / `CODEX_HOME`), waits for credentials to appear, and
+activates the profile with `--label <label>` or a label suggested from the
+detected account.
+
+```sh
+apm profile add claude --label work
+apm profile add codex -- --device-auth   # extra args go to the provider login
+```
+
+Provider authentication stays with the provider CLI, including its own
+browser or device requirements — apm never creates provider accounts or
+copies credentials:
+
+- **Claude Code** always needs a browser _somewhere_: over SSH the login
+  prints a URL you open on any device, and a code to paste back into the
+  terminal. Exit the `claude` REPL after logging in to continue.
+- **Codex** can log in without a local browser via `-- --device-auth`
+  (must be enabled in ChatGPT security/workspace settings) or fully
+  non-interactively via `-- --with-api-key` (pipe the key on stdin). Note
+  that API-key logins carry no account identity, so pass `--label`.
+- Token/env-var auth (`CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_API_KEY`) writes
+  no credential files into a profile home, so it cannot be onboarded as a
+  profile.
+
+A failed or interrupted login keeps the pending profile: rerunning
+`apm profile add <provider>` resumes it (`--new` forces a fresh home), and
+the dashboard can remove it.
 
 Remote targets are declared in `~/.local/share/apm/targets.json` (or under
 `APM_DATA_DIR`) and are selected only by their configured id:
@@ -105,11 +145,17 @@ prevents it from running anything. A dropped terminal connection only detaches;
 use `apm attach <session>` to reconnect while the remote process is still
 running or to see its recorded exit.
 
-State lives in `~/.local/share/apm` (override with `APM_DATA_DIR`): profiles
-in `profiles.json`, approved remote declarations in `targets.json`, usage
-snapshots in SQLite, and managed provider homes under `homes/`. Raw credentials
-stay inside provider homes; apm never copies them, never refreshes OAuth tokens,
-and never sends them to the browser or another target.
+State lives in `~/.local/share/apm` (override with `APM_DATA_DIR`, which is
+resolved to an absolute path at startup): profiles in `profiles.json`, approved
+remote declarations in `targets.json`, usage snapshots in SQLite, and managed
+provider homes under `homes/`. Raw credentials stay inside provider homes; apm
+never copies them, never refreshes OAuth tokens, and never sends them to the
+browser or another target.
+
+External tools can resolve per-provider defaults, exact profile homes and usage
+without adopting apm's PTY lifecycle. The versioned CLI contract and its
+missing-default semantics are documented in
+[docs/INTEGRATIONS.md](docs/INTEGRATIONS.md).
 
 ## Credits
 

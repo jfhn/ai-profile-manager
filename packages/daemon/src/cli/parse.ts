@@ -7,15 +7,18 @@
  * app verbatim; a literal `--` directly after <profile> or after <app> is an
  * optional escape hatch.
  */
-import type { ProviderId } from '@apm/shared';
+import { isProviderId, PROVIDER_IDS, type ProviderId } from '@apm/shared';
 
 /** An error meant for the user, printed as `apm: <message>`. */
 export class CliError extends Error {}
 
 export const USAGE =
-  `usage: apm [start|run|attach|sessions|status|url|stop]\n` +
+  `usage: apm [start|profile|profiles|run|attach|sessions|status|url|stop]\n` +
   `  apm [start] [--port N] [--no-open] [--foreground]   start or reuse the daemon, open the UI\n` +
   `  apm url                                             print the authenticated URL, open nothing\n` +
+  `  apm profile add <claude|codex> [--label <label>] [--new] [-- login-args...]\n` +
+  `                                                      log in to a fresh managed profile\n` +
+  `  apm profiles [--json] [--refresh]                   list profiles and provider defaults\n` +
   `  apm run [--target <target>] <profile> <app> [args...]\n` +
   `                                                      run an app bound to a profile\n` +
   `  apm attach <session>                                attach to a running session\n` +
@@ -26,7 +29,9 @@ const COMMANDS = new Set([
   'start',
   '__daemon',
   '__target-agent',
+  'profile',
   'run',
+  'profiles',
   'attach',
   'sessions',
   'status',
@@ -63,6 +68,23 @@ export interface RunInvocation {
   profile: string;
   app: string;
   args: string[];
+}
+
+export interface ProfilesInvocation {
+  json: boolean;
+  refresh: boolean;
+}
+
+const PROFILES_USAGE = 'usage: apm profiles [--json] [--refresh]';
+
+export function parseProfilesArgv(argv: string[]): ProfilesInvocation {
+  const invocation: ProfilesInvocation = { json: false, refresh: false };
+  for (const arg of argv) {
+    if (arg === '--json') invocation.json = true;
+    else if (arg === '--refresh') invocation.refresh = true;
+    else throw new CliError(`unknown profiles option: ${arg}\n${PROFILES_USAGE}`);
+  }
+  return invocation;
 }
 
 const RUN_USAGE = 'usage: apm run [--target <target>] <profile> <app> [args...]';
@@ -110,6 +132,69 @@ export function parseRunArgv(argv: string[]): RunInvocation {
   if (rest[0] === '--') rest.shift();
 
   return target === undefined ? { profile, app, args: rest } : { target, profile, app, args: rest };
+}
+
+// ------------------------------------------------------------ profile add --
+
+export interface ProfileAddInvocation {
+  action: 'add';
+  provider: ProviderId;
+  /** Explicit label; undefined means use the wizard's suggestion. */
+  label?: string;
+  /** True forces a fresh pending profile instead of resuming an existing one. */
+  fresh: boolean;
+  /** Extra arguments appended verbatim to the provider's login command. */
+  loginArgs: string[];
+}
+
+const PROFILE_USAGE =
+  'usage: apm profile add <claude|codex> [--label <label>] [--new] [-- login-args...]';
+
+export function parseProfileArgv(argv: string[]): ProfileAddInvocation {
+  const rest = [...argv];
+
+  const action = rest.shift();
+  if (action === undefined) throw new CliError(`profile requires a subcommand\n${PROFILE_USAGE}`);
+  if (action !== 'add') {
+    throw new CliError(`unknown profile subcommand: ${action}\n${PROFILE_USAGE}`);
+  }
+
+  const provider = rest.shift();
+  if (provider === undefined || provider.startsWith('-')) {
+    throw new CliError(`profile add requires a provider\n${PROFILE_USAGE}`);
+  }
+  if (!isProviderId(provider)) {
+    throw new CliError(`unknown provider: ${provider} (expected ${PROVIDER_IDS.join(' or ')})`);
+  }
+
+  let label: string | undefined;
+  let fresh = false;
+  const loginArgs: string[] = [];
+
+  while (rest.length > 0) {
+    const arg = rest.shift() as string;
+    if (arg === '--') {
+      // Everything after `--` belongs to the provider's login command.
+      loginArgs.push(...rest);
+      break;
+    }
+    if (arg === '--label') {
+      label = rest.shift();
+      if (label === undefined || label.startsWith('-')) {
+        throw new CliError(`--label requires a value\n${PROFILE_USAGE}`);
+      }
+    } else if (arg === '--new') {
+      fresh = true;
+    } else {
+      throw new CliError(
+        `unknown flag: ${arg} (provider login arguments go after \`--\`)\n${PROFILE_USAGE}`,
+      );
+    }
+  }
+
+  return label === undefined
+    ? { action: 'add', provider, fresh, loginArgs }
+    : { action: 'add', provider, label, fresh, loginArgs };
 }
 
 /** The bit of a profile this resolution needs — a local Profile or a target's summary. */
