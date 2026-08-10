@@ -42,6 +42,10 @@ Type definitions for every payload live in `packages/shared/src/api.ts`.
 | POST   | `/api/t3/:id/stop`               | Stop instance                                                   |
 | DELETE | `/api/t3/:id`                    | Remove instance (must be stopped)                               |
 
+The wizard endpoints back both the dashboard modal and the headless CLI flow
+(`apm profile add <provider>` — see the README); the CLI adds no endpoints of
+its own.
+
 ## Terminal WebSocket
 
 `GET /ws/terminal/:sessionId?token=<token>` upgrades to a WebSocket. The

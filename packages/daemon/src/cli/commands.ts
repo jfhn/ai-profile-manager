@@ -24,7 +24,14 @@ import type {
   TerminalSession,
 } from '@apm/shared';
 import { ensureDirs, readLiveRunFile, resolveConfig, type RunFileData } from '../config.js';
-import { CliError, parseProfilesArgv, parseRunArgv, resolveProfile } from './parse.js';
+import {
+  CliError,
+  parseProfileArgv,
+  parseProfilesArgv,
+  parseRunArgv,
+  resolveProfile,
+} from './parse.js';
+import { ApiRequestError, runProfileAdd } from './profile-add.js';
 
 export { parseRunArgv, resolveProfile } from './parse.js';
 
@@ -40,6 +47,50 @@ function fail(message: string): never {
 }
 
 // ---------------------------------------------------------------- commands --
+
+export async function profileCommand(argv: string[]): Promise<void> {
+  let invocation;
+  try {
+    invocation = parseProfileArgv(argv);
+  } catch (error: unknown) {
+    fail(errorMessage(error));
+  }
+
+  const run = await daemonOrStart();
+  try {
+    await runProfileAdd(
+      {
+        api: (method, endpoint, body) => apiRequest(run, method, endpoint, body),
+        runLogin: (loginArgv, env) => runLoginProcess(loginArgv, env),
+        log: (line) => console.log(line),
+        sleep,
+      },
+      invocation,
+    );
+  } catch (error: unknown) {
+    fail(errorMessage(error));
+  }
+}
+
+/**
+ * Run the provider's login command in this terminal with the profile-home
+ * env applied. The provider CLI owns the whole interaction (TTY prompts,
+ * paste-a-code flows, device auth); we only wait for it to finish.
+ */
+function runLoginProcess(argv: string[], env: Record<string, string>): Promise<number> {
+  const [command, ...args] = argv;
+  if (command === undefined) throw new CliError('provider login command is empty');
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, {
+      stdio: 'inherit',
+      env: { ...process.env, ...env },
+    });
+    child.on('error', (error) => {
+      reject(new CliError(`failed to start ${command}: ${error.message} — is it installed?`));
+    });
+    child.on('exit', (code, signal) => resolve(code ?? (signal ? 1 : 0)));
+  });
+}
 
 export async function runCommand(argv: string[]): Promise<void> {
   let invocation;
@@ -394,6 +445,20 @@ async function api<T>(
   endpoint: string,
   body?: unknown,
 ): Promise<T> {
+  try {
+    return await apiRequest(run, method, endpoint, body);
+  } catch (error: unknown) {
+    return fail(errorMessage(error));
+  }
+}
+
+/** Like api(), but throws instead of exiting so callers can branch on failures. */
+async function apiRequest<T>(
+  run: RunFileData,
+  method: string,
+  endpoint: string,
+  body?: unknown,
+): Promise<T> {
   let response: Response;
   try {
     response = await fetch(`http://${run.host}:${run.port}${endpoint}`, {
@@ -405,7 +470,9 @@ async function api<T>(
       body: body === undefined ? undefined : JSON.stringify(body),
     });
   } catch (error: unknown) {
-    return fail(`cannot reach the daemon at ${run.host}:${run.port} (${errorMessage(error)})`);
+    throw new CliError(
+      `cannot reach the daemon at ${run.host}:${run.port} (${errorMessage(error)})`,
+    );
   }
 
   const text = await response.text();
@@ -420,7 +487,11 @@ async function api<T>(
 
   if (!response.ok) {
     const apiError = payload as ApiError | null;
-    return fail(apiError?.error?.message ?? `${method} ${endpoint} failed with ${response.status}`);
+    throw new ApiRequestError(
+      apiError?.error?.message ?? `${method} ${endpoint} failed with ${response.status}`,
+      response.status,
+      apiError?.error?.code ?? null,
+    );
   }
   return payload as T;
 }

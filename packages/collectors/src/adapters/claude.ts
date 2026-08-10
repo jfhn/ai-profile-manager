@@ -41,6 +41,7 @@ export const claudeAdapter: ProviderAdapter = {
   collectUsage: async (ctx) => collectClaudeUsage(ctx),
   env: (home) => ({ CLAUDE_CONFIG_DIR: home }),
   loginCommand: (home) => `CLAUDE_CONFIG_DIR=${home} claude`,
+  loginArgv: () => ['claude'],
   defaultHome: () => path.join(os.homedir(), '.claude'),
 };
 
@@ -245,7 +246,8 @@ function fromRateLimits(
   const fiveHour = makeQuotaWindow(
     'five_hour',
     '5h',
-    firstWindowValue(root, ['five_hour', 'fiveHour', '5_hour', 'five-hour', 'hour_5', 'primary']),
+    firstWindowValue(root, ['five_hour', 'fiveHour', '5_hour', 'five-hour', 'hour_5', 'primary']) ??
+      limitWindowValue(root, (entry) => entry.kind === 'session'),
     nowMs,
   );
   const weekly = makeQuotaWindow(
@@ -259,7 +261,7 @@ function fromRateLimits(
       '7_day',
       'seven-day',
       'secondary',
-    ]),
+    ]) ?? limitWindowValue(root, (entry) => entry.kind === 'weekly_all'),
     nowMs,
   );
   const fable = makeQuotaWindow(
@@ -274,7 +276,11 @@ function fromRateLimits(
       'scoped_weekly',
       'scopedWeekly',
       'fable',
-    ]),
+    ]) ??
+      limitWindowValue(
+        root,
+        (entry) => entry.kind === 'weekly_scoped' || isFableModel(scopedModelName(entry)),
+      ),
     nowMs,
   );
   const windows = [fiveHour, weekly, fable].filter((window): window is UsageWindow =>
@@ -299,6 +305,29 @@ function fromRateLimits(
     planType: null,
     retryAfterSeconds: null,
   };
+}
+
+/**
+ * Newer OAuth payloads drop the model-scoped top-level keys and report those
+ * windows only inside a `limits` array. Entries there carry `percent` (used)
+ * instead of a named used-percent key, so the match is reshaped before
+ * normalization; the top-level probe stays authoritative when it hits.
+ */
+function limitWindowValue(
+  root: unknown,
+  match: (entry: Record<string, unknown>) => boolean,
+): unknown {
+  const limits = isRecord(root) ? root.limits : null;
+  if (!Array.isArray(limits)) return null;
+  const entry = limits.find(
+    (item): item is Record<string, unknown> => isRecord(item) && match(item),
+  );
+  return entry ? { used_percent: entry.percent, resets_at: entry.resets_at } : null;
+}
+
+function scopedModelName(entry: Record<string, unknown>): unknown {
+  const scope = isRecord(entry.scope) ? entry.scope : null;
+  return scope && isRecord(scope.model) ? scope.model.display_name : null;
 }
 
 /**

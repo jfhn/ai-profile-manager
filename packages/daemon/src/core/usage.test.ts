@@ -160,6 +160,7 @@ function fakeAdapter(
     collectUsage,
     env: (home) => ({ HOME_FOR_TEST: home }),
     loginCommand: (home) => `login ${home}`,
+    loginArgv: () => ['login'],
     defaultHome: () => path.join(os.tmpdir(), `missing-${provider}`),
   };
 }

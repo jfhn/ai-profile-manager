@@ -32,6 +32,7 @@ export const codexAdapter: ProviderAdapter = {
   collectUsage: async (ctx) => collectCodexUsage(ctx),
   env: (home) => ({ CODEX_HOME: home }),
   loginCommand: (home) => `CODEX_HOME=${home} codex login`,
+  loginArgv: () => ['codex', 'login'],
   defaultHome: () => path.join(os.homedir(), '.codex'),
 };
 

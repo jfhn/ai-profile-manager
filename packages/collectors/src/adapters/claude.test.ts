@@ -39,6 +39,47 @@ function rateLimits(): unknown {
   };
 }
 
+/** Production OAuth usage response captured 2026-08-10: the model-scoped weekly
+ * window appears only inside the `limits` array, with the top-level scoped
+ * keys null. */
+function oauthLimitsPayload(): unknown {
+  return {
+    five_hour: { utilization: 14, resets_at: '2026-08-11T00:50:00.927546+00:00' },
+    seven_day: { utilization: 53, resets_at: '2026-08-11T05:00:00.927571+00:00' },
+    seven_day_opus: null,
+    seven_day_sonnet: null,
+    limits: [
+      {
+        kind: 'session',
+        group: 'session',
+        percent: 14,
+        severity: 'normal',
+        resets_at: '2026-08-11T00:50:00.927546+00:00',
+        scope: null,
+        is_active: false,
+      },
+      {
+        kind: 'weekly_all',
+        group: 'weekly',
+        percent: 53,
+        severity: 'normal',
+        resets_at: '2026-08-11T05:00:00.927571+00:00',
+        scope: null,
+        is_active: false,
+      },
+      {
+        kind: 'weekly_scoped',
+        group: 'weekly',
+        percent: 84,
+        severity: 'warning',
+        resets_at: '2026-08-11T05:00:00.927872+00:00',
+        scope: { model: { id: null, display_name: 'Fable' } },
+        is_active: true,
+      },
+    ],
+  };
+}
+
 describe('claude adapter', () => {
   it('uses a fresh default-home statusline cache and appends a valid Fable window', async () => {
     const { home, cache, global } = setup();
@@ -147,6 +188,107 @@ describe('claude adapter', () => {
       expect.objectContaining({ id: 'weekly' }),
       expect.objectContaining({ id: 'fable_weekly', label: 'Fable 5 weekly', usedPercent: 40 }),
     ]);
+  });
+
+  it('reads the model-scoped weekly window from the OAuth limits array', async () => {
+    const { home, cache, global } = setup();
+    writeCredentials(home, now - 60_000);
+    const result = await claudeAdapter.collectUsage({
+      home,
+      defaultHome: path.join(home, 'different'),
+      cacheDir: cache,
+      globalCacheDir: global,
+      allowNetwork: true,
+      now,
+      fetchImpl: async () => new Response(JSON.stringify(oauthLimitsPayload()), { status: 200 }),
+    });
+    expect(result.cacheStatus).toBe('live');
+    expect(result.windows).toEqual([
+      expect.objectContaining({ id: 'five_hour', usedPercent: 14 }),
+      expect.objectContaining({ id: 'weekly', usedPercent: 53 }),
+      expect.objectContaining({
+        id: 'fable_weekly',
+        label: 'Fable 5 weekly',
+        usedPercent: 84,
+        remainingPercent: 16,
+        resetAt: '2026-08-11T05:00:00.927Z',
+      }),
+    ]);
+  });
+
+  it('builds every window from the limits array when top-level keys are absent', async () => {
+    const { home, cache, global } = setup();
+    writeCredentials(home, now - 60_000);
+    const payload = oauthLimitsPayload() as Record<string, unknown>;
+    const result = await claudeAdapter.collectUsage({
+      home,
+      defaultHome: path.join(home, 'different'),
+      cacheDir: cache,
+      globalCacheDir: global,
+      allowNetwork: true,
+      now,
+      fetchImpl: async () =>
+        new Response(JSON.stringify({ limits: payload.limits }), { status: 200 }),
+    });
+    expect(result.windows).toEqual([
+      expect.objectContaining({ id: 'five_hour', usedPercent: 14 }),
+      expect.objectContaining({ id: 'weekly', usedPercent: 53 }),
+      expect.objectContaining({ id: 'fable_weekly', usedPercent: 84 }),
+    ]);
+  });
+
+  it('keeps top-level windows authoritative over conflicting limits entries', async () => {
+    const { home, cache, global } = setup();
+    writeCredentials(home, now - 60_000);
+    const result = await claudeAdapter.collectUsage({
+      home,
+      defaultHome: path.join(home, 'different'),
+      cacheDir: cache,
+      globalCacheDir: global,
+      allowNetwork: true,
+      now,
+      fetchImpl: async () =>
+        new Response(
+          JSON.stringify({
+            seven_day: { utilization: 53, resets_at: '2026-08-11T05:00:00+00:00' },
+            limits: [
+              { kind: 'weekly_all', percent: 99, resets_at: '2026-08-12T05:00:00+00:00' },
+              'not-an-entry',
+              { kind: 'weekly_scoped' },
+            ],
+          }),
+          { status: 200 },
+        ),
+    });
+    // The malformed weekly_scoped entry (no percent) must not produce a window.
+    expect(result.windows).toEqual([
+      expect.objectContaining({
+        id: 'weekly',
+        usedPercent: 53,
+        resetAt: '2026-08-11T05:00:00.000Z',
+      }),
+    ]);
+  });
+
+  it('does not let the scoped weekly cache replace a limits-derived Fable window', async () => {
+    const { home, cache, global } = setup();
+    writeCredentials(home, now - 60_000);
+    const fableFile = path.join(global, 'claude-scoped-weekly.json');
+    writeJson(fableFile, { model: 'fable', percent: 51, resets_at: '2026-08-16T00:00:00Z' });
+    fs.utimesSync(fableFile, now / 1000, now / 1000);
+    const result = await claudeAdapter.collectUsage({
+      home,
+      defaultHome: home,
+      cacheDir: cache,
+      globalCacheDir: global,
+      allowNetwork: true,
+      now,
+      fetchImpl: async () => new Response(JSON.stringify(oauthLimitsPayload()), { status: 200 }),
+    });
+    expect(result.windows.filter((window) => window.id === 'fable_weekly')).toEqual([
+      expect.objectContaining({ id: 'fable_weekly', usedPercent: 84, remainingPercent: 16 }),
+    ]);
+    expect(result.source).not.toContain('Fable scoped weekly cache');
   });
 
   it('prefers per-profile Fable data over the scoped weekly cache on the default home', async () => {
