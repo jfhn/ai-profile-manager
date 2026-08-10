@@ -45,7 +45,9 @@ export function resolveConfig(
 ): DaemonConfig {
   const home = os.homedir();
   const xdgData = process.env.XDG_DATA_HOME || path.join(home, '.local', 'share');
-  const dataDir = overrides.dataDir || process.env.APM_DATA_DIR || path.join(xdgData, 'apm');
+  const dataDir = path.resolve(
+    overrides.dataDir || process.env.APM_DATA_DIR || path.join(xdgData, 'apm'),
+  );
   const envPort = Number(process.env.APM_PORT);
   const validEnvPort = Number.isInteger(envPort) && envPort >= 1 && envPort <= 65535;
   const port = overrides.port ?? (validEnvPort ? envPort : DEFAULT_PORT);

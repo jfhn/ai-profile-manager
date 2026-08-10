@@ -27,6 +27,7 @@ vi.mock('../api', () => ({
     overview: async () => ({
       providers: [],
       profiles: mocks.daemon.profiles,
+      defaultProfileIds: {},
       usage: {},
       sessions: [],
       t3Instances: [],

@@ -4,6 +4,9 @@
  *
  *   apm [start] [--port N] [--no-open] [--foreground]   start or reuse the daemon, open the UI
  *   apm url                                             print the authenticated URL, open nothing
+ *   apm profile add <claude|codex> [--label <label>] [--new] [-- login-args...]
+ *                                                       log in to a fresh managed profile
+ *   apm profiles [--json] [--refresh]                   list profiles and provider defaults
  *   apm run [--target <target>] <profile> <app> [args...]
  *                                                       run an app bound to a profile
  *   apm attach <session>                                attach to a running session
@@ -22,6 +25,8 @@ import { readLiveRunFile, resolveConfig, ensureDirs, DEFAULT_PORT } from './conf
 import { startDaemon } from './server.js';
 import {
   attachCommand,
+  profileCommand,
+  profilesCommand,
   runCommand,
   sessionsCommand,
   statusCommand,
@@ -136,8 +141,12 @@ async function main(): Promise<void> {
       return daemonMain(argv);
     case '__target-agent':
       return runTargetAgent();
+    case 'profile':
+      return profileCommand(argv);
     case 'run':
       return runCommand(argv);
+    case 'profiles':
+      return profilesCommand(argv);
     case 'attach':
       return attachCommand(argv);
     case 'sessions':

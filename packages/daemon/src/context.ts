@@ -2,6 +2,7 @@ import type {
   CreateProfileRequest,
   CreateSessionRequest,
   CreateT3InstanceRequest,
+  DefaultProfileIds,
   DiscoveryCandidate,
   Profile,
   ProviderId,
@@ -32,6 +33,8 @@ export interface EventBus {
 export interface ProfileService {
   list(): Profile[];
   get(id: string): Profile | null;
+  defaults(): DefaultProfileIds;
+  setDefault(provider: ProviderId, profileId: string | null): DefaultProfileIds;
   providers(): ProviderInfo[];
   create(req: CreateProfileRequest): Promise<Profile>;
   update(id: string, req: UpdateProfileRequest): Profile;

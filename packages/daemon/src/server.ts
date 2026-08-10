@@ -103,6 +103,7 @@ export async function startDaemon(config: DaemonConfig): Promise<DaemonHandle> {
   app.get('/api/overview', async (): Promise<OverviewResponse> => ({
     providers: ctx.profiles.providers(),
     profiles: ctx.profiles.list(),
+    defaultProfileIds: ctx.profiles.defaults(),
     usage: ctx.usage.latest(),
     sessions: ctx.sessions.list(),
     t3Instances: ctx.t3.list(),

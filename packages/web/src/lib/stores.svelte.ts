@@ -1,4 +1,5 @@
 import type {
+  DefaultProfileIds,
   DiscoveryCandidate,
   ExecutionTarget,
   Profile,
@@ -55,6 +56,7 @@ class AppStore {
   status = $state<StatusResponse | null>(null);
   providers = $state<ProviderInfo[]>([]);
   profiles = $state<Profile[]>([]);
+  defaultProfileIds = $state<DefaultProfileIds>({});
   usage = $state<Record<string, UsageSnapshot>>({});
   sessions = $state<TerminalSession[]>([]);
   t3Instances = $state<T3Instance[]>([]);
@@ -139,6 +141,7 @@ export async function loadOverview(): Promise<void> {
   const overview = await api.overview();
   app.providers = overview.providers;
   app.profiles = overview.profiles;
+  app.defaultProfileIds = overview.defaultProfileIds;
   app.usage = overview.usage;
   app.sessions = overview.sessions;
   app.t3Instances = overview.t3Instances;
