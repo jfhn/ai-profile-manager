@@ -39,6 +39,17 @@ describe('core routes', () => {
     expect(refresh.mock.calls).toEqual([['abc', { force: true }]]);
   }, 20_000);
 
+  it('preserves an encoded opaque profile id in route parameters', async () => {
+    const profileId = ' work/個人 ! ';
+    const response = await app.inject({
+      method: 'POST',
+      url: `/api/profiles/${encodeURIComponent(profileId)}/refresh`,
+    });
+
+    expect(response.statusCode).toBe(204);
+    expect(refresh).toHaveBeenCalledWith(profileId, { force: true });
+  });
+
   it('forces a refresh-all from POST /api/usage/refresh', async () => {
     const response = await app.inject({ method: 'POST', url: '/api/usage/refresh' });
     expect(response.statusCode).toBe(204);
@@ -67,6 +78,18 @@ describe('core routes', () => {
     expect(setDefault).toHaveBeenCalledWith('claude', null);
   });
 
+  it('preserves a bounded opaque default id exactly', async () => {
+    const profileId = ' work/個人 ! ';
+    const response = await app.inject({
+      method: 'PUT',
+      url: '/api/defaults/claude',
+      payload: { profileId },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(setDefault).toHaveBeenCalledWith('claude', profileId);
+  });
+
   it('rejects unknown providers and malformed default requests', async () => {
     expect(
       (
@@ -80,6 +103,17 @@ describe('core routes', () => {
     expect(
       (await app.inject({ method: 'PUT', url: '/api/defaults/claude', payload: {} })).statusCode,
     ).toBe(400);
+    for (const profileId of ['bad\u0000id', `${'é'.repeat(128)}a`, '   ']) {
+      expect(
+        (
+          await app.inject({
+            method: 'PUT',
+            url: '/api/defaults/claude',
+            payload: { profileId },
+          })
+        ).statusCode,
+      ).toBe(400);
+    }
     expect(setDefault).not.toHaveBeenCalled();
   });
 });

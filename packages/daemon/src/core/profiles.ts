@@ -15,6 +15,7 @@ import {
 } from '@apm/shared';
 import type { DaemonConfig } from '../config.js';
 import { ApiFailure, type EventBus, type ProfileService } from '../context.js';
+import { profileCacheDirectory } from './profilePaths.js';
 
 export type AdapterRegistry = Readonly<Record<ProviderId, ProviderAdapter>>;
 
@@ -247,8 +248,10 @@ export function createProfileService(
         }
         fs.rmSync(profile.home, { recursive: true, force: true });
       }
-      const cachePath = safeChildPath(config.cacheDir, profile.id);
-      if (cachePath) fs.rmSync(cachePath, { recursive: true, force: true });
+      fs.rmSync(profileCacheDirectory(config.cacheDir, profile.id), {
+        recursive: true,
+        force: true,
+      });
       profiles = profiles.filter((candidate) => candidate.id !== id);
       clearDefaultFor(profile);
       persist();
@@ -370,6 +373,8 @@ function loadStore(file: string): LoadedProfileStore {
     const message = error instanceof Error ? error.message : String(error);
     throw new Error(`Invalid profile store at ${file}: ${message}`);
   }
+  const normalized = normalizePersistedHomes(parsed);
+  parsed = normalized.value;
   const result = profileStoreFileSchema.safeParse(parsed);
   if (!result.success) {
     const issues = result.error.issues.map((issue) => issue.message).join('; ');
@@ -388,8 +393,32 @@ function loadStore(file: string): LoadedProfileStore {
     version: 2,
     profiles: result.data.profiles,
     defaultProfileIds: result.data.defaultProfileIds,
-    migrated: false,
+    migrated: normalized.changed,
   };
+}
+
+/**
+ * Older releases could persist relative homes when APM_DATA_DIR was relative.
+ * Resolve those with the same cwd semantics the old daemon used, but do not
+ * canonicalize absolute/external homes or touch disk until the entire store
+ * has passed validation.
+ */
+function normalizePersistedHomes(value: unknown): { value: unknown; changed: boolean } {
+  if (!isRecord(value) || !Array.isArray(value.profiles)) return { value, changed: false };
+  let changed = false;
+  const profiles = value.profiles.map((candidate) => {
+    if (
+      !isRecord(candidate) ||
+      typeof candidate.home !== 'string' ||
+      candidate.home.trim().length === 0 ||
+      path.isAbsolute(candidate.home)
+    ) {
+      return candidate;
+    }
+    changed = true;
+    return { ...candidate, home: path.resolve(candidate.home) };
+  });
+  return { value: changed ? { ...value, profiles } : value, changed };
 }
 
 function inferMigratedDefaults(profiles: Profile[]): DefaultProfileIds {
@@ -479,11 +508,6 @@ function isChildPath(parent: string, candidate: string): boolean {
   );
 }
 
-function safeChildPath(parent: string, child: string): string | null {
-  const candidate = path.resolve(parent, child);
-  return isChildPath(parent, candidate) ? candidate : null;
-}
-
 function validLabel(input: string): string {
   const label = input.trim();
   if (label.length === 0 || label.length > 64) {
@@ -506,4 +530,8 @@ function safelyDetectIdentity(adapter: ProviderAdapter, home: string): ProviderI
   } catch {
     return null;
   }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }

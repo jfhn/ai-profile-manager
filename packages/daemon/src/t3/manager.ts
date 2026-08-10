@@ -13,6 +13,7 @@ import { spawn } from 'node:child_process';
 import { z } from 'zod';
 import {
   PROVIDER_IDS,
+  profileIdSchema,
   providerIdSchema,
   type CreateT3InstanceRequest,
   type ProviderId,
@@ -56,7 +57,7 @@ const instanceSchema = z.object({
   label: z.string().min(1),
   port: z.number().int().nullable(),
   baseDir: z.string().min(1),
-  profiles: z.record(providerIdSchema, z.string()),
+  profiles: z.record(providerIdSchema, profileIdSchema),
   status: z.enum(['stopped', 'starting', 'running', 'unhealthy', 'exited']),
   pid: z.number().int().nullable(),
   url: z.string().nullable(),

@@ -16,6 +16,7 @@ export type ProfileHomeKind =
   | 'external';
 
 export interface Profile {
+  /** Opaque id: exact spelling is significant; never interpret it as a path. */
   id: string;
   provider: ProviderId;
   /** Display name, unique per provider (so "work" can exist for both claude and codex). */

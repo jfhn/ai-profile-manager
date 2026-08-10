@@ -67,3 +67,10 @@ key means there is no default; clients must not pick another profile on the
 user's behalf. `PUT /api/defaults/:provider` accepts an active, enabled profile
 of that same provider or `null` to clear the key. Disabling or deleting the
 selected profile clears it. These mutations emit `profiles-changed`.
+
+Profile ids use the same opaque public rule as the CLI contract: preserve the
+exact string, require nonblank content after trimming, reject Unicode `Cc`
+control characters, and limit the UTF-8 representation to 256 bytes. Other
+Unicode, punctuation, slashes, and edge/interior whitespace are allowed and do
+not give an id path or shell semantics. The rule applies to profile/default ids
+and API request fields that reference profiles.

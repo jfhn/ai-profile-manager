@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { ensureDirs, resolveConfig } from '../config.js';
 import { ApiFailure } from '../context.js';
 import { createEventBus } from './events.js';
+import { profileCacheDirectory } from './profilePaths.js';
 import { createProfileService, type AdapterRegistry } from './profiles.js';
 
 const temporaryDirectories: string[] = [];
@@ -58,7 +59,7 @@ describe('profile service', () => {
       label: 'Managed',
       home: managedHome,
     });
-    const cache = path.join(config.cacheDir, managed.id);
+    const cache = profileCacheDirectory(config.cacheDir, managed.id);
     fs.mkdirSync(cache);
     await service.remove(managed.id, true);
     expect(fs.existsSync(managedHome)).toBe(false);
@@ -104,6 +105,120 @@ describe('profile service', () => {
       version: 2,
       defaultProfileIds: { codex: 'codex-work' },
     });
+  });
+
+  it('normalizes relative homes in v1 and v2 stores before exposing or persisting them', () => {
+    for (const version of [1, 2] as const) {
+      const config = tempConfig();
+      const id = `relative-${version}`;
+      const relativeHome = path.join('legacy-relative-data', 'homes', id);
+      const store = {
+        version,
+        profiles: [storedProfile({ id, home: relativeHome })],
+        ...(version === 2 ? { defaultProfileIds: { claude: id } } : {}),
+      };
+      fs.writeFileSync(config.profilesFile, JSON.stringify(store));
+
+      const service = createProfileService(config, createEventBus(), fakeAdapters());
+      const expectedHome = path.resolve(relativeHome);
+
+      expect(service.get(id)?.home).toBe(expectedHome);
+      expect(path.isAbsolute(service.get(id)?.home ?? '')).toBe(true);
+      expect(JSON.parse(fs.readFileSync(config.profilesFile, 'utf8'))).toMatchObject({
+        version: 2,
+        profiles: [{ id, home: expectedHome }],
+        defaultProfileIds: { claude: id },
+      });
+    }
+  });
+
+  it('keeps opaque punctuation, slash, edge whitespace, and Unicode ids through migration', () => {
+    const config = tempConfig();
+    const id = ' work/個人 ! ';
+    fs.writeFileSync(
+      config.profilesFile,
+      JSON.stringify({ version: 1, profiles: [storedProfile({ id })] }),
+    );
+
+    const service = createProfileService(config, createEventBus(), fakeAdapters());
+
+    expect(service.get(id)?.id).toBe(id);
+    expect(service.defaults()).toEqual({ claude: id });
+    expect(JSON.parse(fs.readFileSync(config.profilesFile, 'utf8'))).toMatchObject({
+      profiles: [{ id }],
+      defaultProfileIds: { claude: id },
+    });
+  });
+
+  it('enforces the shared profile-id byte and control bounds without replacing the store', () => {
+    const accepted = `${'é'.repeat(127)}ab`;
+    expect(Buffer.byteLength(accepted, 'utf8')).toBe(256);
+    const config = tempConfig();
+    fs.writeFileSync(
+      config.profilesFile,
+      JSON.stringify({
+        version: 2,
+        profiles: [storedProfile({ id: accepted })],
+        defaultProfileIds: { claude: accepted },
+      }),
+    );
+    expect(createProfileService(config, createEventBus(), fakeAdapters()).defaults()).toEqual({
+      claude: accepted,
+    });
+
+    for (const invalidId of [`${accepted}a`, 'profile\u0000id', ' \t ']) {
+      const original = JSON.stringify({
+        version: 2,
+        profiles: [storedProfile({ id: invalidId, home: 'relative-invalid-home' })],
+        defaultProfileIds: { claude: invalidId },
+      });
+      fs.writeFileSync(config.profilesFile, original);
+
+      expect(() => createProfileService(config, createEventBus(), fakeAdapters())).toThrow(
+        `Invalid profile store at ${config.profilesFile}`,
+      );
+      expect(fs.readFileSync(config.profilesFile, 'utf8')).toBe(original);
+    }
+  });
+
+  it('rejects invalid default ids with the same opaque-id rule', () => {
+    const config = tempConfig();
+    const original = JSON.stringify({
+      version: 2,
+      profiles: [storedProfile({ id: 'valid' })],
+      defaultProfileIds: { claude: 'bad\nvalue' },
+    });
+    fs.writeFileSync(config.profilesFile, original);
+
+    expect(() => createProfileService(config, createEventBus(), fakeAdapters())).toThrow(
+      `Invalid profile store at ${config.profilesFile}`,
+    );
+    expect(fs.readFileSync(config.profilesFile, 'utf8')).toBe(original);
+  });
+
+  it('does not let normalized legacy managed homes weaken purge containment', async () => {
+    const config = tempConfig();
+    const outside = makeHome(config.dataDir, 'outside-managed', true);
+    const marker = path.join(outside, 'keep-me');
+    fs.writeFileSync(marker, 'safe');
+    const relativeOutside = path.relative(process.cwd(), outside);
+    fs.writeFileSync(
+      config.profilesFile,
+      JSON.stringify({
+        version: 2,
+        profiles: [
+          storedProfile({ id: 'legacy-managed', home: relativeOutside, homeKind: 'managed' }),
+        ],
+        defaultProfileIds: { claude: 'legacy-managed' },
+      }),
+    );
+    const service = createProfileService(config, createEventBus(), fakeAdapters());
+
+    expect(service.get('legacy-managed')?.home).toBe(path.resolve(relativeOutside));
+    await expect(service.remove('legacy-managed', true)).rejects.toMatchObject({
+      code: 'unsafe-home',
+    });
+    expect(fs.readFileSync(marker, 'utf8')).toBe('safe');
   });
 
   it('preserves explicit defaults on rename and clears them without reassignment', async () => {

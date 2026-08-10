@@ -6,6 +6,7 @@ import type { CollectResult, ProviderId, ProviderIdentity } from '@apm/shared';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ensureDirs, resolveConfig } from '../config.js';
 import { createEventBus } from './events.js';
+import { profileCacheDirectory } from './profilePaths.js';
 import { createProfileService, type AdapterRegistry } from './profiles.js';
 import { createUsageService } from './usage.js';
 
@@ -64,7 +65,9 @@ describe('usage service', () => {
       cacheStatus: 'live',
       windows: [{ id: 'weekly', usedPercent: 25 }],
     });
-    expect(fs.statSync(path.join(config.cacheDir, successfulProfile.id)).mode & 0o777).toBe(0o700);
+    expect(
+      fs.statSync(profileCacheDirectory(config.cacheDir, successfulProfile.id)).mode & 0o777,
+    ).toBe(0o700);
 
     const fresh = createUsageService(config, createEventBus(), profiles, adapters);
     expect(fresh.latest()).toEqual(usage.latest());

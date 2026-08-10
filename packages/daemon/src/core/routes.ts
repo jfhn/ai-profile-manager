@@ -1,6 +1,7 @@
 import {
   confirmWizardRequestSchema,
   createProfileRequestSchema,
+  profileIdSchema,
   providerIdSchema,
   startWizardRequestSchema,
   updateDefaultProfileRequestSchema,
@@ -41,18 +42,21 @@ export function registerCoreRoutes(app: FastifyInstance, ctx: AppContext): void 
   });
 
   app.patch<{ Params: IdParams }>('/api/profiles/:id', async (request) => {
+    const id = parseBody(profileIdSchema, request.params.id);
     const body = parseBody(updateProfileRequestSchema, request.body);
-    return ctx.profiles.update(request.params.id, body);
+    return ctx.profiles.update(id, body);
   });
 
   app.delete<{ Params: IdParams }>('/api/profiles/:id', async (request, reply) => {
+    const id = parseBody(profileIdSchema, request.params.id);
     const purge = parsePurge(request.query);
-    await ctx.profiles.remove(request.params.id, purge);
+    await ctx.profiles.remove(id, purge);
     return reply.code(204).send();
   });
 
   app.post<{ Params: IdParams }>('/api/profiles/:id/refresh', async (request, reply) => {
-    await ctx.usage.refresh(request.params.id, { force: true });
+    const id = parseBody(profileIdSchema, request.params.id);
+    await ctx.usage.refresh(id, { force: true });
     return reply.code(204).send();
   });
 
@@ -73,13 +77,15 @@ export function registerCoreRoutes(app: FastifyInstance, ctx: AppContext): void 
     return reply.code(201).send(state);
   });
 
-  app.get<{ Params: WizardParams }>('/api/wizard/:profileId', async (request) =>
-    ctx.profiles.wizardState(request.params.profileId),
-  );
+  app.get<{ Params: WizardParams }>('/api/wizard/:profileId', async (request) => {
+    const profileId = parseBody(profileIdSchema, request.params.profileId);
+    return ctx.profiles.wizardState(profileId);
+  });
 
   app.post<{ Params: WizardParams }>('/api/wizard/:profileId/confirm', async (request) => {
+    const profileId = parseBody(profileIdSchema, request.params.profileId);
     const body = parseBody(confirmWizardRequestSchema, request.body);
-    return ctx.profiles.confirmWizard(request.params.profileId, body.label);
+    return ctx.profiles.confirmWizard(profileId, body.label);
   });
 }
 

@@ -12,7 +12,7 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { StringDecoder } from 'node:string_decoder';
 import WebSocket from 'ws';
-import { LOCAL_TARGET_ID } from '@apm/shared';
+import { LOCAL_TARGET_ID, profilesCliResponseSchema, usageSnapshotSchema } from '@apm/shared';
 import type {
   ApiError,
   OverviewResponse,
@@ -85,19 +85,22 @@ export async function runCommand(argv: string[]): Promise<void> {
 }
 
 export function profilesContract(overview: OverviewResponse): ProfilesCliResponse {
-  return {
+  return profilesCliResponseSchema.parse({
     schemaVersion: 1,
     defaultProfileIds: { ...overview.defaultProfileIds },
-    profiles: overview.profiles.map((profile) => ({
-      id: profile.id,
-      provider: profile.provider,
-      label: profile.label,
-      home: profile.home,
-      status: profile.status,
-      enabled: profile.enabled,
-      usage: overview.usage[profile.id] ?? null,
-    })),
-  };
+    profiles: overview.profiles.map((profile) => {
+      const usage = usageSnapshotSchema.safeParse(overview.usage[profile.id]);
+      return {
+        id: profile.id,
+        provider: profile.provider,
+        label: profile.label,
+        home: profile.home,
+        status: profile.status,
+        enabled: profile.enabled,
+        usage: usage.success && usage.data.profileId === profile.id ? usage.data : null,
+      };
+    }),
+  });
 }
 
 export async function profilesCommand(argv: string[]): Promise<void> {

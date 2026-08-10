@@ -40,8 +40,22 @@ reported on stderr with a non-zero exit status.
 Consumers must reject an unsupported `schemaVersion`. The `profiles` array
 includes pending, errored and disabled entries so a saved profile id can be
 diagnosed precisely. `usage` is either the complete `UsageSnapshot` or `null`
-when no snapshot exists. Credentials and detected account identity are not
-part of this contract.
+when no valid snapshot exists. Historical SQLite rows are runtime-validated;
+malformed JSON, incomplete snapshots, invalid timestamps/status values, and
+profile-id mismatches are omitted without rewriting usage history. A later
+valid row becomes visible normally. Credentials and detected account identity
+are not part of this contract.
+
+Profile ids are opaque and must be preserved exactly. In schema version 1 an
+id must be nonblank after trimming, contain no Unicode control character
+(General Category `Cc`), and occupy at most 256 bytes when UTF-8 encoded. Edge
+or interior whitespace, punctuation, slashes, and Unicode are otherwise valid;
+an id is never a path segment or shell token.
+
+Version 1 has a closed provider enum and default-key set: only `claude` and
+`codex` are valid. Consumers should reject other provider values or keys. Adding
+a provider therefore requires a schema-version bump or explicit compatibility
+handling rather than silently extending version 1.
 
 `defaultProfileIds` is intentionally partial. An absent provider key means the
 user has no default for that provider; starting new provider work must stop
@@ -64,6 +78,13 @@ restore can resolve that exact entry. It should use the current default only
 for genuinely new work. A missing saved id, provider mismatch, disabled
 profile or non-active status is an error; never fall back to the current
 default for a restore.
+
+Every emitted `home` is absolute. `APM_DATA_DIR` is resolved to an absolute
+path at startup. When an older v1 or v2 profile store contains a relative home,
+apm resolves it once using the daemon startup working directory (the semantics
+older releases used), validates the complete store, and atomically persists
+the absolute form. Absolute external homes are not canonicalized or rewritten,
+and an otherwise invalid store is left untouched.
 
 `apm run <profile> <app> ...` remains the interactive path when apm should own
 the PTY and attach lifecycle. The metadata command does not change that

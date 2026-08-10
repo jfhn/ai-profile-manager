@@ -109,11 +109,12 @@ prevents it from running anything. A dropped terminal connection only detaches;
 use `apm attach <session>` to reconnect while the remote process is still
 running or to see its recorded exit.
 
-State lives in `~/.local/share/apm` (override with `APM_DATA_DIR`): profiles
-in `profiles.json`, approved remote declarations in `targets.json`, usage
-snapshots in SQLite, and managed provider homes under `homes/`. Raw credentials
-stay inside provider homes; apm never copies them, never refreshes OAuth tokens,
-and never sends them to the browser or another target.
+State lives in `~/.local/share/apm` (override with `APM_DATA_DIR`, which is
+resolved to an absolute path at startup): profiles in `profiles.json`, approved
+remote declarations in `targets.json`, usage snapshots in SQLite, and managed
+provider homes under `homes/`. Raw credentials stay inside provider homes; apm
+never copies them, never refreshes OAuth tokens, and never sends them to the
+browser or another target.
 
 External tools can resolve per-provider defaults, exact profile homes and usage
 without adopting apm's PTY lifecycle. The versioned CLI contract and its
