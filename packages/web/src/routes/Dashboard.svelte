@@ -15,6 +15,7 @@
   import Button from '../lib/components/Button.svelte';
   import CardSkeleton from '../lib/components/CardSkeleton.svelte';
   import EmptyState from '../lib/components/EmptyState.svelte';
+  import DefaultProfileSelectors from '../lib/components/DefaultProfileSelectors.svelte';
   import Icon from '../lib/components/Icon.svelte';
   import PageHeader from '../lib/components/PageHeader.svelte';
   import ProfileCard from '../lib/components/ProfileCard.svelte';
@@ -134,6 +135,7 @@
     </div>
   {:else}
     <SuggestedStrip />
+    <DefaultProfileSelectors />
 
     {#if views.length === 0}
       <EmptyState

@@ -1,7 +1,9 @@
 import {
   confirmWizardRequestSchema,
   createProfileRequestSchema,
+  providerIdSchema,
   startWizardRequestSchema,
+  updateDefaultProfileRequestSchema,
   updateProfileRequestSchema,
   type DiscoveryResponse,
 } from '@apm/shared';
@@ -17,8 +19,20 @@ interface WizardParams {
   profileId: string;
 }
 
+interface ProviderParams {
+  provider: string;
+}
+
 export function registerCoreRoutes(app: FastifyInstance, ctx: AppContext): void {
   app.get('/api/profiles', async () => ctx.profiles.list());
+
+  app.get('/api/defaults', async () => ({ defaultProfileIds: ctx.profiles.defaults() }));
+
+  app.put<{ Params: ProviderParams }>('/api/defaults/:provider', async (request) => {
+    const provider = parseBody(providerIdSchema, request.params.provider);
+    const body = parseBody(updateDefaultProfileRequestSchema, request.body);
+    return { defaultProfileIds: ctx.profiles.setDefault(provider, body.profileId) };
+  });
 
   app.post('/api/profiles', async (request, reply) => {
     const body = parseBody(createProfileRequestSchema, request.body);

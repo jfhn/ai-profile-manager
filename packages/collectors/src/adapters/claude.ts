@@ -277,8 +277,8 @@ function fromRateLimits(
     ]),
     nowMs,
   );
-  const windows = [fiveHour, weekly, fable].filter(
-    (window): window is UsageWindow => Boolean(window),
+  const windows = [fiveHour, weekly, fable].filter((window): window is UsageWindow =>
+    Boolean(window),
   );
   const updatedMs = Date.parse(updatedAt ?? '');
   const stale =

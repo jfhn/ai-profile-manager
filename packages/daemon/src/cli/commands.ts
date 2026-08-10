@@ -16,6 +16,7 @@ import { LOCAL_TARGET_ID } from '@apm/shared';
 import type {
   ApiError,
   OverviewResponse,
+  ProfilesCliResponse,
   StatusResponse,
   TargetProfilesResponse,
   TerminalClientMessage,
@@ -23,7 +24,7 @@ import type {
   TerminalSession,
 } from '@apm/shared';
 import { ensureDirs, readLiveRunFile, resolveConfig, type RunFileData } from '../config.js';
-import { CliError, parseRunArgv, resolveProfile } from './parse.js';
+import { CliError, parseProfilesArgv, parseRunArgv, resolveProfile } from './parse.js';
 
 export { parseRunArgv, resolveProfile } from './parse.js';
 
@@ -81,6 +82,55 @@ export async function runCommand(argv: string[]): Promise<void> {
   });
 
   await attachSession(run, session);
+}
+
+export function profilesContract(overview: OverviewResponse): ProfilesCliResponse {
+  return {
+    schemaVersion: 1,
+    defaultProfileIds: { ...overview.defaultProfileIds },
+    profiles: overview.profiles.map((profile) => ({
+      id: profile.id,
+      provider: profile.provider,
+      label: profile.label,
+      home: profile.home,
+      status: profile.status,
+      enabled: profile.enabled,
+      usage: overview.usage[profile.id] ?? null,
+    })),
+  };
+}
+
+export async function profilesCommand(argv: string[]): Promise<void> {
+  let invocation;
+  try {
+    invocation = parseProfilesArgv(argv);
+  } catch (error: unknown) {
+    fail(errorMessage(error));
+  }
+
+  const run = await daemonOrStart();
+  if (invocation.refresh) await api<void>(run, 'POST', '/api/usage/refresh');
+  const overview = await api<OverviewResponse>(run, 'GET', '/api/overview');
+  const contract = profilesContract(overview);
+
+  if (invocation.json) {
+    process.stdout.write(`${JSON.stringify(contract)}\n`);
+    return;
+  }
+  if (contract.profiles.length === 0) {
+    console.log('no profiles');
+    return;
+  }
+
+  const rows = contract.profiles.map((profile) => [
+    contract.defaultProfileIds[profile.provider] === profile.id ? '*' : '',
+    profile.provider,
+    profile.label,
+    profile.enabled ? profile.status : 'disabled',
+    profile.usage?.cacheStatus ?? 'not-collected',
+    profile.home,
+  ]);
+  printTable(['DEFAULT', 'PROVIDER', 'LABEL', 'STATUS', 'USAGE', 'HOME'], rows);
 }
 
 export async function attachCommand(argv: string[]): Promise<void> {

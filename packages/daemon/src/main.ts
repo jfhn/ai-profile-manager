@@ -4,6 +4,7 @@
  *
  *   apm [start] [--port N] [--no-open] [--foreground]   start or reuse the daemon, open the UI
  *   apm url                                             print the authenticated URL, open nothing
+ *   apm profiles [--json] [--refresh]                   list profiles and provider defaults
  *   apm run [--target <target>] <profile> <app> [args...]
  *                                                       run an app bound to a profile
  *   apm attach <session>                                attach to a running session
@@ -22,6 +23,7 @@ import { readLiveRunFile, resolveConfig, ensureDirs, DEFAULT_PORT } from './conf
 import { startDaemon } from './server.js';
 import {
   attachCommand,
+  profilesCommand,
   runCommand,
   sessionsCommand,
   statusCommand,
@@ -138,6 +140,8 @@ async function main(): Promise<void> {
       return runTargetAgent();
     case 'run':
       return runCommand(argv);
+    case 'profiles':
+      return profilesCommand(argv);
     case 'attach':
       return attachCommand(argv);
     case 'sessions':

@@ -34,6 +34,10 @@ export const updateProfileRequestSchema = z
     message: 'nothing to update',
   });
 
+export const updateDefaultProfileRequestSchema = z.object({
+  profileId: z.string().min(1).nullable(),
+});
+
 export const startWizardRequestSchema = z.object({
   provider: providerIdSchema,
 });
@@ -99,7 +103,22 @@ export const profileSchema = z.object({
   createdAt: z.string(),
 });
 
-export const profileStoreFileSchema = z.object({
+export const profileStoreFileV1Schema = z.object({
   version: z.literal(1),
   profiles: z.array(profileSchema),
 });
+
+export const defaultProfileIdsSchema = z
+  .object({
+    claude: z.string().min(1).optional(),
+    codex: z.string().min(1).optional(),
+  })
+  .strict();
+
+export const profileStoreFileV2Schema = z.object({
+  version: z.literal(2),
+  profiles: z.array(profileSchema),
+  defaultProfileIds: defaultProfileIdsSchema.optional().default({}),
+});
+
+export const profileStoreFileSchema = z.union([profileStoreFileV1Schema, profileStoreFileV2Schema]);

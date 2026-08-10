@@ -1,17 +1,22 @@
 import Fastify, { type FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { AppContext, RefreshOptions, UsageService } from '../context.js';
+import type { AppContext, ProfileService, RefreshOptions, UsageService } from '../context.js';
 import { registerCoreRoutes } from './routes.js';
 
 const refresh = vi.fn(
   async (_profileId?: string, _options?: RefreshOptions): Promise<void> => undefined,
 );
+const defaults = vi.fn(() => ({ claude: 'claude-work' }));
+const setDefault = vi.fn((provider: 'claude' | 'codex', profileId: string | null) =>
+  profileId === null ? {} : { [provider]: profileId },
+);
 let app: FastifyInstance;
 
 beforeAll(async () => {
   const usage = { refresh } as Partial<UsageService> as UsageService;
+  const profiles = { defaults, setDefault } as Partial<ProfileService> as ProfileService;
   app = Fastify({ logger: false });
-  registerCoreRoutes(app, { usage } as Partial<AppContext> as AppContext);
+  registerCoreRoutes(app, { usage, profiles } as Partial<AppContext> as AppContext);
   await app.ready();
 });
 
@@ -19,7 +24,11 @@ afterAll(async () => {
   await app.close();
 });
 
-beforeEach(() => refresh.mockClear());
+beforeEach(() => {
+  refresh.mockClear();
+  defaults.mockClear();
+  setDefault.mockClear();
+});
 
 describe('core routes', () => {
   // The first injected request pays Fastify's cold-start cost, which can
@@ -34,5 +43,43 @@ describe('core routes', () => {
     const response = await app.inject({ method: 'POST', url: '/api/usage/refresh' });
     expect(response.statusCode).toBe(204);
     expect(refresh.mock.calls).toEqual([[undefined, { force: true }]]);
+  });
+
+  it('gets and updates provider defaults through validated routes', async () => {
+    const current = await app.inject({ method: 'GET', url: '/api/defaults' });
+    expect(current.json()).toEqual({ defaultProfileIds: { claude: 'claude-work' } });
+
+    const updated = await app.inject({
+      method: 'PUT',
+      url: '/api/defaults/codex',
+      payload: { profileId: 'codex-personal' },
+    });
+    expect(updated.statusCode).toBe(200);
+    expect(updated.json()).toEqual({ defaultProfileIds: { codex: 'codex-personal' } });
+    expect(setDefault).toHaveBeenCalledWith('codex', 'codex-personal');
+
+    const cleared = await app.inject({
+      method: 'PUT',
+      url: '/api/defaults/claude',
+      payload: { profileId: null },
+    });
+    expect(cleared.statusCode).toBe(200);
+    expect(setDefault).toHaveBeenCalledWith('claude', null);
+  });
+
+  it('rejects unknown providers and malformed default requests', async () => {
+    expect(
+      (
+        await app.inject({
+          method: 'PUT',
+          url: '/api/defaults/openai',
+          payload: { profileId: null },
+        })
+      ).statusCode,
+    ).toBe(400);
+    expect(
+      (await app.inject({ method: 'PUT', url: '/api/defaults/claude', payload: {} })).statusCode,
+    ).toBe(400);
+    expect(setDefault).not.toHaveBeenCalled();
   });
 });

@@ -34,6 +34,7 @@ reference `dist/` yourself. From any directory:
 ```sh
 apm          # start (or reuse) the daemon, print its URL, open the dashboard
 apm url      # print the authenticated URL, open nothing
+apm profiles --json # stable profile/default/usage contract for integrations
 apm status
 apm stop
 ```
@@ -70,6 +71,10 @@ data dir and port, so a daemon you are already running stays untouched.
 ```sh
 apm                       # start (or reuse) the daemon and open the dashboard
 apm url                   # print the authenticated dashboard URL, open nothing
+apm profiles              # human-readable profiles and provider defaults
+apm profiles --json       # versioned machine contract, JSON only on stdout
+apm profiles --json --refresh
+                          # refresh usage first, then print the contract
 apm run work claude       # run claude bound to profile "work"
 apm run work bash         # any command; children inherit the profile env
 apm run --target devbox work claude --resume
@@ -109,6 +114,11 @@ in `profiles.json`, approved remote declarations in `targets.json`, usage
 snapshots in SQLite, and managed provider homes under `homes/`. Raw credentials
 stay inside provider homes; apm never copies them, never refreshes OAuth tokens,
 and never sends them to the browser or another target.
+
+External tools can resolve per-provider defaults, exact profile homes and usage
+without adopting apm's PTY lifecycle. The versioned CLI contract and its
+missing-default semantics are documented in
+[docs/INTEGRATIONS.md](docs/INTEGRATIONS.md).
 
 ## Credits
 

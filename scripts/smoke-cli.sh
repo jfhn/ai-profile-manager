@@ -114,6 +114,21 @@ node -e 'fetch(process.argv[1]).then((r) => process.exit(r.ok ? 0 : 1), () => pr
   die "the url from \`apm url\` is not usable: GET /api/status was rejected"
 say 'url ok (authenticated request accepted)'
 
+json=$("$APM" profiles --json)
+lines=$(printf '%s\n' "$json" | wc -l | tr -d '[:space:]')
+[ "$lines" -eq 1 ] || die "profiles --json printed $lines lines, expected one JSON document:
+$json"
+node -e '
+  const value = JSON.parse(process.argv[1]);
+  if (value.schemaVersion !== 1) process.exit(1);
+  if (!value.defaultProfileIds || typeof value.defaultProfileIds !== "object") process.exit(1);
+  if (!Array.isArray(value.profiles) || value.profiles.length !== 0) process.exit(1);
+' "$json" || die 'profiles --json did not match the empty version 1 contract'
+json=$("$APM" profiles --json --refresh)
+node -e 'const value=JSON.parse(process.argv[1]);process.exit(value.schemaVersion===1?0:1)' "$json" ||
+  die 'profiles --json --refresh did not return the version 1 contract'
+say 'profiles contract ok'
+
 out=$("$APM" --no-open)
 expect 'already running' "$out" 'reuse'
 say 'reuse ok'
