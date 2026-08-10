@@ -149,9 +149,11 @@ export const profileSchema = z.object({
   createdAt: z.string(),
 });
 
+const persistedProfilesSchema = z.array(profileSchema).superRefine(assertUniqueProfileIds);
+
 export const profileStoreFileV1Schema = z.object({
   version: z.literal(1),
-  profiles: z.array(profileSchema),
+  profiles: persistedProfilesSchema,
 });
 
 export const defaultProfileIdsSchema = z
@@ -163,7 +165,7 @@ export const defaultProfileIdsSchema = z
 
 export const profileStoreFileV2Schema = z.object({
   version: z.literal(2),
-  profiles: z.array(profileSchema),
+  profiles: persistedProfilesSchema,
   defaultProfileIds: defaultProfileIdsSchema.optional().default({}),
 });
 
@@ -174,23 +176,44 @@ export const profilesCliResponseSchema = z
   .object({
     schemaVersion: z.literal(1),
     defaultProfileIds: defaultProfileIdsSchema,
-    profiles: z.array(
-      z
-        .object({
-          id: profileIdSchema,
-          provider: providerIdSchema,
-          label: nonBlankString,
-          home: z.string().min(1).refine(isPortableAbsolutePath, {
-            message: 'profile homes must be absolute paths',
-          }),
-          status: z.enum(['pending', 'active', 'error']),
-          enabled: z.boolean(),
-          usage: usageSnapshotSchema.nullable(),
-        })
-        .strict(),
-    ),
+    profiles: z
+      .array(
+        z
+          .object({
+            id: profileIdSchema,
+            provider: providerIdSchema,
+            label: nonBlankString,
+            home: z.string().min(1).refine(isPortableAbsolutePath, {
+              message: 'profile homes must be absolute paths',
+            }),
+            status: z.enum(['pending', 'active', 'error']),
+            enabled: z.boolean(),
+            usage: usageSnapshotSchema.nullable(),
+          })
+          .strict(),
+      )
+      .superRefine(assertUniqueProfileIds),
   })
   .strict();
+
+function assertUniqueProfileIds<T extends { id: string }>(
+  profiles: T[],
+  context: z.RefinementCtx,
+): void {
+  const firstIndexById = new Map<string, number>();
+  for (const [index, profile] of profiles.entries()) {
+    const firstIndex = firstIndexById.get(profile.id);
+    if (firstIndex === undefined) {
+      firstIndexById.set(profile.id, index);
+      continue;
+    }
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: [index, 'id'],
+      message: `profiles[${index}].id duplicates profiles[${firstIndex}].id (${JSON.stringify(profile.id)})`,
+    });
+  }
+}
 
 function isPortableAbsolutePath(value: string): boolean {
   return value.startsWith('/') || /^[A-Za-z]:[\\/]/.test(value) || value.startsWith('\\\\');

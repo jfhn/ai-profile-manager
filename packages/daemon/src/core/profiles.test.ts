@@ -83,16 +83,97 @@ describe('profile service', () => {
     expect(fs.readFileSync(config.profilesFile, 'utf8')).toContain('"version":3');
   });
 
+  it.each([1, 2] as const)(
+    'rejects duplicate profile ids in a v%s store without rewriting it',
+    (version) => {
+      const config = tempConfig();
+      const profiles = [
+        storedProfile({ id: 'duplicate', label: 'first', home: '/tmp/first-home' }),
+        storedProfile({ id: 'duplicate', label: 'second', home: '/tmp/second-home' }),
+      ];
+      const original = JSON.stringify({
+        version,
+        profiles,
+        ...(version === 2 ? { defaultProfileIds: { claude: 'duplicate' } } : {}),
+      });
+      fs.writeFileSync(config.profilesFile, original);
+
+      expect(() => createProfileService(config, createEventBus(), fakeAdapters())).toThrow(
+        /profiles\[1\]\.id duplicates profiles\[0\]\.id \("duplicate"\)/,
+      );
+      expect(fs.readFileSync(config.profilesFile, 'utf8')).toBe(original);
+    },
+  );
+
+  it.each([
+    {
+      field: 'label',
+      first: storedProfile({ id: 'first', label: 'Work', home: '/tmp/first-home' }),
+      second: storedProfile({ id: 'second', label: 'work', home: '/tmp/second-home' }),
+    },
+    {
+      field: 'home',
+      first: storedProfile({ id: 'first', label: 'first', home: '/tmp/shared-home' }),
+      second: storedProfile({ id: 'second', label: 'second', home: '/tmp/shared-home' }),
+    },
+  ])(
+    'rejects persisted duplicate provider+$field pairs without rewriting',
+    ({ field, first, second }) => {
+      const config = tempConfig();
+      const original = JSON.stringify({ version: 1, profiles: [first, second] });
+      fs.writeFileSync(config.profilesFile, original);
+
+      expect(() => createProfileService(config, createEventBus(), fakeAdapters())).toThrow(
+        new RegExp(
+          `profiles\\[1\\]\\.${field} duplicates profiles\\[0\\]\\.${field} for provider claude`,
+        ),
+      );
+      expect(fs.readFileSync(config.profilesFile, 'utf8')).toBe(original);
+    },
+  );
+
+  it('allows the same persisted label and home for different providers', () => {
+    const config = tempConfig();
+    fs.writeFileSync(
+      config.profilesFile,
+      JSON.stringify({
+        version: 1,
+        profiles: [
+          storedProfile({ id: 'claude', provider: 'claude' }),
+          storedProfile({ id: 'codex', provider: 'codex' }),
+        ],
+      }),
+    );
+
+    expect(createProfileService(config, createEventBus(), fakeAdapters()).list()).toHaveLength(2);
+  });
+
   it('migrates v1 stores and infers only unambiguous eligible defaults', () => {
     const config = tempConfig();
     const profiles = [
-      storedProfile({ id: 'claude-work', provider: 'claude', label: 'work' }),
-      storedProfile({ id: 'claude-other', provider: 'claude', label: 'other' }),
-      storedProfile({ id: 'codex-work', provider: 'codex', label: 'work' }),
+      storedProfile({
+        id: 'claude-work',
+        provider: 'claude',
+        label: 'work',
+        home: '/tmp/claude-work',
+      }),
+      storedProfile({
+        id: 'claude-other',
+        provider: 'claude',
+        label: 'other',
+        home: '/tmp/claude-other',
+      }),
+      storedProfile({
+        id: 'codex-work',
+        provider: 'codex',
+        label: 'work',
+        home: '/tmp/codex-work',
+      }),
       storedProfile({
         id: 'codex-disabled',
         provider: 'codex',
         label: 'disabled',
+        home: '/tmp/codex-disabled',
         enabled: false,
       }),
     ];

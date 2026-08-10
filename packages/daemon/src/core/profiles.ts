@@ -380,6 +380,7 @@ function loadStore(file: string): LoadedProfileStore {
     const issues = result.error.issues.map((issue) => issue.message).join('; ');
     throw new Error(`Invalid profile store at ${file}: ${issues}`);
   }
+  validatePersistedProfileUniqueness(file, result.data.profiles);
   if (result.data.version === 1) {
     return {
       version: 2,
@@ -395,6 +396,25 @@ function loadStore(file: string): LoadedProfileStore {
     defaultProfileIds: result.data.defaultProfileIds,
     migrated: normalized.changed,
   };
+}
+
+function validatePersistedProfileUniqueness(file: string, profiles: Profile[]): void {
+  for (const [index, profile] of profiles.entries()) {
+    for (let earlierIndex = 0; earlierIndex < index; earlierIndex += 1) {
+      const earlier = profiles[earlierIndex];
+      if (earlier === undefined || earlier.provider !== profile.provider) continue;
+      if (earlier.label.toLocaleLowerCase() === profile.label.toLocaleLowerCase()) {
+        throw new Error(
+          `Invalid profile store at ${file}: profiles[${index}].label duplicates profiles[${earlierIndex}].label for provider ${profile.provider}`,
+        );
+      }
+      if (samePath(earlier.home, profile.home)) {
+        throw new Error(
+          `Invalid profile store at ${file}: profiles[${index}].home duplicates profiles[${earlierIndex}].home for provider ${profile.provider}`,
+        );
+      }
+    }
+  }
 }
 
 /**

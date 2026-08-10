@@ -96,6 +96,19 @@ describe('profilesContract', () => {
     expect(() => profilesContract(overview)).toThrow(/profile homes must be absolute paths/);
   });
 
+  it('cannot emit duplicate profile ids', () => {
+    const overview = singleProfileOverview('duplicate');
+    overview.profiles.push({
+      ...overview.profiles[0]!,
+      label: 'other',
+      home: '/profiles/other',
+    });
+
+    expect(() => profilesContract(overview)).toThrow(
+      /profiles\[1\]\.id duplicates profiles\[0\]\.id/,
+    );
+  });
+
   it('keeps schema-version 1 provider values and default keys closed', () => {
     const unknownDefault = singleProfileOverview('claude-work');
     (unknownDefault.defaultProfileIds as Record<string, string>).openai = 'claude-work';
