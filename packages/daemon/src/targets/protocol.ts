@@ -7,6 +7,7 @@ import {
   TARGET_SIGNALS,
   TRANSPORT_ERROR_CODES,
   commandSpecSchema,
+  profileIdSchema,
   providerIdSchema,
   type CommandSpec,
   type CommandResult,
@@ -67,7 +68,7 @@ export const agentResponseSchema = z.discriminatedUnion('type', [
     type: z.literal('profiles'),
     profiles: z.array(
       z.object({
-        id: z.string(),
+        id: profileIdSchema,
         provider: providerIdSchema,
         label: z.string(),
         status: z.enum(['pending', 'active', 'error']),

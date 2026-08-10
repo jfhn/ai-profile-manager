@@ -16,6 +16,7 @@ export type ProfileHomeKind =
   | 'external';
 
 export interface Profile {
+  /** Opaque id: exact spelling is significant; never interpret it as a path. */
   id: string;
   provider: ProviderId;
   /** Display name, unique per provider (so "work" can exist for both claude and codex). */
@@ -32,3 +33,9 @@ export interface Profile {
   /** ISO timestamp. */
   createdAt: string;
 }
+
+/**
+ * The profile selected for new work in each provider. An absent entry means
+ * the user has not selected a default; consumers must not guess one.
+ */
+export type DefaultProfileIds = Partial<Record<ProviderId, string>>;

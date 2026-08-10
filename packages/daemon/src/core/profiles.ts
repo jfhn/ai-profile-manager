@@ -3,8 +3,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { adapters as defaultAdapters, type ProviderAdapter } from '@apm/collectors';
 import {
+  PROVIDER_IDS,
   profileStoreFileSchema,
   type CreateProfileRequest,
+  type DefaultProfileIds,
   type Profile,
   type ProviderId,
   type ProviderIdentity,
@@ -13,12 +15,18 @@ import {
 } from '@apm/shared';
 import type { DaemonConfig } from '../config.js';
 import { ApiFailure, type EventBus, type ProfileService } from '../context.js';
+import { profileCacheDirectory } from './profilePaths.js';
 
 export type AdapterRegistry = Readonly<Record<ProviderId, ProviderAdapter>>;
 
 interface ProfileStoreFile {
-  version: 1;
+  version: 2;
   profiles: Profile[];
+  defaultProfileIds: DefaultProfileIds;
+}
+
+interface LoadedProfileStore extends ProfileStoreFile {
+  migrated: boolean;
 }
 
 export function createProfileService(
@@ -26,11 +34,15 @@ export function createProfileService(
   events: EventBus,
   adapterRegistry: AdapterRegistry = defaultAdapters,
 ): ProfileService {
-  let profiles = loadStore(config.profilesFile);
+  const loaded = loadStore(config.profilesFile);
+  let profiles = loaded.profiles;
+  let defaultProfileIds = loaded.defaultProfileIds;
 
   function persist(): void {
-    writeStore(config.profilesFile, { version: 1, profiles });
+    writeStore(config.profilesFile, { version: 2, profiles, defaultProfileIds });
   }
+
+  if (loaded.migrated) persist();
 
   function adapterFor(provider: ProviderId): ProviderAdapter {
     const adapter = adapterRegistry[provider];
@@ -88,6 +100,25 @@ export function createProfileService(
     };
   }
 
+  function isEligible(profile: Profile): boolean {
+    return profile.enabled && profile.status === 'active';
+  }
+
+  function assignFirstDefault(provider: ProviderId): void {
+    if (defaultProfileIds[provider] !== undefined) return;
+    const eligible = profiles.filter(
+      (profile) => profile.provider === provider && isEligible(profile),
+    );
+    const only = eligible.length === 1 ? eligible[0] : undefined;
+    if (only) defaultProfileIds = { ...defaultProfileIds, [provider]: only.id };
+  }
+
+  function clearDefaultFor(profile: Profile): void {
+    if (defaultProfileIds[profile.provider] !== profile.id) return;
+    const { [profile.provider]: _removed, ...rest } = defaultProfileIds;
+    defaultProfileIds = rest;
+  }
+
   function suggestedLabel(provider: ProviderId, identity: ProviderIdentity | null): string {
     const account = identity?.account;
     if (account) {
@@ -109,6 +140,38 @@ export function createProfileService(
 
     get(id) {
       return profiles.find((profile) => profile.id === id) ?? null;
+    },
+
+    defaults() {
+      return { ...defaultProfileIds };
+    },
+
+    setDefault(provider, profileId) {
+      adapterFor(provider);
+      if (profileId === null) {
+        const { [provider]: _removed, ...rest } = defaultProfileIds;
+        defaultProfileIds = rest;
+      } else {
+        const profile = findProfile(profileId);
+        if (profile.provider !== provider) {
+          throw new ApiFailure(
+            400,
+            'provider-mismatch',
+            `Profile ${profileId} does not belong to provider ${provider}`,
+          );
+        }
+        if (!isEligible(profile)) {
+          throw new ApiFailure(
+            409,
+            'profile-unavailable',
+            'The default profile must be active and enabled',
+          );
+        }
+        defaultProfileIds = { ...defaultProfileIds, [provider]: profile.id };
+      }
+      persist();
+      events.emit({ type: 'profiles-changed' });
+      return { ...defaultProfileIds };
     },
 
     providers() {
@@ -148,6 +211,7 @@ export function createProfileService(
         createdAt: new Date().toISOString(),
       };
       profiles = [...profiles, profile];
+      assignFirstDefault(profile.provider);
       persist();
       events.emit({ type: 'profiles-changed' });
       return profile;
@@ -163,6 +227,7 @@ export function createProfileService(
         ...(req.enabled !== undefined ? { enabled: req.enabled } : {}),
       };
       profiles = profiles.map((profile) => (profile.id === id ? updated : profile));
+      if (!isEligible(updated)) clearDefaultFor(updated);
       persist();
       events.emit({ type: 'profiles-changed' });
       return updated;
@@ -183,9 +248,12 @@ export function createProfileService(
         }
         fs.rmSync(profile.home, { recursive: true, force: true });
       }
-      const cachePath = safeChildPath(config.cacheDir, profile.id);
-      if (cachePath) fs.rmSync(cachePath, { recursive: true, force: true });
+      fs.rmSync(profileCacheDirectory(config.cacheDir, profile.id), {
+        recursive: true,
+        force: true,
+      });
       profiles = profiles.filter((candidate) => candidate.id !== id);
+      clearDefaultFor(profile);
       persist();
       events.emit({ type: 'profiles-changed' });
     },
@@ -281,6 +349,7 @@ export function createProfileService(
         statusReason: null,
       };
       profiles = profiles.map((candidate) => (candidate.id === profileId ? updated : candidate));
+      assignFirstDefault(updated.provider);
       persist();
       events.emit({ type: 'profiles-changed' });
       return updated;
@@ -293,8 +362,10 @@ export function createProfileService(
   };
 }
 
-function loadStore(file: string): Profile[] {
-  if (!fs.existsSync(file)) return [];
+function loadStore(file: string): LoadedProfileStore {
+  if (!fs.existsSync(file)) {
+    return { version: 2, profiles: [], defaultProfileIds: {}, migrated: false };
+  }
   let parsed: unknown;
   try {
     parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
@@ -302,12 +373,106 @@ function loadStore(file: string): Profile[] {
     const message = error instanceof Error ? error.message : String(error);
     throw new Error(`Invalid profile store at ${file}: ${message}`);
   }
+  const normalized = normalizePersistedHomes(parsed);
+  parsed = normalized.value;
   const result = profileStoreFileSchema.safeParse(parsed);
   if (!result.success) {
     const issues = result.error.issues.map((issue) => issue.message).join('; ');
     throw new Error(`Invalid profile store at ${file}: ${issues}`);
   }
-  return result.data.profiles;
+  validatePersistedProfileUniqueness(file, result.data.profiles);
+  if (result.data.version === 1) {
+    return {
+      version: 2,
+      profiles: result.data.profiles,
+      defaultProfileIds: inferMigratedDefaults(result.data.profiles),
+      migrated: true,
+    };
+  }
+  validatePersistedDefaults(file, result.data.profiles, result.data.defaultProfileIds);
+  return {
+    version: 2,
+    profiles: result.data.profiles,
+    defaultProfileIds: result.data.defaultProfileIds,
+    migrated: normalized.changed,
+  };
+}
+
+function validatePersistedProfileUniqueness(file: string, profiles: Profile[]): void {
+  for (const [index, profile] of profiles.entries()) {
+    for (let earlierIndex = 0; earlierIndex < index; earlierIndex += 1) {
+      const earlier = profiles[earlierIndex];
+      if (earlier === undefined || earlier.provider !== profile.provider) continue;
+      if (earlier.label.toLocaleLowerCase() === profile.label.toLocaleLowerCase()) {
+        throw new Error(
+          `Invalid profile store at ${file}: profiles[${index}].label duplicates profiles[${earlierIndex}].label for provider ${profile.provider}`,
+        );
+      }
+      if (samePath(earlier.home, profile.home)) {
+        throw new Error(
+          `Invalid profile store at ${file}: profiles[${index}].home duplicates profiles[${earlierIndex}].home for provider ${profile.provider}`,
+        );
+      }
+    }
+  }
+}
+
+/**
+ * Older releases could persist relative homes when APM_DATA_DIR was relative.
+ * Resolve those with the same cwd semantics the old daemon used, but do not
+ * canonicalize absolute/external homes or touch disk until the entire store
+ * has passed validation.
+ */
+function normalizePersistedHomes(value: unknown): { value: unknown; changed: boolean } {
+  if (!isRecord(value) || !Array.isArray(value.profiles)) return { value, changed: false };
+  let changed = false;
+  const profiles = value.profiles.map((candidate) => {
+    if (
+      !isRecord(candidate) ||
+      typeof candidate.home !== 'string' ||
+      candidate.home.trim().length === 0 ||
+      path.isAbsolute(candidate.home)
+    ) {
+      return candidate;
+    }
+    changed = true;
+    return { ...candidate, home: path.resolve(candidate.home) };
+  });
+  return { value: changed ? { ...value, profiles } : value, changed };
+}
+
+function inferMigratedDefaults(profiles: Profile[]): DefaultProfileIds {
+  const defaults: DefaultProfileIds = {};
+  for (const provider of PROVIDER_IDS) {
+    const eligible = profiles.filter(
+      (profile) => profile.provider === provider && profile.enabled && profile.status === 'active',
+    );
+    const only = eligible.length === 1 ? eligible[0] : undefined;
+    if (only) defaults[provider] = only.id;
+  }
+  return defaults;
+}
+
+function validatePersistedDefaults(
+  file: string,
+  profiles: Profile[],
+  defaults: DefaultProfileIds,
+): void {
+  for (const provider of PROVIDER_IDS) {
+    const profileId = defaults[provider];
+    if (profileId === undefined) continue;
+    const profile = profiles.find((candidate) => candidate.id === profileId);
+    if (
+      !profile ||
+      profile.provider !== provider ||
+      !profile.enabled ||
+      profile.status !== 'active'
+    ) {
+      throw new Error(
+        `Invalid profile store at ${file}: default for ${provider} must reference an active, enabled ${provider} profile`,
+      );
+    }
+  }
 }
 
 function writeStore(file: string, store: ProfileStoreFile): void {
@@ -363,11 +528,6 @@ function isChildPath(parent: string, candidate: string): boolean {
   );
 }
 
-function safeChildPath(parent: string, child: string): string | null {
-  const candidate = path.resolve(parent, child);
-  return isChildPath(parent, candidate) ? candidate : null;
-}
-
 function validLabel(input: string): string {
   const label = input.trim();
   if (label.length === 0 || label.length > 64) {
@@ -390,4 +550,8 @@ function safelyDetectIdentity(adapter: ProviderAdapter, home: string): ProviderI
   } catch {
     return null;
   }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }

@@ -16,9 +16,11 @@ Type definitions for every payload live in `packages/shared/src/api.ts`.
 | Method | Path                             | Description                                                     |
 | ------ | -------------------------------- | --------------------------------------------------------------- |
 | GET    | `/api/status`                    | Daemon version, pid, data dir                                   |
-| GET    | `/api/overview`                  | Providers + profiles + latest usage + sessions + T3 instances   |
+| GET    | `/api/overview`                  | Providers + profiles + defaults + usage + sessions + T3         |
 | GET    | `/api/events`                    | SSE stream (`ServerEvent` types)                                |
 | GET    | `/api/profiles`                  | List profiles                                                   |
+| GET    | `/api/defaults`                  | Current provider defaults (`DefaultsResponse`)                  |
+| PUT    | `/api/defaults/:provider`        | Set/clear a default (`{profileId: string \| null}`)             |
 | POST   | `/api/profiles`                  | Adopt an existing home as a profile (`CreateProfileRequest`)    |
 | PATCH  | `/api/profiles/:id`              | Rename / enable / disable                                       |
 | DELETE | `/api/profiles/:id?purge=`       | Remove profile; `purge=true` also deletes managed homes         |
@@ -61,3 +63,18 @@ out. Closing the socket detaches without killing the PTY.
 `usage-updated` (with snapshot), `profiles-changed`, `sessions-changed`
 (with session list), `t3-changed` (with instance list). Clients refetch
 `/api/overview` on `profiles-changed`.
+
+## Provider defaults
+
+`defaultProfileIds` is a partial map keyed by `claude` and `codex`. A missing
+key means there is no default; clients must not pick another profile on the
+user's behalf. `PUT /api/defaults/:provider` accepts an active, enabled profile
+of that same provider or `null` to clear the key. Disabling or deleting the
+selected profile clears it. These mutations emit `profiles-changed`.
+
+Profile ids use the same opaque public rule as the CLI contract: preserve the
+exact string, require nonblank content after trimming, reject Unicode `Cc`
+control characters, and limit the UTF-8 representation to 256 bytes. Other
+Unicode, punctuation, slashes, and edge/interior whitespace are allowed and do
+not give an id path or shell semantics. The rule applies to profile/default ids
+and API request fields that reference profiles.

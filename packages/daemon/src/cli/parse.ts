@@ -13,11 +13,12 @@ import { isProviderId, PROVIDER_IDS, type ProviderId } from '@apm/shared';
 export class CliError extends Error {}
 
 export const USAGE =
-  `usage: apm [start|profile|run|attach|sessions|status|url|stop]\n` +
+  `usage: apm [start|profile|profiles|run|attach|sessions|status|url|stop]\n` +
   `  apm [start] [--port N] [--no-open] [--foreground]   start or reuse the daemon, open the UI\n` +
   `  apm url                                             print the authenticated URL, open nothing\n` +
   `  apm profile add <claude|codex> [--label <label>] [--new] [-- login-args...]\n` +
   `                                                      log in to a fresh managed profile\n` +
+  `  apm profiles [--json] [--refresh]                   list profiles and provider defaults\n` +
   `  apm run [--target <target>] <profile> <app> [args...]\n` +
   `                                                      run an app bound to a profile\n` +
   `  apm attach <session>                                attach to a running session\n` +
@@ -30,6 +31,7 @@ const COMMANDS = new Set([
   '__target-agent',
   'profile',
   'run',
+  'profiles',
   'attach',
   'sessions',
   'status',
@@ -66,6 +68,23 @@ export interface RunInvocation {
   profile: string;
   app: string;
   args: string[];
+}
+
+export interface ProfilesInvocation {
+  json: boolean;
+  refresh: boolean;
+}
+
+const PROFILES_USAGE = 'usage: apm profiles [--json] [--refresh]';
+
+export function parseProfilesArgv(argv: string[]): ProfilesInvocation {
+  const invocation: ProfilesInvocation = { json: false, refresh: false };
+  for (const arg of argv) {
+    if (arg === '--json') invocation.json = true;
+    else if (arg === '--refresh') invocation.refresh = true;
+    else throw new CliError(`unknown profiles option: ${arg}\n${PROFILES_USAGE}`);
+  }
+  return invocation;
 }
 
 const RUN_USAGE = 'usage: apm run [--target <target>] <profile> <app> [args...]';

@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import type { Profile } from '@apm/shared';
-import { CliError, parseCommand, parseProfileArgv, parseRunArgv, resolveProfile } from './parse.js';
+import {
+  CliError,
+  parseCommand,
+  parseProfileArgv,
+  parseProfilesArgv,
+  parseRunArgv,
+  resolveProfile,
+} from './parse.js';
 
 function makeProfile(overrides: Partial<Profile> = {}): Profile {
   return {
@@ -188,6 +195,10 @@ describe('parseCommand', () => {
       command: 'run',
       argv: ['work', 'claude'],
     });
+    expect(parseCommand(['profiles', '--json'])).toEqual({
+      command: 'profiles',
+      argv: ['--json'],
+    });
     expect(parseCommand(['url'])).toEqual({ command: 'url', argv: [] });
     expect(parseCommand(['status'])).toEqual({ command: 'status', argv: [] });
   });
@@ -202,5 +213,18 @@ describe('parseCommand', () => {
     expect(() => parseCommand(['nope'])).toThrow(CliError);
     expect(() => parseCommand(['nope'])).toThrow(/unknown command: nope/);
     expect(() => parseCommand(['nope'])).toThrow(/apm url/);
+  });
+});
+
+describe('parseProfilesArgv', () => {
+  it('accepts the output and refresh flags in either order', () => {
+    expect(parseProfilesArgv([])).toEqual({ json: false, refresh: false });
+    expect(parseProfilesArgv(['--json', '--refresh'])).toEqual({ json: true, refresh: true });
+    expect(parseProfilesArgv(['--refresh', '--json'])).toEqual({ json: true, refresh: true });
+  });
+
+  it('rejects unknown flags and positionals', () => {
+    expect(() => parseProfilesArgv(['--pretty'])).toThrow(/unknown profiles option/);
+    expect(() => parseProfilesArgv(['work'])).toThrow(/usage: apm profiles/);
   });
 });
