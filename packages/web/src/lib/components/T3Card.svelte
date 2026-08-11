@@ -83,9 +83,7 @@
     try {
       const updated =
         action === 'start' ? await api.startT3(instance.id) : await api.stopT3(instance.id);
-      if (updated && typeof updated.id === 'string') {
-        app.t3Instances = app.t3Instances.map((item) => (item.id === updated.id ? updated : item));
-      }
+      app.t3Instances = app.t3Instances.map((item) => (item.id === updated.id ? updated : item));
     } catch (error) {
       toastError(
         error,

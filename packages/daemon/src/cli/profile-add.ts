@@ -21,7 +21,6 @@ import { CliError, type ProfileAddInvocation } from './parse.js';
 export class ApiRequestError extends Error {
   constructor(
     message: string,
-    readonly status: number,
     readonly code: string | null,
   ) {
     super(message);

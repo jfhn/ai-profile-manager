@@ -1,6 +1,6 @@
 <script lang="ts">
   import { api } from '../api';
-  import { app, refreshAll } from '../stores.svelte';
+  import { refreshAll } from '../stores.svelte';
   import type { ProfileView } from '../runway';
   import { timeAgo, timeUntil, timeUntilFrom, absolute } from '../time.svelte';
   import { toast, toastError } from '../toasts.svelte';
@@ -51,12 +51,7 @@
     if (refreshing) return;
     refreshing = true;
     try {
-      const fresh = await api.refreshProfile(profile.id);
-      // The daemon also broadcasts usage-updated; patch eagerly when it answers
-      // with the snapshot so the card settles immediately.
-      if (fresh && Array.isArray(fresh.windows)) {
-        app.usage = { ...app.usage, [profile.id]: fresh };
-      }
+      await api.refreshProfile(profile.id);
     } catch (error) {
       toastError(error, `Could not refresh ${profile.label}`);
     } finally {

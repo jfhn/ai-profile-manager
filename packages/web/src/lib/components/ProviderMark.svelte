@@ -4,10 +4,9 @@
 
   interface Props {
     provider: ProviderId;
-    size?: number;
   }
 
-  let { provider, size = 18 }: Props = $props();
+  let { provider }: Props = $props();
 
   const INITIALS: Record<string, string> = { claude: 'A', codex: 'C' };
 
@@ -15,19 +14,17 @@
   const initial = $derived(INITIALS[provider] ?? label.charAt(0).toUpperCase());
 </script>
 
-<span
-  class="mark {provider}"
-  style="width: {size}px; height: {size}px; font-size: {Math.round(size * 0.55)}px"
-  title={label}
-  aria-hidden="true">{initial}</span
->
+<span class="mark {provider}" title={label} aria-hidden="true">{initial}</span>
 
 <style>
   .mark {
     display: grid;
     place-items: center;
     flex: none;
+    width: 18px;
+    height: 18px;
     border-radius: var(--radius-sm);
+    font-size: 10px;
     font-weight: 700;
     line-height: 1;
     color: #ffffff;

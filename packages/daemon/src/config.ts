@@ -34,7 +34,6 @@ export interface RunFileData {
   host: string;
   port: number;
   token: string;
-  startedAt: string;
   url: string;
 }
 
@@ -91,7 +90,6 @@ export function writeRunFile(config: DaemonConfig): void {
     host: config.host,
     port: config.port,
     token: config.token,
-    startedAt: new Date().toISOString(),
     url: `http://${config.host}:${config.port}/?token=${config.token}`,
   };
   fs.writeFileSync(config.runFile, JSON.stringify(data, null, 2) + '\n', { mode: 0o600 });

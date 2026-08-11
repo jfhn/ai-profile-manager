@@ -84,9 +84,7 @@
     busy = true;
     try {
       const instance = await api.createT3(body);
-      if (instance && typeof instance.id === 'string') {
-        app.t3Instances = [...app.t3Instances, instance];
-      }
+      app.t3Instances = [...app.t3Instances, instance];
       toast('Instance created', 'Start it when you need it — each one is a full T3 server.');
       onclose();
     } catch (error) {

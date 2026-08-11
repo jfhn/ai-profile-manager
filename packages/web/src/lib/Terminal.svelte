@@ -10,11 +10,9 @@
 
   interface Props {
     sessionId: string;
-    /** Fired when the daemon reports the PTY has exited. */
-    onexit?: (exitCode: number | null) => void;
   }
 
-  let { sessionId, onexit }: Props = $props();
+  let { sessionId }: Props = $props();
 
   // xterm parses these itself, so the CSS tokens can't be used directly; the
   // surface colors mirror --card / --primary from app.css per scheme.
@@ -148,7 +146,6 @@
             break;
           case 'exit':
             exited = { code: message.exitCode };
-            onexit?.(message.exitCode);
             break;
           case 'error':
             instance.write(`\r\n\u001b[31m[apm] ${message.message}\u001b[0m\r\n`);

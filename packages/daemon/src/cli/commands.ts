@@ -501,7 +501,6 @@ async function apiRequest<T>(
     const apiError = payload as ApiError | null;
     throw new ApiRequestError(
       apiError?.error?.message ?? `${method} ${endpoint} failed with ${response.status}`,
-      response.status,
       apiError?.error?.code ?? null,
     );
   }
