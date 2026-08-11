@@ -13,6 +13,7 @@ import ProfileCard from './ProfileCard.svelte';
 const mocks = vi.hoisted(() => ({
   daemon: null as unknown as FakeDaemon,
   refreshedProfiles: [] as string[],
+  setDefault: null as unknown as ReturnType<typeof vi.fn>,
 }));
 
 // The card pulls in the real api module transitively (via stores and toasts),
@@ -31,6 +32,8 @@ vi.mock('../api', () => ({
     refreshProfile: async (id: string) => {
       mocks.refreshedProfiles.push(id);
     },
+    setDefault: (provider: string, body: { profileId: string | null }) =>
+      mocks.setDefault(provider, body),
     overview: async () => ({
       providers: [],
       profiles: mocks.daemon.profiles,
@@ -53,7 +56,11 @@ beforeEach(() => {
   vi.useFakeTimers({ shouldAdvanceTime: true });
   mocks.daemon = new FakeDaemon();
   mocks.refreshedProfiles = [];
+  mocks.setDefault = vi.fn(async (provider: string, body: { profileId: string | null }) => ({
+    defaultProfileIds: { [provider]: body.profileId },
+  }));
   app.usage = {};
+  app.defaultProfileIds = {};
   // Seeded first so the profile under test is neither the only pending one nor
   // the first id the fake hands out. A card that resumed a hard-coded or
   // otherwise wrong profile would now talk to the decoy and fail.
@@ -142,6 +149,57 @@ describe('ProfileCard: resuming a pending profile', () => {
     await waitFor(() => expect(screen.queryByText(loginCommand(pending))).toBeNull());
     expect(mocks.daemon.deleted).toEqual([]);
     expect(mocks.daemon.profile(pending.id)?.status).toBe('pending');
+  });
+});
+
+describe('ProfileCard: the default star', () => {
+  it('renders the filled, inert "Default" star on the default profile', async () => {
+    const active: Profile = { ...pending, status: 'active', label: 'work' };
+    app.defaultProfileIds = { claude: active.id };
+    renderCard(active);
+
+    const star = screen.getByRole('button', { name: 'Default' });
+    expect(star.getAttribute('aria-pressed')).toBe('true');
+
+    // Clicking the active star is a no-op: there is no path to "no default".
+    await fireEvent.click(star);
+    expect(mocks.setDefault).not.toHaveBeenCalled();
+    expect(app.defaultProfileIds).toEqual({ claude: active.id });
+  });
+
+  it('moves the default here when a "Set default" star is clicked', async () => {
+    const active: Profile = { ...pending, status: 'active', label: 'work' };
+    app.defaultProfileIds = { claude: 'some-other-profile' };
+    renderCard(active);
+
+    const star = screen.getByRole('button', { name: 'Set default' });
+    expect(star.getAttribute('aria-pressed')).toBe('false');
+
+    await fireEvent.click(star);
+    await waitFor(() =>
+      expect(mocks.setDefault).toHaveBeenCalledWith('claude', { profileId: active.id }),
+    );
+    expect(app.defaultProfileIds).toEqual({ claude: active.id });
+    expect(screen.getByRole('button', { name: 'Default' })).toBeDefined();
+  });
+
+  it('keeps the previous default and surfaces a toast when the daemon refuses', async () => {
+    mocks.setDefault.mockRejectedValueOnce(new Error('offline'));
+    const active: Profile = { ...pending, status: 'active', label: 'work' };
+    app.defaultProfileIds = { claude: 'some-other-profile' };
+    renderCard(active);
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Set default' }));
+
+    await waitFor(() => expect(mocks.setDefault).toHaveBeenCalled());
+    expect(app.defaultProfileIds).toEqual({ claude: 'some-other-profile' });
+    expect(screen.getByRole('button', { name: 'Set default' })).toBeDefined();
+  });
+
+  it('carries no star on profiles the daemon would reject as default', () => {
+    renderCard(pending);
+    expect(screen.queryByRole('button', { name: 'Set default' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Default' })).toBeNull();
   });
 });
 

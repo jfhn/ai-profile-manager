@@ -1,6 +1,6 @@
 <script lang="ts">
   import { api } from '../api';
-  import { refreshAll } from '../stores.svelte';
+  import { app, refreshAll } from '../stores.svelte';
   import type { ProfileView } from '../runway';
   import { timeAgo, timeUntil, timeUntilFrom, absolute } from '../time.svelte';
   import { toast, toastError } from '../toasts.svelte';
@@ -46,6 +46,26 @@
   const retryIn = $derived(
     snapshot ? timeUntilFrom(snapshot.fetchedAt, snapshot.retryAfterSeconds) : null,
   );
+
+  const isDefault = $derived(app.defaultProfileIds[profile.provider] === profile.id);
+  /** Only launchable profiles carry the star — the daemon rejects the rest. */
+  const starrable = $derived(profile.enabled && profile.status === 'active');
+  let settingDefault = $state(false);
+
+  async function makeDefault(): Promise<void> {
+    // There is always exactly one default per provider, so the active star is
+    // inert rather than a toggle back to "no default".
+    if (isDefault || settingDefault) return;
+    settingDefault = true;
+    try {
+      const result = await api.setDefault(profile.provider, { profileId: profile.id });
+      app.defaultProfileIds = result.defaultProfileIds;
+    } catch (error) {
+      toastError(error, `Could not make ${profile.label} the default`);
+    } finally {
+      settingDefault = false;
+    }
+  }
 
   async function refresh(): Promise<void> {
     if (refreshing) return;
@@ -128,7 +148,11 @@
   ]);
 </script>
 
-<article class="card" class:disabled={!profile.enabled}>
+<article
+  class="card {profile.provider}"
+  class:disabled={!profile.enabled}
+  class:is-default={isDefault}
+>
   <div class="head">
     <StatusDot
       tone={view.tone}
@@ -142,6 +166,34 @@
     {#if !profile.enabled}<Badge>disabled</Badge>{/if}
     {#if profile.status === 'pending'}<Badge tone="warning">pending</Badge>{/if}
     <div class="spacer"></div>
+    {#if starrable}
+      <button
+        class="star"
+        class:active={isDefault}
+        type="button"
+        aria-pressed={isDefault}
+        title={isDefault
+          ? `Default profile for ${app.providerLabel(profile.provider)}`
+          : `Make this the default for ${app.providerLabel(profile.provider)}`}
+        onclick={() => void makeDefault()}
+      >
+        <svg
+          class="star-outline"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.8"
+          stroke-linejoin="round"
+          aria-hidden="true"
+        >
+          <path d="M12 2.5l2.9 6 6.6.9-4.8 4.6 1.2 6.5L12 17.4 6.1 20.5l1.2-6.5L2.5 9.4l6.6-.9z" />
+        </svg>
+        <svg class="star-filled" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+          <path d="M12 2.5l2.9 6 6.6.9-4.8 4.6 1.2 6.5L12 17.4 6.1 20.5l1.2-6.5L2.5 9.4l6.6-.9z" />
+        </svg>
+        <span>{isDefault ? 'Default' : 'Set default'}</span>
+      </button>
+    {/if}
     <IconButton
       icon="refresh"
       label={`Refresh usage for ${profile.label}`}
@@ -320,8 +372,84 @@
     border-color: var(--border-hover);
   }
 
+  .card.claude {
+    --pcolor: var(--claude);
+  }
+
+  .card.codex {
+    --pcolor: var(--codex);
+  }
+
+  /* The default card gets a subtle provider-tinted ring so it reads at a glance. */
+  .card.is-default {
+    border-color: color-mix(in oklab, var(--pcolor) 45%, transparent);
+  }
+
+  .card.is-default:hover {
+    border-color: color-mix(in oklab, var(--pcolor) 60%, transparent);
+  }
+
   .card.disabled {
     opacity: 0.55;
+  }
+
+  /* The star is both indicator and control: filled + tinted on the default,
+     dim outline on the others. Clicking a dim one moves the default here;
+     the active one is inert (there is always exactly one default). */
+  .star {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    flex: none;
+    padding: 2px 8px 2px 6px;
+    border: 0;
+    border-radius: 999px;
+    background: transparent;
+    color: var(--muted-fg);
+    font: inherit;
+    font-size: 10.5px;
+    font-weight: 500;
+    cursor: pointer;
+    opacity: 0.55;
+    transition:
+      opacity 120ms ease,
+      color 120ms ease,
+      background 120ms ease;
+  }
+
+  .star svg {
+    width: 12px;
+    height: 12px;
+    flex: none;
+  }
+
+  .star .star-filled {
+    display: none;
+  }
+
+  .star:hover {
+    opacity: 1;
+    color: var(--fg);
+    background: var(--hover);
+  }
+
+  .star.active {
+    opacity: 1;
+    cursor: default;
+    background: color-mix(in oklab, var(--pcolor) 16%, transparent);
+    color: color-mix(in oklab, var(--pcolor) 78%, var(--tint-contrast));
+  }
+
+  .star.active:hover {
+    background: color-mix(in oklab, var(--pcolor) 16%, transparent);
+  }
+
+  .star.active .star-outline {
+    display: none;
+  }
+
+  .star.active .star-filled {
+    display: block;
   }
 
   .head {
