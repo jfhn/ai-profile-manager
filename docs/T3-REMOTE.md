@@ -127,6 +127,9 @@ base directory and `--ttl 15m`. It replaces T3's localhost origin in the
 pairing URL with the real published endpoint, so the URL printed in this
 terminal is the one another tailnet device should open.
 
+Process discovery requires Linux `/proc`; Linux and WSL are the supported
+target contexts for `apm pair`. The command fails closed on other platforms.
+
 With one running managed instance, selection is automatic. With several,
 `apm pair` refuses to guess, lists their ids and ports, and asks for an exact
 id:

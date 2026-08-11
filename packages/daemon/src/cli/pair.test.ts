@@ -151,9 +151,14 @@ describe('managed process recognition', () => {
     ).toBeNull();
   });
 
-  it('reads NUL-delimited argv from a proc-like tree and ignores malformed entries', () => {
+  it('opens proc files in least-privilege order and fails closed', () => {
     const procDir = fs.mkdtempSync(path.join(os.tmpdir(), 'apm-pair-proc-'));
     tempDirs.push(procDir);
+    const opened: string[] = [];
+    const readFile = (file: string): Buffer => {
+      opened.push(path.relative(procDir, file));
+      return fs.readFileSync(file);
+    };
     writeProcCandidate(
       procDir,
       101,
@@ -161,14 +166,8 @@ describe('managed process recognition', () => {
       UID,
       INSTANCE.instanceId,
     );
-    // Right argv shape, but a generic process with no APM launch marker.
-    writeProcCandidate(
-      procDir,
-      102,
-      ['python', 'serve', '--port', '4801', '--base-dir', path.join(T3_DIR, 'not-t3')],
-      UID,
-      null,
-    );
+    // Same-user non-candidate argv: its readable environment stays untouched.
+    writeProcCandidate(procDir, 102, ['python', 'worker', '--token', 'argv-secret'], UID, null);
     // A marker does not override the target-user ownership boundary.
     writeProcCandidate(
       procDir,
@@ -191,9 +190,23 @@ describe('managed process recognition', () => {
       path.join(procDir, '105', 'cmdline'),
       ['t3', 'serve', '--port', '4804', '--base-dir', path.join(T3_DIR, 'unattributed')].join('\0'),
     );
+    // Viable same-user shape with a missing marker must inspect environ, then reject.
+    writeProcCandidate(
+      procDir,
+      106,
+      ['t3', 'serve', '--port', '4805', '--base-dir', path.join(T3_DIR, 'missing-marker')],
+      UID,
+      null,
+    );
     fs.mkdirSync(path.join(procDir, 'self'));
 
-    expect(discoverManagedT3Processes(T3_DIR, procDir, OWNER)).toEqual([INSTANCE]);
+    expect(discoverManagedT3Processes(T3_DIR, procDir, OWNER, readFile)).toEqual([INSTANCE]);
+    expect(opensFor(opened, 101)).toEqual(['status', 'cmdline', 'environ']);
+    expect(opensFor(opened, 102)).toEqual(['status', 'cmdline']);
+    expect(opensFor(opened, 103)).toEqual(['status']);
+    expect(opensFor(opened, 104)).toEqual(['status', 'cmdline', 'environ']);
+    expect(opensFor(opened, 105)).toEqual(['status']);
+    expect(opensFor(opened, 106)).toEqual(['status', 'cmdline', 'environ']);
   });
 });
 
@@ -476,6 +489,11 @@ function writeProcCandidate(
     path.join(processDir, 'environ'),
     `PATH=/bin\0${marker === null ? '' : `${APM_MANAGED_T3_INSTANCE_ENV}=${marker}\0`}`,
   );
+}
+
+function opensFor(opened: string[], pid: number): string[] {
+  const prefix = `${pid}${path.sep}`;
+  return opened.filter((file) => file.startsWith(prefix)).map((file) => file.slice(prefix.length));
 }
 
 function allFileText(root: string): string {

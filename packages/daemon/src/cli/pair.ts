@@ -33,6 +33,8 @@ export interface ProcessAttribution {
 
 export type ProcessOwner = Pick<ProcessAttribution, 'realUid' | 'effectiveUid'>;
 
+export type ProcFileReader = (file: string) => Buffer;
+
 export interface PairProcessResult {
   exitCode: number | null;
   signal: NodeJS.Signals | null;
@@ -137,6 +139,7 @@ export function discoverManagedT3Processes(
   t3Dir: string,
   procDir = '/proc',
   invokingUser = currentProcessOwner(),
+  readFile: ProcFileReader = (file) => fs.readFileSync(file),
 ): ManagedT3Process[] {
   if (invokingUser === null) {
     throw new CliError(
@@ -153,21 +156,32 @@ export function discoverManagedT3Processes(
   const found: ManagedT3Process[] = [];
   for (const entry of entries) {
     if (!entry.isDirectory() || !/^\d+$/.test(entry.name)) continue;
+    const processDir = path.join(procDir, entry.name);
     try {
-      const argv = fs
-        .readFileSync(path.join(procDir, entry.name, 'cmdline'))
+      // Ownership is the cheapest non-secret boundary. Never inspect argv or
+      // environment from a process belonging to another user.
+      const owner = readProcessOwner(processDir, readFile);
+      if (
+        owner === null ||
+        owner.realUid !== invokingUser.realUid ||
+        owner.effectiveUid !== invokingUser.effectiveUid
+      ) {
+        continue;
+      }
+
+      // Command lines can themselves carry secrets. Read one only after UID
+      // acceptance, and reject unrelated shapes before touching environ.
+      const argv = readFile(path.join(processDir, 'cmdline'))
         .toString('utf8')
         .split('\0')
         .filter((arg) => arg.length > 0);
-      const attribution = readProcessAttribution(path.join(procDir, entry.name));
-      const process = managedT3ProcessFromArgv(
-        Number(entry.name),
-        argv,
-        t3Dir,
-        attribution,
-        invokingUser,
-      );
-      if (process) found.push(process);
+      const candidate = managedT3CandidateFromArgv(Number(entry.name), argv, t3Dir);
+      if (!candidate) continue;
+
+      // Environments routinely hold credentials. This is intentionally the
+      // last read, limited to a same-user, exact managed-shaped candidate.
+      const marker = readProcessMarker(processDir, readFile);
+      if (marker === candidate.instanceId) found.push(candidate);
     } catch {
       // Processes routinely exit or become unreadable while /proc is scanned.
     }
@@ -190,6 +204,17 @@ export function managedT3ProcessFromArgv(
   ) {
     return null;
   }
+  const candidate = managedT3CandidateFromArgv(pid, argv, t3Dir);
+  if (!candidate || attribution.instanceMarker !== candidate.instanceId) return null;
+  return candidate;
+}
+
+/** Parse only the exact non-secret argv shape APM launches for a managed instance. */
+function managedT3CandidateFromArgv(
+  pid: number,
+  argv: readonly string[],
+  t3Dir: string,
+): ManagedT3Process | null {
   const serve = argv.indexOf('serve');
   if (serve < 0) return null;
   const baseDirs = optionValues(argv.slice(serve + 1), '--base-dir');
@@ -200,7 +225,6 @@ export function managedT3ProcessFromArgv(
   const baseDir = path.resolve(baseDirs[0] as string);
   const instanceId = path.basename(baseDir);
   if (instanceId === '' || path.dirname(baseDir) !== managedRoot) return null;
-  if (attribution.instanceMarker !== instanceId) return null;
 
   const port = Number(ports[0]);
   if (!Number.isInteger(port) || port < 1 || port > 65_535) return null;
@@ -213,22 +237,25 @@ function currentProcessOwner(): ProcessOwner | null {
   return realUid === undefined || effectiveUid === undefined ? null : { realUid, effectiveUid };
 }
 
-/** Read ownership + the explicit APM launch marker, failing closed on either. */
-function readProcessAttribution(processDir: string): ProcessAttribution | null {
-  const status = fs.readFileSync(path.join(processDir, 'status'), 'utf8');
+/** Read only the real/effective UID fields from non-secret proc status. */
+function readProcessOwner(processDir: string, readFile: ProcFileReader): ProcessOwner | null {
+  const status = readFile(path.join(processDir, 'status')).toString('utf8');
   const uid = /^Uid:\s+(\d+)\s+(\d+)(?:\s|$)/m.exec(status);
   if (!uid?.[1] || !uid[2]) return null;
   const realUid = Number(uid[1]);
   const effectiveUid = Number(uid[2]);
   if (!Number.isSafeInteger(realUid) || !Number.isSafeInteger(effectiveUid)) return null;
+  return { realUid, effectiveUid };
+}
 
-  const entries = fs.readFileSync(path.join(processDir, 'environ')).toString('utf8').split('\0');
+/** Extract the one allowed marker only after owner + argv candidate validation. */
+function readProcessMarker(processDir: string, readFile: ProcFileReader): string | null {
+  const entries = readFile(path.join(processDir, 'environ')).toString('utf8').split('\0');
   const prefix = `${APM_MANAGED_T3_INSTANCE_ENV}=`;
   const markers = entries.filter((entry) => entry.startsWith(prefix));
   if (markers.length !== 1) return null;
   const instanceMarker = (markers[0] as string).slice(prefix.length);
-  if (instanceMarker === '') return null;
-  return { realUid, effectiveUid, instanceMarker };
+  return instanceMarker === '' ? null : instanceMarker;
 }
 
 /** Match the selected backend to the same published URL the hub exposed. */
