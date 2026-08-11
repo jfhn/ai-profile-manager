@@ -15,6 +15,7 @@ import {
   rateLimitRoot,
   readString,
   safeReason,
+  toNumber,
 } from '../normalize.js';
 
 const CACHE_FRESH_MS = 10 * 60 * 1000;
@@ -23,6 +24,12 @@ const OAUTH_COOLDOWN_MS = 5 * 60 * 1000;
 const CREDENTIAL_SKEW_MS = 60 * 1000;
 const STALE_MS = 24 * 60 * 60 * 1000;
 const FABLE_MAX_BYTES = 16 * 1024;
+const OAUTH_TOKEN_URL = 'https://console.anthropic.com/v1/oauth/token';
+/**
+ * Public OAuth client id embedded in the Claude Code CLI. Refreshing with the
+ * CLI's own id keeps the rotated tokens valid for the CLI that shares the home.
+ */
+const OAUTH_CLIENT_ID = '9d1c250a-e61b-44d9-88ed-5944d1962f5e';
 
 export const claudeAdapter: ProviderAdapter = {
   provider: 'claude',
@@ -33,7 +40,7 @@ export const claudeAdapter: ProviderAdapter = {
     identity: true,
     windows: ['five_hour', 'weekly', 'fable_weekly'],
     notes:
-      'OAuth endpoint is undocumented; per-profile usage is only available via OAuth, while global caches are used only for the default home.',
+      'OAuth endpoints are undocumented; per-profile usage is only available via OAuth, expired access tokens are refreshed in place with the CLI client id, and global caches are used only for the default home.',
   },
   hasCredentials: (home) =>
     Boolean(oauthCredentials(readJsonSync(path.join(home, '.credentials.json')))?.token),
@@ -480,34 +487,69 @@ async function fetchOauth(
       usage: null,
       reason: 'Claude OAuth credentials are missing; run claude auth login or start Claude Code',
     };
-  if (credentials.expiresMs !== null && credentials.expiresMs <= nowMs + 30_000)
-    return {
-      usage: null,
-      reason: 'Claude OAuth access token is expired; run claude auth login or start Claude Code',
-    };
+  let token = credentials.token;
+  let refreshed = false;
+  if (credentials.expiresMs !== null && credentials.expiresMs <= nowMs + 30_000) {
+    if (!credentials.refreshToken || !ctx.allowNetwork)
+      return {
+        usage: null,
+        reason: 'Claude OAuth access token is expired; run claude auth login or start Claude Code',
+      };
+    const refresh = await refreshOauthToken(
+      ctx,
+      { token: credentials.token, refreshToken: credentials.refreshToken },
+      nowMs,
+    );
+    if (refresh.token === null) return { usage: null, reason: refresh.reason };
+    token = refresh.token;
+    refreshed = true;
+  }
+  let attempt = await fetchOauthUsage(ctx, token);
+  // A rejected token that still looked valid on disk was likely revoked by a
+  // refresh elsewhere; one refresh-and-retry recovers without waiting for the
+  // real CLI to rewrite the credentials file.
+  if (attempt.unauthorized && !refreshed && credentials.refreshToken && ctx.allowNetwork) {
+    const refresh = await refreshOauthToken(
+      ctx,
+      { token: credentials.token, refreshToken: credentials.refreshToken },
+      nowMs,
+    );
+    if (refresh.token === null) return { usage: null, reason: refresh.reason };
+    attempt = await fetchOauthUsage(ctx, refresh.token);
+  }
+  return { usage: attempt.usage, reason: attempt.reason };
+}
+
+async function fetchOauthUsage(
+  ctx: CollectContext,
+  token: string,
+): Promise<{ usage: unknown | null; reason: string | null; unauthorized: boolean }> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 8_000);
   try {
     const response = await (ctx.fetchImpl ?? fetch)('https://api.anthropic.com/api/oauth/usage', {
       method: 'GET',
       headers: {
-        Authorization: `Bearer ${credentials.token}`,
+        Authorization: `Bearer ${token}`,
         'anthropic-beta': 'oauth-2025-04-20',
       },
       signal: controller.signal,
     });
-    if (!response.ok)
+    if (!response.ok) {
+      const unauthorized = response.status === 401 || response.status === 403;
       return {
         usage: null,
-        reason:
-          response.status === 401 || response.status === 403
-            ? 'Claude OAuth usage endpoint rejected credentials; run claude auth login or start Claude Code'
-            : `Claude OAuth usage endpoint returned HTTP ${response.status}`,
+        unauthorized,
+        reason: unauthorized
+          ? 'Claude OAuth usage endpoint rejected credentials; run claude auth login or start Claude Code'
+          : `Claude OAuth usage endpoint returned HTTP ${response.status}`,
       };
-    return { usage: await response.json(), reason: null };
+    }
+    return { usage: await response.json(), reason: null, unauthorized: false };
   } catch (error) {
     return {
       usage: null,
+      unauthorized: false,
       reason: safeReason(
         error instanceof Error && error.name === 'AbortError'
           ? 'Claude OAuth usage endpoint timed out'
@@ -519,6 +561,133 @@ async function fetchOauth(
   } finally {
     clearTimeout(timeout);
   }
+}
+
+type RefreshOutcome = { token: string; reason: null } | { token: null; reason: string };
+
+const refreshInFlight = new Map<string, Promise<RefreshOutcome>>();
+
+/**
+ * Refresh an expired access token with the CLI's own client id and write the
+ * result back to `.credentials.json`. Refreshes are serialized per home so
+ * concurrent collections cannot double-refresh — a rotated refresh token would
+ * invalidate whichever request lost the race.
+ */
+function refreshOauthToken(
+  ctx: CollectContext,
+  credentials: { token: string; refreshToken: string },
+  nowMs: number,
+): Promise<RefreshOutcome> {
+  const key = path.resolve(ctx.home);
+  const existing = refreshInFlight.get(key);
+  if (existing) return existing;
+  const pending = requestOauthRefresh(ctx, credentials, nowMs).finally(() =>
+    refreshInFlight.delete(key),
+  );
+  refreshInFlight.set(key, pending);
+  return pending;
+}
+
+async function requestOauthRefresh(
+  ctx: CollectContext,
+  credentials: { token: string; refreshToken: string },
+  nowMs: number,
+): Promise<RefreshOutcome> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 8_000);
+  try {
+    const response = await (ctx.fetchImpl ?? fetch)(OAUTH_TOKEN_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        grant_type: 'refresh_token',
+        refresh_token: credentials.refreshToken,
+        client_id: OAUTH_CLIENT_ID,
+      }),
+      signal: controller.signal,
+    });
+    // Error bodies may echo token material, so only the status is reported.
+    if (!response.ok)
+      return {
+        token: null,
+        reason:
+          response.status === 400 || response.status === 401 || response.status === 403
+            ? 'Claude OAuth token refresh was rejected; run claude auth login or start Claude Code'
+            : `Claude OAuth refresh endpoint returned HTTP ${response.status}`,
+      };
+    const data: unknown = await response.json();
+    const accessToken = readString(isRecord(data) ? data.access_token : null);
+    if (!accessToken)
+      return {
+        token: null,
+        reason: 'Claude OAuth refresh endpoint returned an unreadable response',
+      };
+    const expiresIn = toNumber(isRecord(data) ? data.expires_in : null);
+    const token = await writeRefreshedCredentials(ctx.home, credentials, {
+      accessToken,
+      refreshToken: readString(isRecord(data) ? data.refresh_token : null),
+      expiresAtMs: expiresIn !== null && expiresIn > 0 ? nowMs + expiresIn * 1000 : null,
+    });
+    return { token, reason: null };
+  } catch (error) {
+    return {
+      token: null,
+      reason: safeReason(
+        error instanceof Error && error.name === 'AbortError'
+          ? 'Claude OAuth token refresh timed out'
+          : error instanceof Error
+            ? error.message
+            : error,
+      ),
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+/**
+ * Persist a refreshed token, preserving every other field in the file and in
+ * `claudeAiOauth`. When the on-disk tokens changed since the refresh started
+ * (a live CLI sharing the home refreshed first), the write is aborted and the
+ * newer on-disk token wins. Returns the access token the caller should use.
+ */
+async function writeRefreshedCredentials(
+  home: string,
+  previous: { token: string; refreshToken: string },
+  next: { accessToken: string; refreshToken: string | null; expiresAtMs: number | null },
+): Promise<string> {
+  const file = path.join(home, '.credentials.json');
+  const onDisk = readJsonSync(file);
+  const record = isRecord(onDisk) ? onDisk : {};
+  const oauth = isRecord(record.claudeAiOauth) ? record.claudeAiOauth : null;
+  if (
+    readString(oauth?.accessToken) !== previous.token ||
+    readString(oauth?.refreshToken) !== previous.refreshToken
+  ) {
+    return readString(oauth?.accessToken) ?? next.accessToken;
+  }
+  const updated = {
+    ...record,
+    claudeAiOauth: {
+      ...(oauth ?? {}),
+      accessToken: next.accessToken,
+      ...(next.refreshToken ? { refreshToken: next.refreshToken } : {}),
+      // The real CLI stores expiresAt as epoch milliseconds; match it.
+      ...(next.expiresAtMs !== null ? { expiresAt: next.expiresAtMs } : {}),
+    },
+  };
+  // Atomic replace: a crash mid-write must never leave a partial file for the
+  // CLI (or the next collection) to trip over.
+  const temp = `${file}.${process.pid}.tmp`;
+  try {
+    await fsp.writeFile(temp, JSON.stringify(updated), { mode: 0o600 });
+    await fsp.chmod(temp, 0o600);
+    await fsp.rename(temp, file);
+  } catch {
+    // Best-effort: the refreshed token still serves this collection.
+    await fsp.rm(temp, { force: true }).catch(() => {});
+  }
+  return next.accessToken;
 }
 
 async function writeOauthCache(
@@ -572,9 +741,12 @@ function asStale(result: CollectResult, reason: string): CollectResult {
   return { ...result, cacheStatus: 'stale-cache', stale: true, staleReason: reason };
 }
 
-function oauthCredentials(
-  value: unknown,
-): { token: string; expiresMs: number | null; plan: string | null } | null {
+function oauthCredentials(value: unknown): {
+  token: string;
+  refreshToken: string | null;
+  expiresMs: number | null;
+  plan: string | null;
+} | null {
   const oauth = isRecord(value) && isRecord(value.claudeAiOauth) ? value.claudeAiOauth : null;
   const token = readString(oauth?.accessToken);
   if (!token) return null;
@@ -582,6 +754,7 @@ function oauthCredentials(
   const expiresMs = Date.parse(expiresAt ?? '');
   return {
     token,
+    refreshToken: readString(oauth?.refreshToken),
     expiresMs: Number.isFinite(expiresMs) ? expiresMs : null,
     plan: readString(oauth?.subscriptionType),
   };
