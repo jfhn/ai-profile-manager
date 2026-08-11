@@ -285,8 +285,14 @@ claude` — a fresh home triggers the login flow on first start.
   `~/.codex`) appear as suggestions the user explicitly confirms into profiles.
 - Provider scope for v1: Codex and Claude only; Cursor/OpenCode later.
 - T3 integration: none required for usefulness; Phase 1 works with unmodified T3.
-- Token refresh: the daemon never refreshes OAuth tokens. Expired credentials
-  mean a stale snapshot with a clear reason, never a refresh race with a live CLI.
+- Token refresh: the daemon refreshes expired Claude OAuth tokens itself using
+  the Claude Code CLI's own public client id, so an expired access token no
+  longer blanks usage until the CLI happens to run. Write-back to
+  `.credentials.json` is atomic (temp file + rename, mode 0600) and aborts when
+  the on-disk tokens changed mid-refresh — a live CLI that refreshed first
+  wins. A rejected refresh never modifies the file and surfaces as an
+  auth-classified reason telling the user to re-login. Other providers' tokens
+  are still never refreshed.
 - Account selection is launch-scoped only: profiles apply to what apm starts
   (`apm run`, web terminal sessions, managed T3 instances). The global
   `~/.claude` / `~/.codex` are read-only to apm, keep working unchanged for

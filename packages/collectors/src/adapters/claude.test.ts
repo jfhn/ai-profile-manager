@@ -30,6 +30,31 @@ function writeCredentials(home: string, mtimeMs: number): void {
   fs.utimesSync(file, mtimeMs / 1000, mtimeMs / 1000);
 }
 
+const TOKEN_URL = 'https://console.anthropic.com/v1/oauth/token';
+
+/** Refreshable credentials with extra fields the write-back must preserve. */
+function writeRefreshableCredentials(home: string, expiresAtMs: number): string {
+  const file = path.join(home, '.credentials.json');
+  writeJson(file, {
+    claudeAiOauth: {
+      accessToken: 'stale-access-token-1',
+      refreshToken: 'stale-refresh-token-1',
+      expiresAt: expiresAtMs,
+      scopes: ['user:inference', 'user:profile'],
+      subscriptionType: 'max',
+    },
+    unrelatedTopLevel: { keep: true },
+  });
+  return file;
+}
+
+function authHeader(init?: RequestInit): string | null {
+  const headers = init?.headers;
+  return headers && !Array.isArray(headers) && !(headers instanceof Headers)
+    ? ((headers as Record<string, string>).Authorization ?? null)
+    : null;
+}
+
 function rateLimits(): unknown {
   return {
     rate_limits: {
@@ -606,6 +631,241 @@ describe('claude adapter', () => {
       },
     });
     expect(cooldown.cacheStatus).toBe('cooldown');
+  });
+
+  it('refreshes an expired token, fetches usage with the new one, and rewrites credentials', async () => {
+    const { home, cache, global } = setup();
+    const file = writeRefreshableCredentials(home, now - 60_000);
+    const calls: { url: string; body: unknown; auth: string | null }[] = [];
+    const result = await claudeAdapter.collectUsage({
+      home,
+      defaultHome: home,
+      cacheDir: cache,
+      globalCacheDir: global,
+      allowNetwork: true,
+      now,
+      fetchImpl: async (input, init) => {
+        const url = String(input);
+        calls.push({
+          url,
+          body: typeof init?.body === 'string' ? JSON.parse(init.body) : null,
+          auth: authHeader(init),
+        });
+        if (url === TOKEN_URL)
+          return new Response(
+            JSON.stringify({
+              access_token: 'fresh-access-token-2',
+              refresh_token: 'fresh-refresh-token-2',
+              expires_in: 28_800,
+            }),
+            { status: 200 },
+          );
+        return new Response(JSON.stringify(rateLimits()), { status: 200 });
+      },
+    });
+    expect(result.cacheStatus).toBe('live');
+    expect(result.windows.map((window) => window.id)).toEqual(['five_hour', 'weekly']);
+    expect(calls.map((call) => call.url)).toEqual([
+      TOKEN_URL,
+      'https://api.anthropic.com/api/oauth/usage',
+    ]);
+    expect(calls[0].body).toEqual({
+      grant_type: 'refresh_token',
+      refresh_token: 'stale-refresh-token-1',
+      client_id: '9d1c250a-e61b-44d9-88ed-5944d1962f5e',
+    });
+    expect(calls[1].auth).toBe('Bearer fresh-access-token-2');
+    // Every untouched field survives; expiresAt is epoch milliseconds like the CLI writes.
+    expect(JSON.parse(fs.readFileSync(file, 'utf8'))).toEqual({
+      unrelatedTopLevel: { keep: true },
+      claudeAiOauth: {
+        accessToken: 'fresh-access-token-2',
+        refreshToken: 'fresh-refresh-token-2',
+        expiresAt: now + 28_800 * 1000,
+        scopes: ['user:inference', 'user:profile'],
+        subscriptionType: 'max',
+      },
+    });
+    expect(fs.statSync(file).mode & 0o777).toBe(0o600);
+    expect(JSON.stringify(result)).not.toMatch(/token-[12]/);
+  });
+
+  it('reports an auth re-login reason when the refresh is rejected and keeps credentials', async () => {
+    const { home, cache, global } = setup();
+    const file = writeRefreshableCredentials(home, now - 60_000);
+    const before = fs.readFileSync(file, 'utf8');
+    const result = await claudeAdapter.collectUsage({
+      home,
+      defaultHome: home,
+      cacheDir: cache,
+      globalCacheDir: global,
+      allowNetwork: true,
+      now,
+      fetchImpl: async (input) => {
+        if (String(input) === TOKEN_URL)
+          return new Response(JSON.stringify({ error: 'invalid_grant' }), { status: 400 });
+        throw new Error('usage endpoint must not be called with an expired token');
+      },
+    });
+    expect(result.failureKind).toBe('auth');
+    expect(result.error).toContain('Claude OAuth token refresh was rejected');
+    expect(result.error).toContain('claude auth login');
+    expect(fs.readFileSync(file, 'utf8')).toBe(before);
+    expect(JSON.stringify(result)).not.toMatch(/token-1/);
+  });
+
+  it('reports a refresh server error without leaking the response body', async () => {
+    const { home, cache, global } = setup();
+    const file = writeRefreshableCredentials(home, now - 60_000);
+    const before = fs.readFileSync(file, 'utf8');
+    const result = await claudeAdapter.collectUsage({
+      home,
+      defaultHome: home,
+      cacheDir: cache,
+      globalCacheDir: global,
+      allowNetwork: true,
+      now,
+      fetchImpl: async () => new Response('body-with-secret-token-material', { status: 500 }),
+    });
+    expect(result.failureKind).toBe('error');
+    expect(result.error).toBe('Claude OAuth refresh endpoint returned HTTP 500');
+    expect(fs.readFileSync(file, 'utf8')).toBe(before);
+    expect(JSON.stringify(result)).not.toContain('secret');
+  });
+
+  it('never calls the token endpoint while the access token is still valid', async () => {
+    const { home, cache, global } = setup();
+    writeRefreshableCredentials(home, now + 60 * 60 * 1000);
+    const urls: string[] = [];
+    const result = await claudeAdapter.collectUsage({
+      home,
+      defaultHome: home,
+      cacheDir: cache,
+      globalCacheDir: global,
+      allowNetwork: true,
+      now,
+      fetchImpl: async (input) => {
+        urls.push(String(input));
+        return new Response(JSON.stringify(rateLimits()), { status: 200 });
+      },
+    });
+    expect(result.cacheStatus).toBe('live');
+    expect(urls).toEqual(['https://api.anthropic.com/api/oauth/usage']);
+  });
+
+  it('refreshes and retries once when a valid-looking token is rejected', async () => {
+    const { home, cache, global } = setup();
+    const file = writeRefreshableCredentials(home, now + 60 * 60 * 1000);
+    const calls: { url: string; auth: string | null }[] = [];
+    const result = await claudeAdapter.collectUsage({
+      home,
+      defaultHome: home,
+      cacheDir: cache,
+      globalCacheDir: global,
+      allowNetwork: true,
+      now,
+      fetchImpl: async (input, init) => {
+        const url = String(input);
+        calls.push({ url, auth: authHeader(init) });
+        if (url === TOKEN_URL)
+          return new Response(
+            JSON.stringify({ access_token: 'fresh-access-token-2', expires_in: 28_800 }),
+            { status: 200 },
+          );
+        return calls.filter((call) => call.url !== TOKEN_URL).length === 1
+          ? new Response('', { status: 401 })
+          : new Response(JSON.stringify(rateLimits()), { status: 200 });
+      },
+    });
+    expect(result.cacheStatus).toBe('live');
+    expect(calls.map((call) => call.url)).toEqual([
+      'https://api.anthropic.com/api/oauth/usage',
+      TOKEN_URL,
+      'https://api.anthropic.com/api/oauth/usage',
+    ]);
+    expect(calls[2].auth).toBe('Bearer fresh-access-token-2');
+    // The response carried no rotated refresh token, so the old one stays.
+    expect(JSON.parse(fs.readFileSync(file, 'utf8')).claudeAiOauth).toMatchObject({
+      accessToken: 'fresh-access-token-2',
+      refreshToken: 'stale-refresh-token-1',
+    });
+  });
+
+  it('aborts the write and uses the newer on-disk token when credentials change mid-refresh', async () => {
+    const { home, cache, global } = setup();
+    const file = writeRefreshableCredentials(home, now - 60_000);
+    const cliCredentials = {
+      claudeAiOauth: {
+        accessToken: 'cli-access-token-3',
+        refreshToken: 'cli-refresh-token-3',
+        expiresAt: now + 60 * 60 * 1000,
+      },
+    };
+    const auths: (string | null)[] = [];
+    const result = await claudeAdapter.collectUsage({
+      home,
+      defaultHome: home,
+      cacheDir: cache,
+      globalCacheDir: global,
+      allowNetwork: true,
+      now,
+      fetchImpl: async (input, init) => {
+        if (String(input) === TOKEN_URL) {
+          // A live CLI sharing this home refreshes first, mid-request.
+          writeJson(file, cliCredentials);
+          return new Response(
+            JSON.stringify({ access_token: 'fresh-access-token-2', expires_in: 28_800 }),
+            { status: 200 },
+          );
+        }
+        auths.push(authHeader(init));
+        return new Response(JSON.stringify(rateLimits()), { status: 200 });
+      },
+    });
+    expect(result.cacheStatus).toBe('live');
+    expect(auths).toEqual(['Bearer cli-access-token-3']);
+    expect(JSON.parse(fs.readFileSync(file, 'utf8'))).toEqual(cliCredentials);
+  });
+
+  it('never attempts a refresh when network access is disabled', async () => {
+    const { home, cache, global } = setup();
+    writeRefreshableCredentials(home, now - 60_000);
+    let called = false;
+    const result = await claudeAdapter.collectUsage({
+      home,
+      defaultHome: home,
+      cacheDir: cache,
+      globalCacheDir: global,
+      allowNetwork: false,
+      now,
+      fetchImpl: async () => {
+        called = true;
+        throw new Error('should not fetch');
+      },
+    });
+    expect(called).toBe(false);
+    expect(result.windows).toEqual([]);
+  });
+
+  it('keeps the expired-token message when no refresh token exists', async () => {
+    const { home, cache, global } = setup();
+    writeJson(path.join(home, '.credentials.json'), {
+      claudeAiOauth: { accessToken: 'stale-access-token-1', expiresAt: now - 60_000 },
+    });
+    const result = await claudeAdapter.collectUsage({
+      home,
+      defaultHome: home,
+      cacheDir: cache,
+      globalCacheDir: global,
+      allowNetwork: true,
+      now,
+      fetchImpl: async () => {
+        throw new Error('should not fetch without a refresh token');
+      },
+    });
+    expect(result.failureKind).toBe('auth');
+    expect(result.error).toContain('Claude OAuth access token is expired');
+    expect(JSON.stringify(result)).not.toMatch(/token-1/);
   });
 
   it('retries during the cooldown when credentials changed after the error', async () => {
