@@ -9,7 +9,7 @@
  *
  * Remote instances go through the target's transport and nothing else (no
  * second SSH/Tailscale path): `openPty` launches `t3 serve` from argv with the
- * bound profile's *id* — the target injects that profile's provider env, so no
+ * bound profiles' *ids* — the target injects each profile's provider env, so no
  * credential ever reaches this machine — and `openEndpoint` publishes the port
  * and answers the health checks. The endpoint is also the only source of the
  * Open link: a remote instance is behind a forward or the target's own address,
@@ -236,15 +236,16 @@ export function createT3Manager(
   }
 
   /**
-   * One bound profile per remote instance: a CommandSpec carries a single
-   * profileId, and the target's homes are the only place the env could be
-   * resolved — there is no way to inject a second one without moving
-   * credentials, which is exactly what the transport contract forbids.
+   * Up to one bound profile per provider on a remote instance, mirroring the
+   * local `validateProfiles` — but against the profiles the *target* reports,
+   * because their ids mean nothing here. Only those opaque ids ever cross the
+   * seam: the target resolves each one to its provider env locally, which is
+   * exactly what keeps credentials from moving between machines.
    */
-  async function resolveRemoteProfile(
+  async function resolveRemoteProfiles(
     targetId: TargetId,
     bound: Partial<Record<ProviderId, string>>,
-  ): Promise<{ provider: ProviderId; profileId: string }> {
+  ): Promise<string[]> {
     if (!targets) {
       throw new ApiFailure(404, 'target-not-found', `No target "${targetId}" is configured`);
     }
@@ -255,38 +256,29 @@ export function createT3Manager(
     if (entries.length === 0) {
       throw new ApiFailure(400, 'bad-request', 'At least one profile is required');
     }
-    if (entries.length > 1) {
-      throw new ApiFailure(
-        400,
-        'multi-profile-unsupported',
-        `An instance on target "${targetId}" binds one profile — its provider environment is ` +
-          'resolved on the target, and a command carries a single profile',
-      );
+    for (const entry of entries) {
+      let summary;
+      try {
+        summary = await targets.resolveProfile(targetId, entry.profileId);
+      } catch (error: unknown) {
+        throw toApiFailure(error);
+      }
+      if (summary.provider !== entry.provider) {
+        throw new ApiFailure(
+          409,
+          'provider-mismatch',
+          `Profile ${summary.label} is a ${summary.provider} profile, not ${entry.provider}`,
+        );
+      }
+      if (summary.status !== 'active' || !summary.enabled) {
+        throw new ApiFailure(
+          409,
+          'profile-not-active',
+          `Profile ${summary.label} is not active on target "${targetId}"`,
+        );
+      }
     }
-    const [entry] = entries;
-    if (!entry) throw new ApiFailure(400, 'bad-request', 'At least one profile is required');
-
-    let summary;
-    try {
-      summary = await targets.resolveProfile(targetId, entry.profileId);
-    } catch (error: unknown) {
-      throw toApiFailure(error);
-    }
-    if (summary.provider !== entry.provider) {
-      throw new ApiFailure(
-        409,
-        'provider-mismatch',
-        `Profile ${summary.label} is a ${summary.provider} profile, not ${entry.provider}`,
-      );
-    }
-    if (summary.status !== 'active' || !summary.enabled) {
-      throw new ApiFailure(
-        409,
-        'profile-not-active',
-        `Profile ${summary.label} is not active on target "${targetId}"`,
-      );
-    }
-    return entry;
+    return entries.map((entry) => entry.profileId);
   }
 
   /**
@@ -407,7 +399,7 @@ export function createT3Manager(
   async function startRemote(instance: T3Instance): Promise<T3Instance> {
     const targetId = instance.targetId;
     const transport = requireTransport(targetId);
-    const { profileId } = await resolveRemoteProfile(targetId, instance.profiles);
+    const profileIds = await resolveRemoteProfiles(targetId, instance.profiles);
 
     // Opened first: the target allocates the port, which is per-target by
     // construction, and the request has to name that port on the command line.
@@ -450,8 +442,8 @@ export function createT3Manager(
         // Non-secret target-local attribution for `apm pair`. The CLI requires
         // this id to agree with the managed base-dir child before minting.
         env: { [APM_MANAGED_T3_INSTANCE_ENV]: instance.id },
-        // The target resolves this id to its own provider env locally.
-        profileId,
+        // The target resolves each id to its own provider env locally.
+        profileIds,
         ...REMOTE_PTY_SIZE,
       });
     } catch (error: unknown) {
@@ -647,7 +639,7 @@ export function createT3Manager(
         fs.mkdirSync(baseDir, { recursive: true, mode: 0o700 });
       } else {
         const transport = requireTransport(targetId);
-        await resolveRemoteProfile(targetId, req.profiles);
+        await resolveRemoteProfiles(targetId, req.profiles);
         baseDir = await createRemoteBaseDir(transport, id);
       }
       const instance: T3Instance = {

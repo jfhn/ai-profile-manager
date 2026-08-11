@@ -30,15 +30,15 @@
 
   const remote = $derived(targetId !== LOCAL_TARGET_ID);
 
-  // Profile ids are target-scoped, so a remote instance picks from the list the
-  // target itself reports rather than from this machine's profiles. The cache
-  // behind it is shared with the instance cards, which resolve their own
+  // Profile ids are target-scoped, so a remote instance picks from the lists
+  // the target itself reports rather than from this machine's profiles. The
+  // cache behind it is shared with the instance cards, which resolve their own
   // bindings from the same lists.
-  let remoteProfileId = $state('');
+  let remoteSelection = $state<Record<string, string>>({ claude: '', codex: '' });
 
   $effect(() => {
     const id = targetId;
-    remoteProfileId = '';
+    remoteSelection = { claude: '', codex: '' };
     void loadTargetProfiles(id);
   });
 
@@ -54,19 +54,28 @@
   const optionsFor = (provider: ProviderId) =>
     app.launchable.filter((profile) => profile.provider === provider);
 
+  const remoteOptionsFor = (provider: ProviderId) =>
+    remoteProfiles.filter((profile) => profile.provider === provider);
+
   const chosen = $derived(
-    remote
-      ? remoteProfileId !== ''
-      : PROVIDERS.filter((provider) => (selection[provider] ?? '') !== '').length > 0,
+    PROVIDERS.filter((provider) => ((remote ? remoteSelection : selection)[provider] ?? '') !== '')
+      .length > 0,
   );
 
   const canSubmit = $derived(label.trim().length > 0 && chosen && !busy);
 
   function requestBody(): CreateT3InstanceRequest | null {
     if (remote) {
-      const profile = remoteProfiles.find((candidate) => candidate.id === remoteProfileId);
-      if (!profile) return null;
-      return { label: label.trim(), targetId, profiles: { [profile.provider]: profile.id } };
+      const profiles: Partial<Record<ProviderId, string>> = {};
+      for (const provider of PROVIDERS) {
+        const id = remoteSelection[provider];
+        if (!id) continue;
+        // Only ids the target actually reported; a stale selection is dropped.
+        if (!remoteProfiles.some((candidate) => candidate.id === id)) return null;
+        profiles[provider] = id;
+      }
+      if (Object.keys(profiles).length === 0) return null;
+      return { label: label.trim(), targetId, profiles };
     }
     const profiles: Partial<Record<ProviderId, string>> = {};
     for (const provider of PROVIDERS) {
@@ -140,37 +149,37 @@
     </div>
 
     {#if remote}
-      <div class="field">
-        <label class="label" for="t3-remote-profile">Profile on {app.targetLabel(targetId)}</label>
-        <select
-          id="t3-remote-profile"
-          class="select"
-          disabled={remoteProfiles.length === 0}
-          bind:value={remoteProfileId}
-        >
-          <option value="">
-            {remoteLoading
-              ? 'loading…'
-              : remoteProfiles.length === 0
-                ? 'no active profile'
-                : 'none'}
-          </option>
-          {#each remoteProfiles as profile (profile.id)}
-            <option value={profile.id}>
-              {app.providerLabel(profile.provider)} · {profile.label}
+      {#each PROVIDERS as provider (provider)}
+        {@const options = remoteOptionsFor(provider)}
+        <div class="field">
+          <label class="label" for={`t3-remote-${provider}`}>
+            {app.providerLabel(provider)} profile on {app.targetLabel(targetId)}
+          </label>
+          <select
+            id={`t3-remote-${provider}`}
+            class="select"
+            disabled={options.length === 0}
+            bind:value={remoteSelection[provider]}
+          >
+            <option value="">
+              {remoteLoading ? 'loading…' : options.length === 0 ? 'no active profile' : 'none'}
             </option>
-          {/each}
-        </select>
-      </div>
+            {#each options as profile (profile.id)}
+              <option value={profile.id}>{profile.label}</option>
+            {/each}
+          </select>
+        </div>
+      {/each}
 
       {#if remoteError}
         <p class="error">{remoteError}</p>
       {/if}
 
       <p class="hint">
-        The instance runs on {app.targetLabel(targetId)} with that profile's environment; its credentials
-        stay there. One profile per remote instance, and the Open link is the endpoint the target publishes
-        — never a localhost address.
+        At least one profile is required. The instance runs on {app.targetLabel(targetId)} with those
+        profiles' environments; their credentials stay there. Providers left on "none" fall back to the
+        target machine's default home, and the Open link is the endpoint the target publishes — never
+        a localhost address.
       </p>
     {:else if app.launchable.length === 0}
       <p class="empty">

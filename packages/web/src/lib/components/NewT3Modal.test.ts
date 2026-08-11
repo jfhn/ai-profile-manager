@@ -84,21 +84,25 @@ describe('NewT3Modal: choosing where an instance runs', () => {
     expect(app.t3Instances.map((instance) => instance.label)).toEqual(['work']);
   });
 
-  it('offers the remote target’s own active profiles and sends its id', async () => {
+  it('offers the remote target’s own active profiles per provider', async () => {
     render(NewT3Modal, { onclose: () => undefined });
 
     await fireEvent.change(screen.getByLabelText('Target'), { target: { value: 'dev-box' } });
 
-    const profile = await screen.findByLabelText<HTMLSelectElement>('Profile on dev box');
+    const claude = await screen.findByLabelText<HTMLSelectElement>('Claude profile on dev box');
     // Only what that target reports, and only what is usable there.
     await waitFor(() =>
-      expect([...profile.options].map((option) => option.value)).toEqual(['', 'claude-remote']),
+      expect([...claude.options].map((option) => option.value)).toEqual(['', 'claude-remote']),
     );
+    // The target's only codex profile is unusable, so that provider stays open.
+    const codex = screen.getByLabelText<HTMLSelectElement>('Codex profile on dev box');
+    expect([...codex.options].map((option) => option.value)).toEqual(['']);
+    expect(codex.hasAttribute('disabled')).toBe(true);
     expect(screen.queryByLabelText('Claude profile')).toBeNull();
     expect(screen.getByText(/credentials stay there/)).toBeDefined();
 
     await fireEvent.input(screen.getByLabelText('Label'), { target: { value: 'dev' } });
-    await fireEvent.change(profile, { target: { value: 'claude-remote' } });
+    await fireEvent.change(claude, { target: { value: 'claude-remote' } });
     await fireEvent.click(screen.getByRole('button', { name: 'Create' }));
 
     await waitFor(() => expect(mocks.daemon.createdT3).toHaveLength(1));
@@ -106,6 +110,39 @@ describe('NewT3Modal: choosing where an instance runs', () => {
       label: 'dev',
       targetId: 'dev-box',
       profiles: { claude: 'claude-remote' },
+    });
+  });
+
+  it('binds one remote profile per provider in a single request', async () => {
+    mocks.daemon.targetProfileLists['dev-box'] = [
+      ...(mocks.daemon.targetProfileLists['dev-box'] ?? []),
+      {
+        id: 'codex-remote',
+        provider: 'codex',
+        label: 'dev box codex',
+        status: 'active',
+        enabled: true,
+      },
+    ];
+    render(NewT3Modal, { onclose: () => undefined });
+
+    await fireEvent.change(screen.getByLabelText('Target'), { target: { value: 'dev-box' } });
+    const claude = await screen.findByLabelText<HTMLSelectElement>('Claude profile on dev box');
+    const codex = screen.getByLabelText<HTMLSelectElement>('Codex profile on dev box');
+    await waitFor(() =>
+      expect([...codex.options].map((option) => option.value)).toEqual(['', 'codex-remote']),
+    );
+
+    await fireEvent.input(screen.getByLabelText('Label'), { target: { value: 'both' } });
+    await fireEvent.change(claude, { target: { value: 'claude-remote' } });
+    await fireEvent.change(codex, { target: { value: 'codex-remote' } });
+    await fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+
+    await waitFor(() => expect(mocks.daemon.createdT3).toHaveLength(1));
+    expect(mocks.daemon.createdT3[0]).toEqual({
+      label: 'both',
+      targetId: 'dev-box',
+      profiles: { claude: 'claude-remote', codex: 'codex-remote' },
     });
   });
 

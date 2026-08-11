@@ -205,7 +205,7 @@ export function createSessionHost(
           cwd: req.cwd,
           cols,
           rows,
-          profileId: profile.id,
+          profileIds: [profile.id],
         });
       } catch (error: unknown) {
         throw toApiFailure(error);

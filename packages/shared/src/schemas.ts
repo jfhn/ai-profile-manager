@@ -144,7 +144,7 @@ export const commandSpecSchema = z.object({
   argv: z.array(z.string().min(1)).min(1),
   env: z.record(z.string(), z.string()).optional(),
   cwd: z.string().min(1).optional(),
-  profileId: profileIdSchema.optional(),
+  profileIds: z.array(profileIdSchema).optional(),
 });
 
 export const terminalClientMessageSchema = z.union([
