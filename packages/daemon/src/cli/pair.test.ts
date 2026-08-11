@@ -8,6 +8,7 @@ import { APM_MANAGED_T3_INSTANCE_ENV } from '../t3/identity.js';
 import {
   PAIR_TTL,
   discoverManagedT3Processes,
+  indicatesUnknownTailscaleFlag,
   managedT3ProcessFromArgv,
   replaceLocalPairingUrls,
   resolvePublishedEndpoint,
@@ -214,7 +215,7 @@ describe('published endpoint resolution', () => {
   it('matches the selected backend and presents its actual HTTPS listener', () => {
     expect(
       resolvePublishedEndpoint(INSTANCE, STATUS, serveStatus([{ https: 8443, backend: 4800 }])),
-    ).toBe(`https://${DNS_NAME}:8443`);
+    ).toEqual({ url: `https://${DNS_NAME}:8443`, httpsPort: 8443 });
   });
 
   it('refuses absent, ambiguous and funnelled endpoint mappings', () => {
@@ -257,7 +258,7 @@ describe('pair workflow', () => {
     expect(fs.existsSync(path.join(dataDir, 'run', 'daemon.json'))).toBe(false);
   });
 
-  it('uses the exact base dir and TTL, and emits a published direct pairing link', async () => {
+  it('uses the exact base dir, TTL and tailscale serve port, and emits a published link', async () => {
     const calls: string[][] = [];
     let stdout = '';
     let stderr = '';
@@ -287,9 +288,19 @@ describe('pair workflow', () => {
     expect(calls).toEqual([
       ['tailscale', 'status', '--json'],
       ['tailscale', 'serve', 'status', '--json'],
-      ['t3', 'pair', '--base-dir', INSTANCE.baseDir, '--ttl', '15m'],
+      [
+        't3',
+        'pair',
+        '--base-dir',
+        INSTANCE.baseDir,
+        '--ttl',
+        '15m',
+        '--tailscale',
+        '--tailscale-serve-port',
+        '8443',
+      ],
     ]);
-    expect(t3PairArgv(INSTANCE.baseDir)).toEqual(calls[2]);
+    expect(t3PairArgv(INSTANCE.baseDir, 8443)).toEqual(calls[2]);
     expect(PAIR_TTL).toBe('15m');
     expect(stdout).toContain(`Published endpoint: https://${DNS_NAME}:8443`);
     expect(stdout).toContain(`https://${DNS_NAME}:8443/pair?token=${token}#owner`);
@@ -356,6 +367,32 @@ describe('pair workflow', () => {
     ).rejects.toThrow(/exited with code 2/);
     expect(stdout).toBe('partial token\n');
     expect(stderr).toBe('pair failed\n');
+  });
+
+  it('tells the user to upgrade T3 Code when t3 rejects the --tailscale flag', async () => {
+    let stderr = '';
+    await expect(
+      runPair(
+        {},
+        {
+          t3Dir: T3_DIR,
+          listProcesses: () => [INSTANCE],
+          run: async (argv) => {
+            if (argv[0] === 't3') {
+              return result({ exitCode: 2, stderr: "error: unknown option '--tailscale'\n" });
+            }
+            if (argv[1] === 'status') return result({ stdout: STATUS });
+            return result({ stdout: serveStatus([{ https: 8443, backend: 4800 }]) });
+          },
+          writeStdout: () => undefined,
+          writeStderr: (text) => void (stderr += text),
+        },
+      ),
+    ).rejects.toThrow(/upgrade T3 Code.*--tailscale/);
+    expect(stderr).toContain('unknown option');
+
+    expect(indicatesUnknownTailscaleFlag('unrecognized flag: --tailscale-serve-port')).toBe(true);
+    expect(indicatesUnknownTailscaleFlag('pair failed: backend offline')).toBe(false);
   });
 
   it('drains exact large failure output through the real CLI entry point', () => {
