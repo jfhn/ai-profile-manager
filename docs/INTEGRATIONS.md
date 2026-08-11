@@ -58,16 +58,18 @@ a provider therefore requires a schema-version bump or explicit compatibility
 handling rather than silently extending version 1.
 
 `defaultProfileIds` is intentionally partial. An absent provider key means the
-user has no default for that provider; starting new provider work must stop
-with an actionable prompt rather than selecting the first profile. A present
-id always refers to an active, enabled profile of the matching provider.
-Disabling or deleting it clears the default and does not silently choose a
-replacement. Renaming a profile preserves its id and default selection.
+provider has no active, enabled profile at all; starting new provider work must
+stop with an actionable prompt rather than selecting the first profile. A
+present id always refers to an active, enabled profile of the matching
+provider. The daemon owns the selection: while a provider has at least one
+eligible profile it keeps exactly one default, and when the selected profile
+is disabled or deleted it promotes the eligible profile with the
+alphabetically first label. Consumers must not choose a replacement
+themselves. Renaming a profile preserves its id and default selection.
 
-The first eligible profile for a provider may become its initial default.
-When a v1 `profiles.json` is upgraded to v2, apm infers a default only if that
-provider has exactly one active, enabled profile. Ambiguous migrations leave
-the provider unset.
+The same rule seeds initial defaults: the first eligible profile (by label)
+for a provider becomes its default, including when a v1 `profiles.json` is
+upgraded to v2.
 
 ## Launch ownership
 

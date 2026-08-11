@@ -20,7 +20,7 @@ Type definitions for every payload live in `packages/shared/src/api.ts`.
 | GET    | `/api/events`                    | SSE stream (`ServerEvent` types)                                |
 | GET    | `/api/profiles`                  | List profiles                                                   |
 | GET    | `/api/defaults`                  | Current provider defaults (`DefaultsResponse`)                  |
-| PUT    | `/api/defaults/:provider`        | Set/clear a default (`{profileId: string \| null}`)             |
+| PUT    | `/api/defaults/:provider`        | Set/recompute a default (`{profileId: string \| null}`)         |
 | POST   | `/api/profiles`                  | Adopt an existing home as a profile (`CreateProfileRequest`)    |
 | PATCH  | `/api/profiles/:id`              | Rename / enable / disable                                       |
 | DELETE | `/api/profiles/:id?purge=`       | Remove profile; `purge=true` also deletes managed homes         |
@@ -99,11 +99,15 @@ out. Closing the socket detaches without killing the PTY.
 
 ## Provider defaults
 
-`defaultProfileIds` is a partial map keyed by `claude` and `codex`. A missing
-key means there is no default; clients must not pick another profile on the
-user's behalf. `PUT /api/defaults/:provider` accepts an active, enabled profile
-of that same provider or `null` to clear the key. Disabling or deleting the
-selected profile clears it. These mutations emit `profiles-changed`.
+`defaultProfileIds` is a partial map keyed by `claude` and `codex`. The daemon
+keeps exactly one default per provider while that provider has at least one
+active, enabled profile; a missing key means no such profile exists. When the
+selected profile is disabled or deleted (or the key is cleared with `null`),
+the daemon promotes the eligible profile with the alphabetically first label,
+so clients never pick a default on the user's behalf.
+`PUT /api/defaults/:provider` accepts an active, enabled profile of that same
+provider, or `null` to recompute the default. These mutations emit
+`profiles-changed`.
 
 Profile ids use the same opaque public rule as the CLI contract: preserve the
 exact string, require nonblank content after trimming, reject Unicode `Cc`
