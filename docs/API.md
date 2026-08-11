@@ -36,6 +36,8 @@ Type definitions for every payload live in `packages/shared/src/api.ts`.
 | POST   | `/api/sessions/:id/resize`       | Resize (`{cols, rows}`)                                         |
 | DELETE | `/api/sessions/:id`              | Kill (running) or dispose (exited)                              |
 | GET    | `/api/recent-dirs`               | Recent working directories for the cwd picker                   |
+| GET    | `/api/targets`                   | Execution targets + capabilities (`TargetsResponse`)            |
+| GET    | `/api/targets/:id/profiles`      | Profiles as that target reports them (`TargetProfilesResponse`) |
 | GET    | `/api/t3`                        | List managed T3 instances (`T3ListResponse`)                    |
 | POST   | `/api/t3`                        | Create instance (`CreateT3InstanceRequest`)                     |
 | POST   | `/api/t3/:id/start`              | Start instance                                                  |
@@ -45,6 +47,18 @@ Type definitions for every payload live in `packages/shared/src/api.ts`.
 The wizard endpoints back both the dashboard modal and the headless CLI flow
 (`apm profile add <provider>` — see the README); the CLI adds no endpoints of
 its own.
+
+The target endpoints are read-only: approving a machine happens on the machine
+running apm, never over the API. Neither payload carries anything secret — an
+`ExecutionTarget` is identity plus capabilities, a `TargetProfileSummary` has
+no home and no credentials.
+
+`POST /api/t3` takes an optional `targetId`; omitting it means the local
+machine, so an existing client is unaffected. A remote instance's `url` and
+`endpoint` come from that target's transport — see
+[TARGETS.md](TARGETS.md) and [T3-REMOTE.md](T3-REMOTE.md). Transport failures
+use the shared codes (`target-not-found`, `target-not-approved`,
+`target-unsupported`, `target-unreachable`, `endpoint-failed`, …).
 
 ## Terminal WebSocket
 

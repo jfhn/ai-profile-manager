@@ -14,6 +14,7 @@ import {
   type EndpointHandle,
   type EndpointHealth,
   type EndpointRequest,
+  type EndpointScope,
   type ExecOptions,
   type ExecutionTarget,
   type ExitStatus,
@@ -30,6 +31,9 @@ import {
 
 const DEFAULT_ID = 'fake-remote';
 const DEFAULT_PORT_BASE = 9100;
+/** Health re-check cadence; short enough that a polling wait stays instant. */
+const DEFAULT_HEALTH_POLL_MS = 5;
+const DEFAULT_HEALTH_TIMEOUT_MS = 30_000;
 
 export interface FakeRemoteOptions {
   id?: string;
@@ -40,6 +44,12 @@ export interface FakeRemoteOptions {
   profiles?: TargetProfileSummary[];
   /** First port handed out when the caller lets the target choose. */
   portBase?: number;
+  /** How endpoints are reached; a forward through this machine by default. */
+  endpointScope?: EndpointScope;
+  /** Host in the endpoint URL — the target's own name for a published scope. */
+  endpointHost?: string;
+  /** Poll cadence of `waitUntilHealthy` (tests that flip health mid-wait). */
+  healthPollIntervalMs?: number;
 }
 
 export interface FakeExecCall {
@@ -107,6 +117,9 @@ export function createFakeRemoteTransport(options: FakeRemoteOptions = {}): Fake
   let portBase = options.portBase ?? DEFAULT_PORT_BASE;
   let online = options.online ?? true;
   let closed = false;
+  const endpointScope = options.endpointScope ?? 'forwarded';
+  const endpointHost = options.endpointHost ?? '127.0.0.1';
+  const healthPollIntervalMs = options.healthPollIntervalMs ?? DEFAULT_HEALTH_POLL_MS;
 
   /** Scripting key for one argv; NUL keeps entries containing spaces distinct. */
   function key(argv: readonly string[]): string {
@@ -209,15 +222,16 @@ export function createFakeRemoteTransport(options: FakeRemoteOptions = {}): Fake
 
   function makeEndpoint(request: EndpointRequest, port: number): FakeEndpoint {
     const protocol = request.protocol ?? 'http';
-    const url = `${protocol}://127.0.0.1:${port}`;
+    const url = `${protocol}://${endpointHost}:${port}`;
     const endpoint: ServiceEndpoint = {
       id: `fake-endpoint-${endpoints.length + 1}`,
       targetId: id,
       port,
       protocol,
-      // A remote endpoint is reached through a local forward.
+      // A remote endpoint is reached through a local forward by default; a
+      // 'published' target answers on its own address instead.
       url: null,
-      scope: 'forwarded',
+      scope: endpointScope,
     };
     const closeListeners = new Set<(reason: string | null) => void>();
     let healthy = false;
@@ -244,8 +258,20 @@ export function createFakeRemoteTransport(options: FakeRemoteOptions = {}): Fake
       async health() {
         return snapshot();
       },
-      async waitUntilHealthy() {
-        return snapshot();
+      /**
+       * Polls, so a caller that awaits this still sees a flip the test makes
+       * afterwards. The cadence is a plain timer rather than a fake clock:
+       * the state it re-reads is entirely test-driven, so the loop is
+       * deterministic and never waits on anything real.
+       */
+      async waitUntilHealthy(timeoutMs = DEFAULT_HEALTH_TIMEOUT_MS) {
+        const deadline = Date.now() + timeoutMs;
+        let last = snapshot();
+        while (last.state !== 'healthy' && last.state !== 'closed' && Date.now() < deadline) {
+          await new Promise((resolve) => setTimeout(resolve, healthPollIntervalMs));
+          last = snapshot();
+        }
+        return last;
       },
       onClose(listener) {
         closeListeners.add(listener);

@@ -105,6 +105,8 @@ export const createT3InstanceRequestSchema = z.object({
   profiles: z
     .record(providerIdSchema, profileIdSchema)
     .refine((v) => Object.keys(v).length > 0, { message: 'at least one profile required' }),
+  // Omitted means the local target, so an existing client keeps working.
+  targetId: targetIdSchema.optional(),
 });
 
 /**

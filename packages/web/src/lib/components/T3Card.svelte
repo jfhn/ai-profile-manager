@@ -1,7 +1,7 @@
 <script lang="ts">
-  import type { ProviderId, T3Instance } from '@apm/shared';
+  import type { EndpointScope, ProviderId, T3Instance } from '@apm/shared';
   import { api } from '../api';
-  import { app } from '../stores.svelte';
+  import { app, LOCAL_TARGET_ID } from '../stores.svelte';
   import { toast, toastError } from '../toasts.svelte';
   import Badge from './Badge.svelte';
   import Button from './Button.svelte';
@@ -30,13 +30,51 @@
         : 'muted',
   );
 
+  const remote = $derived(instance.targetId !== LOCAL_TARGET_ID);
+  const failed = $derived(instance.status === 'unhealthy' || instance.status === 'exited');
+  const scope = $derived<EndpointScope | null>(instance.endpoint?.scope ?? null);
+
+  /**
+   * Spelled out rather than implied by the URL: a forwarded endpoint also looks
+   * like a localhost link, and only the scope says whether another device can
+   * reach it.
+   */
+  const endpointHint = $derived(
+    scope === 'published'
+      ? `Published on ${app.targetLabel(instance.targetId)}'s own address — reachable from your trusted network.`
+      : scope === 'forwarded'
+        ? 'Forwarded through the machine running apm — this link only opens here.'
+        : 'Served by the machine running apm.',
+  );
+
+  /**
+   * A remote instance's profile ids belong to its target, so they are resolved
+   * against that target's list — looking them up in this machine's profiles
+   * would report every correct remote binding as missing.
+   */
   const bound = $derived(
     (Object.entries(instance.profiles) as Array<[ProviderId, string | undefined]>)
       .filter((entry): entry is [ProviderId, string] => Boolean(entry[1]))
-      .map(([provider, profileId]) => ({
-        provider,
-        label: app.profile(profileId)?.label ?? 'missing profile',
-      })),
+      .map(([provider, profileId]) => {
+        const resolved = app.boundProfile(instance.targetId, profileId);
+        return {
+          provider,
+          state: resolved.state,
+          // 'unknown' means we could not ask the target, which is not the same
+          // as the profile being gone — so it never reads as an error.
+          label:
+            resolved.label ??
+            (resolved.state === 'missing'
+              ? 'missing profile'
+              : `profile on ${app.targetLabel(instance.targetId)}`),
+          tone:
+            resolved.state === 'missing'
+              ? ('warning' as const)
+              : provider === 'claude'
+                ? ('claude' as const)
+                : ('codex' as const),
+        };
+      }),
   );
 
   async function run(action: 'start' | 'stop'): Promise<void> {
@@ -93,6 +131,26 @@
 
   <dl class="rows">
     <div class="row">
+      <dt>target</dt>
+      <dd class="inline">
+        <span class="truncate" title={instance.targetId}>{app.targetLabel(instance.targetId)}</span>
+        <Badge tone={remote ? 'primary' : 'neutral'}>{remote ? 'remote' : 'local'}</Badge>
+      </dd>
+    </div>
+    {#if instance.endpoint}
+      <div class="row">
+        <dt>endpoint</dt>
+        <dd class="inline">
+          <Badge tone={scope === 'published' ? 'success' : 'warning'} title={endpointHint}>
+            {scope}
+          </Badge>
+          <span class="mono truncate" title={instance.url ?? undefined}>
+            {instance.url ?? 'no URL yet'}
+          </span>
+        </dd>
+      </div>
+    {/if}
+    <div class="row">
       <dt>port</dt>
       <dd class="mono">{instance.port ?? '—'}</dd>
     </div>
@@ -107,7 +165,7 @@
           <span class="muted">none</span>
         {:else}
           {#each bound as entry (entry.provider)}
-            <Badge tone={entry.provider === 'claude' ? 'claude' : 'codex'}>
+            <Badge tone={entry.tone}>
               {app.providerLabel(entry.provider)} · {entry.label}
             </Badge>
           {/each}
@@ -116,8 +174,14 @@
     </div>
   </dl>
 
-  {#if instance.statusReason && (instance.status === 'unhealthy' || instance.status === 'exited')}
-    <p class="reason">{instance.statusReason}</p>
+  {#if instance.endpoint}
+    <p class="hint">{endpointHint}</p>
+  {/if}
+
+  {#if instance.statusReason}
+    <!-- A reason on a stopped instance explains why it is stopped, which is
+         information rather than a failure. -->
+    <p class={failed ? 'reason' : 'hint'}>{instance.statusReason}</p>
   {/if}
 
   <div class="foot">
@@ -148,7 +212,9 @@
 {#if removing}
   <ConfirmDialog
     title={`Remove ${instance.label}?`}
-    message="The instance is removed from apm. Its base directory stays on disk."
+    message={remote
+      ? `The instance is removed from apm. Its base directory stays on ${app.targetLabel(instance.targetId)}.`
+      : 'The instance is removed from apm and its base directory is deleted from this machine.'}
     confirmLabel="Remove"
     busy={removeBusy}
     onconfirm={() => void remove()}
@@ -198,7 +264,7 @@
   }
 
   dt {
-    width: 58px;
+    width: 64px;
     flex: none;
     color: var(--muted-fg);
   }
@@ -212,6 +278,19 @@
     display: flex;
     flex-wrap: wrap;
     gap: 4px;
+  }
+
+  .inline {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+  }
+
+  .hint {
+    margin-top: 12px;
+    font-size: 11px;
+    color: var(--muted-fg);
   }
 
   .reason {
@@ -231,6 +310,7 @@
   }
 
   .rows,
+  .hint,
   .reason {
     margin-bottom: 16px;
   }

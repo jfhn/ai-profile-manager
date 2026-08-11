@@ -3,7 +3,7 @@ import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type { Profile, ServerEvent } from '@apm/shared';
+import { LOCAL_TARGET_ID, type Profile, type ServerEvent } from '@apm/shared';
 import { resolveConfig, type DaemonConfig } from '../config.js';
 import { ApiFailure, type EventBus, type ProfileService, type T3Manager } from '../context.js';
 import {
@@ -246,5 +246,21 @@ describe('t3 manager', () => {
     await expect(manager.start('nope')).rejects.toBeInstanceOf(ApiFailure);
     await expect(manager.stop('nope')).rejects.toMatchObject({ statusCode: 404 });
     await expect(manager.remove('nope')).rejects.toMatchObject({ statusCode: 404 });
+  });
+
+  it('runs on the local target and describes its endpoint as loopback', async () => {
+    const { manager } = harness([makeProfile()]);
+    const created = await manager.create({ label: 'work', profiles: { claude: 'claude-1' } });
+    expect(created.targetId).toBe(LOCAL_TARGET_ID);
+    expect(created.endpoint).toBeNull();
+
+    const started = await manager.start(created.id);
+    expect(started.endpoint).toEqual({
+      scope: 'loopback',
+      protocol: 'http',
+      port: 4800,
+      url: 'http://127.0.0.1:4800',
+    });
+    expect(started.url).toBe('http://127.0.0.1:4800');
   });
 });

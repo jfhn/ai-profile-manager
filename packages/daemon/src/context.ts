@@ -88,7 +88,12 @@ export interface T3Manager {
   remove(id: string): Promise<void>;
   /** Re-adopt detached instances still running from a previous daemon. */
   adopt(): Promise<void>;
-  shutdown(): void;
+  /**
+   * Local instances are detached on purpose and keep running. Remote ones are
+   * terminated and their endpoints revoked: nothing on a target may outlive
+   * the daemon that was supervising it.
+   */
+  shutdown(): Promise<void>;
 }
 
 export interface AppContext {

@@ -14,11 +14,9 @@ import type { FastifyInstance } from 'fastify';
 import {
   createSessionRequestSchema,
   type RecentDirsResponse,
-  type TargetProfilesResponse,
   type TerminalSession,
 } from '@apm/shared';
 import { ApiFailure, type AppContext } from '../context.js';
-import { toApiFailure } from '../targets/errors.js';
 
 const resizeRequestSchema = z.object({
   cols: z.number().int().min(2).max(1000),
@@ -29,17 +27,6 @@ export function registerSessionRoutes(app: FastifyInstance, ctx: AppContext): vo
   app.get('/api/sessions', async (): Promise<{ sessions: TerminalSession[] }> => ({
     sessions: ctx.sessions.list(),
   }));
-
-  app.get<{ Params: { targetId: string } }>(
-    '/api/targets/:targetId/profiles',
-    async (req): Promise<TargetProfilesResponse> => {
-      try {
-        return { profiles: await ctx.targets.profiles(req.params.targetId) };
-      } catch (error: unknown) {
-        throw toApiFailure(error);
-      }
-    },
-  );
 
   app.post('/api/sessions', async (req, reply): Promise<TerminalSession> => {
     const parsed = parse(createSessionRequestSchema, req.body);

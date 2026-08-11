@@ -3,8 +3,9 @@
 Local-first companion app for managing AI provider profiles (Claude, Codex),
 viewing quota usage, and launching tools with the correct account. See
 [PLAN.md](PLAN.md) for goals and architecture, [docs/API.md](docs/API.md) for
-the daemon API, and [docs/TARGETS.md](docs/TARGETS.md) for the execution-target
-and transport contract.
+the daemon API, [docs/TARGETS.md](docs/TARGETS.md) for the execution-target and
+transport contract, and [docs/T3-REMOTE.md](docs/T3-REMOTE.md) for running a
+managed T3 instance on another machine.
 
 > **Status: early.** Built for my own setup and so far only exercised against
 > my accounts (one Claude, one Codex). Linux/WSL is the primary platform.

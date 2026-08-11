@@ -21,12 +21,14 @@ import {
   type TargetStatus,
   type TargetTransport,
 } from '@apm/shared';
+import { urlProbe } from './net.js';
 import {
   agentResponseSchema,
   encodeAgentMessage,
   type AgentRequest,
   type AgentResponse,
 } from './protocol.js';
+import { openTailscaleEndpoint } from './tailscale.js';
 
 const CONNECT_TIMEOUT_SECONDS = 10;
 const RESPONSE_TIMEOUT_MS = 15_000;
@@ -40,7 +42,11 @@ export interface SshTargetOptions {
 }
 
 export function createSshTransport(options: SshTargetOptions): TargetTransport {
-  const capabilities: TargetCapability[] = ['exec', 'pty', 'signal', 'profiles'];
+  // 'endpoint' is served by Tailscale on the target (see tailscale.ts). It is
+  // declared unconditionally because capabilities are static and the picker
+  // needs them before anything is started; a target without Tailscale fails
+  // openEndpoint with a TransportError naming the prerequisite.
+  const capabilities: TargetCapability[] = ['exec', 'pty', 'signal', 'endpoint', 'profiles'];
   const target: ExecutionTarget = {
     id: options.id,
     label: options.label,
@@ -52,10 +58,24 @@ export function createSshTransport(options: SshTargetOptions): TargetTransport {
     status: 'unknown',
   };
   const handles = new Set<PtyHandle>();
+  /** Endpoints published on the target, so close() can revoke every one. */
+  const endpoints = new Set<EndpointHandle>();
+  /** Ports this transport published on the target, so two never collide. */
+  const reservedPorts = new Set<number>();
   let closed = false;
 
   function guard(): void {
     if (closed) throw failure('closed', `Connection to target "${target.id}" is closed`);
+  }
+
+  /** Named so the endpoint can drive `tailscale` over the very same channel. */
+  async function execOnTarget(
+    spec: CommandSpec,
+    execOptions: ExecOptions = {},
+  ): Promise<CommandResult> {
+    guard();
+    const response = await oneShot({ type: 'exec', spec, options: execOptions }, 'result');
+    return response.result;
   }
 
   return {
@@ -73,11 +93,7 @@ export function createSshTransport(options: SshTargetOptions): TargetTransport {
       return target.status;
     },
 
-    async exec(spec: CommandSpec, execOptions: ExecOptions = {}): Promise<CommandResult> {
-      guard();
-      const response = await oneShot({ type: 'exec', spec, options: execOptions }, 'result');
-      return response.result;
-    },
+    exec: execOnTarget,
 
     async openPty(spec: PtySpec): Promise<PtyHandle> {
       guard();
@@ -88,8 +104,19 @@ export function createSshTransport(options: SshTargetOptions): TargetTransport {
       return handle;
     },
 
-    async openEndpoint(_request: EndpointRequest): Promise<EndpointHandle> {
-      throw failure('unsupported', `Target "${target.id}" cannot do endpoint`);
+    async openEndpoint(request: EndpointRequest): Promise<EndpointHandle> {
+      guard();
+      // The service stays on the target's loopback address; Tailscale is what
+      // makes it reachable, and it is driven over this same exec channel.
+      const handle = await openTailscaleEndpoint(request, {
+        targetId: target.id,
+        exec: execOnTarget,
+        probe: (url, timeoutMs) => urlProbe(url, timeoutMs),
+        reserved: reservedPorts,
+      });
+      endpoints.add(handle);
+      handle.onClose(() => void endpoints.delete(handle));
+      return handle;
     },
 
     async profiles(): Promise<TargetProfileSummary[]> {
@@ -100,6 +127,13 @@ export function createSshTransport(options: SshTargetOptions): TargetTransport {
 
     async close(): Promise<void> {
       if (closed) return;
+      // Endpoints first, while exec still works: closing one runs
+      // `tailscale serve … off` on the target, so a connection torn down
+      // beforehand would leave the listener published with nothing behind it.
+      for (const endpoint of [...endpoints]) {
+        await endpoint.close().catch(() => undefined);
+      }
+      endpoints.clear();
       closed = true;
       for (const handle of [...handles]) await handle.close();
       handles.clear();
