@@ -1,9 +1,10 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
+import { APM_MANAGED_T3_INSTANCE_ENV } from '../t3/identity.js';
 import {
   PAIR_TTL,
   discoverManagedT3Processes,
@@ -16,10 +17,19 @@ import {
   t3PairArgv,
   type ManagedT3Process,
   type PairProcessResult,
+  type ProcessAttribution,
+  type ProcessOwner,
 } from './pair.js';
 
 const T3_DIR = '/home/dev/.local/share/apm/t3';
 const INSTANCE = processFor('instance-a', 4800, 101);
+const UID = 1000;
+const OWNER: ProcessOwner = { realUid: UID, effectiveUid: UID };
+const ATTRIBUTION: ProcessAttribution = {
+  realUid: UID,
+  effectiveUid: UID,
+  instanceMarker: INSTANCE.instanceId,
+};
 const DNS_NAME = 'dev-box.tailnet.ts.net';
 const STATUS = JSON.stringify({ Self: { DNSName: `${DNS_NAME}.` } });
 
@@ -74,6 +84,8 @@ describe('managed process recognition', () => {
         101,
         ['node', '/opt/t3/cli.js', 'serve', '--port', '4800', '--base-dir', INSTANCE.baseDir],
         T3_DIR,
+        ATTRIBUTION,
+        OWNER,
       ),
     ).toEqual(INSTANCE);
 
@@ -82,6 +94,8 @@ describe('managed process recognition', () => {
         101,
         ['t3', 'serve', '--port', '4800', '--base-dir', path.join(T3_DIR, 'nested', 'child')],
         T3_DIR,
+        { ...ATTRIBUTION, instanceMarker: 'child' },
+        OWNER,
       ),
     ).toBeNull();
     expect(
@@ -89,17 +103,21 @@ describe('managed process recognition', () => {
         101,
         ['t3', 'serve', '--port', '4800', '--base-dir', '/tmp/unmanaged'],
         T3_DIR,
+        { ...ATTRIBUTION, instanceMarker: 'unmanaged' },
+        OWNER,
       ),
     ).toBeNull();
   });
 
   it('rejects malformed ports, missing flags, duplicate flags and non-serve processes', () => {
-    expect(managedT3ProcessFromArgv(1, ['t3', 'pair'], T3_DIR)).toBeNull();
+    expect(managedT3ProcessFromArgv(1, ['t3', 'pair'], T3_DIR, ATTRIBUTION, OWNER)).toBeNull();
     expect(
       managedT3ProcessFromArgv(
         1,
         ['t3', 'serve', '--port', 'nope', '--base-dir', INSTANCE.baseDir],
         T3_DIR,
+        ATTRIBUTION,
+        OWNER,
       ),
     ).toBeNull();
     expect(
@@ -107,6 +125,28 @@ describe('managed process recognition', () => {
         1,
         ['t3', 'serve', '--port', '4800', '--port', '4801', '--base-dir', INSTANCE.baseDir],
         T3_DIR,
+        ATTRIBUTION,
+        OWNER,
+      ),
+    ).toBeNull();
+  });
+
+  it('rejects wrong-user, missing-marker, wrong-marker and non-T3 candidates', () => {
+    const argv = ['python', 'serve', '--port', '4800', '--base-dir', INSTANCE.baseDir];
+    expect(
+      managedT3ProcessFromArgv(101, argv, T3_DIR, { ...ATTRIBUTION, realUid: UID + 1 }, OWNER),
+    ).toBeNull();
+    expect(
+      managedT3ProcessFromArgv(101, argv, T3_DIR, { ...ATTRIBUTION, effectiveUid: UID + 1 }, OWNER),
+    ).toBeNull();
+    expect(managedT3ProcessFromArgv(101, argv, T3_DIR, null, OWNER)).toBeNull();
+    expect(
+      managedT3ProcessFromArgv(
+        101,
+        argv,
+        T3_DIR,
+        { ...ATTRIBUTION, instanceMarker: 'another-instance' },
+        OWNER,
       ),
     ).toBeNull();
   });
@@ -114,16 +154,46 @@ describe('managed process recognition', () => {
   it('reads NUL-delimited argv from a proc-like tree and ignores malformed entries', () => {
     const procDir = fs.mkdtempSync(path.join(os.tmpdir(), 'apm-pair-proc-'));
     tempDirs.push(procDir);
-    fs.mkdirSync(path.join(procDir, '101'));
-    fs.writeFileSync(
-      path.join(procDir, '101', 'cmdline'),
-      ['t3', 'serve', '--port', '4800', '--base-dir', INSTANCE.baseDir, ''].join('\0'),
+    writeProcCandidate(
+      procDir,
+      101,
+      ['t3', 'serve', '--port', '4800', '--base-dir', INSTANCE.baseDir],
+      UID,
+      INSTANCE.instanceId,
     );
-    fs.mkdirSync(path.join(procDir, '102'));
-    fs.writeFileSync(path.join(procDir, '102', 'cmdline'), 'not\0t3\0serve\0');
+    // Right argv shape, but a generic process with no APM launch marker.
+    writeProcCandidate(
+      procDir,
+      102,
+      ['python', 'serve', '--port', '4801', '--base-dir', path.join(T3_DIR, 'not-t3')],
+      UID,
+      null,
+    );
+    // A marker does not override the target-user ownership boundary.
+    writeProcCandidate(
+      procDir,
+      103,
+      ['t3', 'serve', '--port', '4802', '--base-dir', path.join(T3_DIR, 'wrong-user')],
+      UID + 1,
+      'wrong-user',
+    );
+    // Same user and T3-shaped argv, but marker/base-dir disagreement.
+    writeProcCandidate(
+      procDir,
+      104,
+      ['t3', 'serve', '--port', '4803', '--base-dir', path.join(T3_DIR, 'wrong-marker')],
+      UID,
+      'another-instance',
+    );
+    // Attribution files disappearing or being unreadable fails closed.
+    fs.mkdirSync(path.join(procDir, '105'));
+    fs.writeFileSync(
+      path.join(procDir, '105', 'cmdline'),
+      ['t3', 'serve', '--port', '4804', '--base-dir', path.join(T3_DIR, 'unattributed')].join('\0'),
+    );
     fs.mkdirSync(path.join(procDir, 'self'));
 
-    expect(discoverManagedT3Processes(T3_DIR, procDir)).toEqual([INSTANCE]);
+    expect(discoverManagedT3Processes(T3_DIR, procDir, OWNER)).toEqual([INSTANCE]);
   });
 });
 
@@ -274,6 +344,68 @@ describe('pair workflow', () => {
     expect(stdout).toBe('partial token\n');
     expect(stderr).toBe('pair failed\n');
   });
+
+  it('drains exact large failure output through the real CLI entry point', () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'apm-pair-failure-'));
+    tempDirs.push(dataDir);
+    const t3Dir = path.join(dataDir, 't3');
+    const binDir = path.join(dataDir, 'bin');
+    const instanceId = 'live-instance';
+    const baseDir = path.join(t3Dir, instanceId);
+    fs.mkdirSync(baseDir, { recursive: true });
+    fs.mkdirSync(binDir);
+
+    const stdoutPayload = 'o'.repeat(1_000_000);
+    const stderrPayload = 'e'.repeat(1_000_000);
+    writeExecutable(
+      path.join(binDir, 'tailscale'),
+      'const args = process.argv.slice(2);\n' +
+        `const status = ${JSON.stringify(STATUS)};\n` +
+        `const serve = ${JSON.stringify(serveStatus([{ https: 8443, backend: 4800 }]))};\n` +
+        "process.stdout.write(args[0] === 'status' ? status : serve);\n",
+    );
+    writeExecutable(
+      path.join(binDir, 't3'),
+      `process.stdout.write('o'.repeat(${stdoutPayload.length}));\n` +
+        `process.stderr.write('e'.repeat(${stderrPayload.length}));\n` +
+        'process.exitCode = 2;\n',
+    );
+
+    const server = spawn(
+      process.execPath,
+      [
+        '-e',
+        'setInterval(() => undefined, 1000)',
+        'serve',
+        '--port',
+        '4800',
+        '--base-dir',
+        baseDir,
+      ],
+      {
+        stdio: 'ignore',
+        env: { ...process.env, [APM_MANAGED_T3_INSTANCE_ENV]: instanceId },
+      },
+    );
+    liveChildren.push(server);
+
+    const main = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'main.ts');
+    const invoked = spawnSync(process.execPath, ['--import', 'tsx', main, 'pair'], {
+      encoding: 'utf8',
+      timeout: 15_000,
+      maxBuffer: 3_000_000,
+      env: {
+        ...process.env,
+        APM_DATA_DIR: dataDir,
+        PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ''}`,
+      },
+    });
+
+    expect(invoked.error).toBeUndefined();
+    expect(invoked.status).toBe(1);
+    expect(invoked.stdout).toBe(stdoutPayload);
+    expect(invoked.stderr).toBe(`${stderrPayload}apm: t3 pair exited with code 2\n`);
+  });
 });
 
 describe('pair subprocess capture', () => {
@@ -316,9 +448,35 @@ describe('pairing URL presentation', () => {
 });
 
 const tempDirs: string[] = [];
+const liveChildren: ChildProcess[] = [];
 afterEach(() => {
+  for (const child of liveChildren.splice(0)) child.kill('SIGKILL');
   for (const dir of tempDirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
 });
+
+function writeExecutable(file: string, source: string): void {
+  fs.writeFileSync(file, `#!/usr/bin/env node\n${source}`, { mode: 0o700 });
+}
+
+function writeProcCandidate(
+  procDir: string,
+  pid: number,
+  argv: string[],
+  uid: number,
+  marker: string | null,
+): void {
+  const processDir = path.join(procDir, String(pid));
+  fs.mkdirSync(processDir);
+  fs.writeFileSync(path.join(processDir, 'cmdline'), [...argv, ''].join('\0'));
+  fs.writeFileSync(
+    path.join(processDir, 'status'),
+    `Name:\tt3\nUid:\t${uid}\t${uid}\t${uid}\t${uid}\n`,
+  );
+  fs.writeFileSync(
+    path.join(processDir, 'environ'),
+    `PATH=/bin\0${marker === null ? '' : `${APM_MANAGED_T3_INSTANCE_ENV}=${marker}\0`}`,
+  );
+}
 
 function allFileText(root: string): string {
   const contents: string[] = [];

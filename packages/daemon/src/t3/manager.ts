@@ -43,6 +43,7 @@ import { ApiFailure, type EventBus, type ProfileService, type T3Manager } from '
 import { toApiFailure } from '../targets/errors.js';
 import { httpProbe, portIsFree } from '../targets/net.js';
 import type { TargetRegistry } from '../targets/registry.js';
+import { APM_MANAGED_T3_INSTANCE_ENV } from './identity.js';
 
 /** First port tried for a new instance; T3's own default (4700) is left alone. */
 export const T3_PORT_BASE = 4800;
@@ -446,6 +447,9 @@ export function createT3Manager(
       pty = await transport.openPty({
         argv: t3ServeArgv(REMOTE_T3_BINARY, port, instance.baseDir),
         cwd: instance.baseDir,
+        // Non-secret target-local attribution for `apm pair`. The CLI requires
+        // this id to agree with the managed base-dir child before minting.
+        env: { [APM_MANAGED_T3_INSTANCE_ENV]: instance.id },
         // The target resolves this id to its own provider env locally.
         profileId,
         ...REMOTE_PTY_SIZE,

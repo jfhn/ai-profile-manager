@@ -142,7 +142,10 @@ export async function pairCommand(argv: string[]): Promise<void> {
     const invocation = parsePairArgv(argv);
     await runPair(invocation, { t3Dir: resolveConfig().t3Dir });
   } catch (error: unknown) {
-    fail(errorMessage(error));
+    // Pairing output may contain a large one-time token/link. Natural process
+    // shutdown drains stdout/stderr; process.exit() here can truncate it.
+    process.stderr.write(`apm: ${errorMessage(error)}\n`);
+    process.exitCode = 1;
   }
 }
 
