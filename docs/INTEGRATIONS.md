@@ -45,6 +45,10 @@ When its local connection is the intended lifetime owner, it may add
 `--ephemeral`; after the first attach, loss of the last client then terminates
 the APM session instead of leaving it available to `apm attach`.
 
+Target capability names are open-ended within schema version 1. Consumers must
+check the capabilities they require and ignore or preserve unknown strings;
+an added capability must never make an otherwise usable target invalid.
+
 ## Version 1 stdout schema
 
 ```json

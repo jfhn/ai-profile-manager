@@ -4,6 +4,7 @@ import type {
   TargetsResponse,
   UsageSnapshot,
 } from '@apm/shared';
+import { targetsCliResponseSchema } from '@apm/shared';
 import { describe, expect, it } from 'vitest';
 import {
   buildRunSessionRequest,
@@ -215,7 +216,7 @@ describe('target integration contracts', () => {
             address: 'dev-box.example',
             fingerprint: null,
           },
-          capabilities: ['exec', 'pty', 'signal', 'profiles'],
+          capabilities: ['exec', 'pty', 'signal', 'profiles', 'detached'],
           approved: true,
           status: 'online',
         },
@@ -223,6 +224,26 @@ describe('target integration contracts', () => {
     };
 
     expect(targetsContract(response)).toEqual({ schemaVersion: 1, targets: response.targets });
+  });
+
+  it('keeps capability names forward-compatible in schema version 1', () => {
+    const parsed = targetsCliResponseSchema.parse({
+      schemaVersion: 1,
+      targets: [
+        {
+          id: 'dev-box',
+          label: 'Dev Box',
+          kind: 'remote',
+          transport: 'ssh',
+          identity: { hostname: 'dev-box', address: 'dev-box.example', fingerprint: null },
+          capabilities: ['pty', 'detached', 'future-capability'],
+          approved: true,
+          status: 'online',
+        },
+      ],
+    });
+
+    expect(parsed.targets[0]?.capabilities).toEqual(['pty', 'detached', 'future-capability']);
   });
 
   it('emits target-scoped profiles without homes and preserves opaque ids', () => {

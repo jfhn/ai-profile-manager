@@ -251,7 +251,7 @@ const executionTargetSchema = z
     kind: z.enum(['local', 'remote']),
     transport: nonBlankString,
     identity: targetIdentitySchema,
-    capabilities: z.array(z.enum(['exec', 'pty', 'signal', 'endpoint', 'profiles'])),
+    capabilities: z.array(nonBlankString),
     approved: z.boolean(),
     status: z.enum(['online', 'offline', 'unknown']),
   })

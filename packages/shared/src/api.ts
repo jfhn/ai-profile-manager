@@ -69,9 +69,15 @@ export interface ProfilesCliResponse {
 }
 
 /** Stable stdout contract returned by `apm targets --json`. */
+export interface TargetCliSummary extends Omit<ExecutionTarget, 'capabilities'> {
+  /** Capability names are open-ended so version-1 consumers can ignore
+   * features they do not understand without rejecting the target. */
+  capabilities: string[];
+}
+
 export interface TargetsCliResponse {
   schemaVersion: 1;
-  targets: ExecutionTarget[];
+  targets: TargetCliSummary[];
 }
 
 /** Stable stdout contract returned by `apm targets --profiles <target> --json`. */
