@@ -226,10 +226,23 @@ export async function openTailscaleEndpoint(
     request.port ??
     pickPort(TAILSCALE_SERVICE_PORT_BASE, union(reserved, backends)) ??
     fail('no free service port');
+  // Re-adoption: a caller naming its port may already have a serve entry from
+  // a previous daemon (a detached instance keeps serving while apm is away).
+  // Reuse that listener instead of stacking a second one on the same backend —
+  // `tailscale serve --bg` with identical ports is idempotent.
+  const existing =
+    request.port === null
+      ? undefined
+      : entries.find(
+          (entry) =>
+            entry.backendPort === request.port &&
+            inRange(entry.httpsPort, TAILSCALE_HTTPS_PORT_BASE),
+        );
   // A separate range for the tailnet listener: the HTTPS port belongs to
   // tailscaled and the service port to the service, and keeping them apart
   // means a service that binds more than loopback cannot collide with it.
   const httpsPort =
+    existing?.httpsPort ??
     pickPort(TAILSCALE_HTTPS_PORT_BASE, union(reserved, listeners)) ??
     fail('no free tailnet HTTPS port');
 

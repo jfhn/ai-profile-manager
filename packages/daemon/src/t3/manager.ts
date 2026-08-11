@@ -7,12 +7,17 @@
  * by `adopt()`, so `shutdown()` must never kill them. Nothing about that path
  * changed when targets arrived.
  *
- * Remote instances go through the target's transport and nothing else (no
- * second SSH/Tailscale path): `openPty` launches `t3 serve` from argv with the
- * bound profiles' *ids* — the target injects each profile's provider env, so no
- * credential ever reaches this machine — and `openEndpoint` publishes the port
- * and answers the health checks. The endpoint is also the only source of the
- * Open link: a remote instance is behind a forward or the target's own address,
+ * Remote instances mirror that model through the target's transport and
+ * nothing else (no second SSH/Tailscale path): `spawnDetached` launches
+ * `t3 serve` in its own session *on the target* from argv with the bound
+ * profiles' *ids* — the target injects each profile's provider env, so no
+ * credential ever reaches this machine — records it target-side, and
+ * `openEndpoint` publishes the port and answers the health checks. Both the
+ * process and its published endpoint deliberately survive a daemon restart;
+ * `adopt()` re-links them (or reports the instance stopped with the reason)
+ * and `stop()` is what actually terminates and unpublishes them, verified by
+ * the target's own record. The endpoint is also the only source of the Open
+ * link: a remote instance is behind a forward or the target's own address,
  * never behind a URL this file assembled.
  */
 import crypto from 'node:crypto';
@@ -26,17 +31,16 @@ import {
   profileIdSchema,
   providerIdSchema,
   type CreateT3InstanceRequest,
+  type DetachedServiceInspection,
+  type DetachedServiceState,
   type EndpointHandle,
   type EndpointHealth,
-  type ExitStatus,
   type ProviderId,
-  type PtyHandle,
   type T3Endpoint,
   type T3Instance,
   type TargetCapability,
   type TargetId,
   type TargetTransport,
-  type TransportError,
 } from '@apm/shared';
 import type { DaemonConfig } from '../config.js';
 import { ApiFailure, type EventBus, type ProfileService, type T3Manager } from '../context.js';
@@ -56,10 +60,8 @@ const DEFAULT_POLL_INTERVAL_MS = 500;
 const REMOTE_T3_BINARY = 't3';
 /** Instance base dirs on a target, relative to the target user's home. */
 const REMOTE_BASE_SEGMENTS = ['.local', 'share', 'apm', 't3'];
-/** A remote instance needs all four: launch, stop, publish, resolve profiles. */
-const REMOTE_CAPABILITIES: TargetCapability[] = ['pty', 'signal', 'endpoint', 'profiles'];
-/** Window `t3 serve` gets; it is a server, so the size only shapes its logging. */
-const REMOTE_PTY_SIZE = { cols: 120, rows: 40 };
+/** A remote instance needs all three: run detached, publish, resolve profiles. */
+const REMOTE_CAPABILITIES: TargetCapability[] = ['detached', 'endpoint', 'profiles'];
 
 export interface T3SpawnRequest {
   command: string;
@@ -88,18 +90,15 @@ export interface T3ManagerDeps {
   targets?: TargetRegistry;
 }
 
-/** Live handles for one remote instance. Deliberately not persisted. */
+/**
+ * Live daemon-side handle for one remote instance. Deliberately not persisted:
+ * the process itself is recorded *on the target*, and after a restart adopt()
+ * rebuilds this from that record.
+ */
 interface RemoteRuntime {
-  pty: PtyHandle;
   endpoint: EndpointHandle;
   /** Set while stop() is tearing the instance down, so it owns the final state. */
   stopping: boolean;
-  /**
-   * Transport failure reported through `onError`, kept for the exit that
-   * follows it: "the connection died" beats the exit code a dead connection
-   * happens to synthesize.
-   */
-  failure: string | null;
 }
 
 const endpointSchema = z.object({
@@ -339,49 +338,20 @@ export function createT3Manager(
   }
 
   /**
-   * Tear down a runtime that is being replaced. Nothing about the instance is
-   * touched: the caller is starting it again and owns its status.
+   * Tear down a runtime that is being replaced: only the daemon-side handle
+   * and its published endpoint go. A process left on the target is the start
+   * path's business — it stops it through the target's own record. Nothing
+   * about the instance is touched: the caller is starting it again and owns
+   * its status.
    */
   async function discardRemote(id: string): Promise<void> {
     const runtime = remotes.get(id);
     if (!runtime) return;
-    // Both flags matter: `stopping` silences its late events even for a
-    // listener that captured the runtime before it was replaced.
+    // `stopping` silences its late events even for a listener that captured
+    // the runtime before it was replaced.
     runtime.stopping = true;
     remotes.delete(id);
-    await runtime.pty.close().catch(() => undefined);
     await runtime.endpoint.close().catch(() => undefined);
-  }
-
-  /** A live transport failure; the pty's own exit follows and reports it. */
-  function onRemoteError(id: string, runtime: RemoteRuntime, error: TransportError): void {
-    if (!isCurrent(id, runtime)) return;
-    runtime.failure = error.message;
-  }
-
-  function onRemoteExit(id: string, runtime: RemoteRuntime, status: ExitStatus): void {
-    const instance = instances.get(id);
-    if (!instance || !isCurrent(id, runtime)) return;
-    // A process that never reached 'running' almost always failed to bind, and
-    // "exited with code 1" is a useless thing to show for that.
-    const duringStartup = instance.status === 'starting';
-    const port = instance.port;
-    releaseRemote(id);
-    instance.status = 'exited';
-    instance.pid = null;
-    instance.url = null;
-    instance.endpoint = null;
-    // Only the transport's own words or the exit status — never t3's output,
-    // which can contain its pairing token.
-    instance.statusReason = runtime.failure
-      ? `The connection to target "${instance.targetId}" failed: ${runtime.failure}`
-      : `t3 ${describeExit(status)} on target "${instance.targetId}"` +
-        (duringStartup && port !== null
-          ? ` before it answered — port ${port} is most likely still held over there by an ` +
-            'earlier instance. Start it again to take the next free port, or stop that process ' +
-            'on the target.'
-          : '');
-    changed();
   }
 
   function onEndpointClosed(id: string, runtime: RemoteRuntime, reason: string | null): void {
@@ -401,14 +371,27 @@ export function createT3Manager(
     const transport = requireTransport(targetId);
     const profileIds = await resolveRemoteProfiles(targetId, instance.profiles);
 
-    // Opened first: the target allocates the port, which is per-target by
-    // construction, and the request has to name that port on the command line.
+    // A process from an earlier daemon may still hold the base dir — that is
+    // the whole point of detaching. Starting is the user's explicit ask, so
+    // the leftover is stopped first (verified by the target's own record);
+    // adopt() is the path that never relaunches anything on its own.
+    try {
+      await transport.stopDetached(instance.id, instance.baseDir);
+    } catch (error: unknown) {
+      throw toApiFailure(error);
+    }
+
+    // Opened before the spawn: the target allocates the port, which is
+    // per-target by construction, and the request has to name that port on
+    // the command line.
     let endpoint: EndpointHandle;
     try {
       endpoint = await transport.openEndpoint({
         port: null,
         healthPath: '/',
         label: `t3 ${instance.label}`,
+        // The endpoint outlives this daemon exactly like the service behind it.
+        persistent: true,
       });
     } catch (error: unknown) {
       throw toApiFailure(error);
@@ -434,9 +417,9 @@ export function createT3Manager(
       );
     }
 
-    let pty: PtyHandle;
+    let state: DetachedServiceState;
     try {
-      pty = await transport.openPty({
+      state = await transport.spawnDetached({
         argv: t3ServeArgv(REMOTE_T3_BINARY, port, instance.baseDir),
         cwd: instance.baseDir,
         // Non-secret target-local attribution for `apm pair`. The CLI requires
@@ -444,23 +427,23 @@ export function createT3Manager(
         env: { [APM_MANAGED_T3_INSTANCE_ENV]: instance.id },
         // The target resolves each id to its own provider env locally.
         profileIds,
-        ...REMOTE_PTY_SIZE,
+        instanceId: instance.id,
+        port,
+        baseDir: instance.baseDir,
       });
     } catch (error: unknown) {
       await endpoint.close();
       throw toApiFailure(error);
     }
-    // t3's startup output carries a one-time pairing token, so it is
-    // deliberately neither read, stored nor logged here.
+    // t3's startup output carries a one-time pairing token, so the target
+    // spawns it with its output discarded — there is nothing to read here.
 
-    const runtime: RemoteRuntime = { pty, endpoint, stopping: false, failure: null };
+    const runtime: RemoteRuntime = { endpoint, stopping: false };
     remotes.set(instance.id, runtime);
-    pty.onError((error) => onRemoteError(instance.id, runtime, error));
-    pty.onExit((status) => onRemoteExit(instance.id, runtime, status));
     endpoint.onClose((reason) => onEndpointClosed(instance.id, runtime, reason));
 
     instance.status = 'starting';
-    instance.pid = null;
+    instance.pid = state.pid;
     instance.port = port;
     instance.url = null;
     instance.endpoint = snapshotEndpoint(endpoint);
@@ -475,7 +458,8 @@ export function createT3Manager(
     } finally {
       watchers.delete(watcher);
     }
-    // The process may have exited (or been stopped) while we waited.
+    // The instance may have been stopped (or the daemon shut down) while we
+    // waited.
     if (watcher.cancelled || remotes.get(instance.id) !== runtime) return { ...instance };
     // Same for the endpoint: onClose already recorded why it went away, and
     // that reason beats a generic "nothing answered in time".
@@ -493,29 +477,175 @@ export function createT3Manager(
         instance.statusReason = null;
       }
     } else {
-      instance.status = 'unhealthy';
-      instance.statusReason =
-        health.reason ??
-        `No HTTP response from t3 on target "${targetId}" within ` +
-          `${Math.round(startTimeoutMs / 1000)}s`;
+      // Nothing answered. One look at the target's record tells a process
+      // that died — almost always a failure to bind — from one that is
+      // merely slow; "no HTTP response" is a useless thing to show for that.
+      let inspection: DetachedServiceInspection | null = null;
+      try {
+        inspection = await transport.inspectDetached(instance.id, instance.baseDir);
+      } catch {
+        /* keep the health verdict when the record cannot be read */
+      }
+      if (inspection !== null && inspection.state === null) {
+        releaseRemote(instance.id);
+        instance.status = 'exited';
+        instance.pid = null;
+        instance.url = null;
+        instance.endpoint = null;
+        // Only the target's record and the port — never t3's output, which
+        // can contain its pairing token.
+        instance.statusReason =
+          `t3 exited during startup on target "${targetId}" — port ${port} is most likely ` +
+          'still held over there by an earlier instance. Start it again to take the next ' +
+          'free port, or stop that process on the target.';
+      } else {
+        instance.status = 'unhealthy';
+        instance.statusReason =
+          health.reason ??
+          `No HTTP response from t3 on target "${targetId}" within ` +
+            `${Math.round(startTimeoutMs / 1000)}s`;
+      }
     }
     changed();
     return { ...instance };
   }
 
+  /**
+   * Stop the detached process by the *target's* record — which is what makes
+   * this work for a process spawned by a previous daemon or agent invocation,
+   * not just the one this runtime knows. The target verifies the recorded pid
+   * still is that process before killing (SIGTERM, then SIGKILL, delivered to
+   * its process group), so a recycled pid is never signalled.
+   */
   async function stopRemote(instance: T3Instance): Promise<void> {
-    const runtime = remotes.get(instance.id);
-    if (!runtime) return;
-    runtime.stopping = true;
-    const exited = new Promise<void>((resolve) => runtime.pty.onExit(() => resolve()));
-    runtime.pty.signal('SIGTERM');
-    await settleWithin(exited, stopTimeoutMs);
-    // A no-op once the process is gone, so an already-clean exit costs nothing.
-    runtime.pty.signal('SIGKILL');
-    await settleWithin(exited, Math.min(2_000, stopTimeoutMs));
-    await runtime.pty.close().catch(() => undefined);
+    const runtime = remotes.get(instance.id) ?? null;
+    // Nothing recorded and nothing linked: nothing worth reaching out for.
+    if (instance.status === 'stopped' && runtime === null) return;
+    if (runtime) runtime.stopping = true;
+    let transport: TargetTransport | null = null;
+    try {
+      transport = requireTransport(instance.targetId);
+    } catch {
+      // A revoked or vanished target cannot be reached to kill anything; all
+      // that is left is to let go of the instance here. Whatever still runs
+      // over there is cleaned up on the target (see docs/T3-REMOTE.md).
+    }
+    if (transport) {
+      try {
+        await transport.stopDetached(instance.id, instance.baseDir);
+      } catch (error: unknown) {
+        // The process could not be terminated — an unreachable target, say.
+        // Claiming "stopped" now would leave a server running with nobody
+        // supervising it, so the failure is the honest answer.
+        if (runtime) runtime.stopping = false;
+        throw toApiFailure(error);
+      }
+    }
     remotes.delete(instance.id);
-    await runtime.endpoint.close().catch(() => undefined);
+    if (runtime) await runtime.endpoint.close().catch(() => undefined);
+  }
+
+  /**
+   * Re-link one remote instance after a daemon restart. The detached process
+   * and its published endpoint kept running while apm was away; the target's
+   * record says whether they still do. An instance that died in the meantime
+   * is reported stopped with the reason — never relaunched from here.
+   * Returns whether the instance was changed.
+   */
+  async function adoptRemote(instance: T3Instance): Promise<boolean> {
+    const wasLive =
+      instance.status === 'starting' ||
+      instance.status === 'running' ||
+      instance.status === 'unhealthy';
+    if (!wasLive) {
+      // 'stopped' and 'exited' were settled before the restart; only a stale
+      // link is cleared, because no endpoint handle backs it any more... yet
+      // the target-side state (if any) stays for stop()/start() to find.
+      if (instance.url === null && instance.endpoint === null) return false;
+      instance.url = null;
+      instance.endpoint = null;
+      return true;
+    }
+
+    const abandon = (statusReason: string): true => {
+      instance.status = 'stopped';
+      instance.pid = null;
+      instance.port = null;
+      instance.url = null;
+      instance.endpoint = null;
+      instance.statusReason = statusReason;
+      return true;
+    };
+
+    let transport: TargetTransport;
+    let inspection: DetachedServiceInspection;
+    try {
+      transport = requireTransport(instance.targetId);
+      inspection = await transport.inspectDetached(instance.id, instance.baseDir);
+    } catch (error: unknown) {
+      // Unreachable target, an agent too old for the verbs, a revoked
+      // registration — all degrade the same way: a clear reason and a stopped
+      // instance, never a crash and never a dead link presented as live.
+      return abandon(
+        `Could not re-adopt this instance after the apm restart: ${describeError(error)}. ` +
+          `If t3 is still running on "${instance.targetId}", stop it there or press Start ` +
+          'to replace it.',
+      );
+    }
+    const state = inspection.state;
+    if (state === null) {
+      // Died while the manager was away. Reported, not silently relaunched.
+      return abandon(
+        `t3 stopped on target "${instance.targetId}" while apm was down` +
+          (inspection.reason ? ` (${inspection.reason})` : '') +
+          ' — start it again when you want it back',
+      );
+    }
+
+    // Still alive: re-publish the endpoint (idempotent on the target — an
+    // existing serve entry for the port is reused) and re-read its URL.
+    let endpoint: EndpointHandle;
+    try {
+      endpoint = await transport.openEndpoint({
+        port: state.port,
+        healthPath: '/',
+        label: `t3 ${instance.label}`,
+        persistent: true,
+      });
+    } catch (error: unknown) {
+      instance.status = 'unhealthy';
+      instance.pid = state.pid;
+      instance.port = state.port;
+      instance.url = null;
+      instance.endpoint = null;
+      instance.statusReason =
+        `t3 is still running on target "${instance.targetId}", but its endpoint could not ` +
+        `be re-published: ${describeError(error)}`;
+      return true;
+    }
+    const runtime: RemoteRuntime = { endpoint, stopping: false };
+    remotes.set(instance.id, runtime);
+    endpoint.onClose((reason) => onEndpointClosed(instance.id, runtime, reason));
+
+    instance.pid = state.pid;
+    instance.port = state.port;
+    const health = await endpoint.waitUntilHealthy(startTimeoutMs);
+    if (remotes.get(instance.id) !== runtime) return true;
+    if (health.state === 'healthy' && endpoint.endpoint.url !== null) {
+      instance.status = 'running';
+      instance.endpoint = snapshotEndpoint(endpoint);
+      instance.url = instance.endpoint.url;
+      instance.statusReason = null;
+    } else if (health.state !== 'closed') {
+      // onClose owns the 'closed' case; anything else is an honest unhealthy.
+      instance.status = 'unhealthy';
+      instance.endpoint = snapshotEndpoint(endpoint);
+      instance.url = null;
+      instance.statusReason =
+        health.reason ??
+        `t3 is running on target "${instance.targetId}" but did not answer over its endpoint`;
+    }
+    return true;
   }
 
   // ---- local target ---------------------------------------------------------
@@ -671,10 +801,11 @@ export function createT3Manager(
         );
       }
       if (instance.targetId === LOCAL_TARGET_ID) return startLocal(instance);
-      // An instance can be restarted while an earlier attempt's pty and
-      // endpoint are still open on the target — 'unhealthy' and 'exited' are
-      // both startable. Retire that runtime before opening another one, or it
-      // leaks over there and its late events land on the new one.
+      // An instance can be restarted while an earlier attempt's endpoint is
+      // still published on the target — 'unhealthy' and 'exited' are both
+      // startable. Retire that runtime before opening another one, or it
+      // leaks over there and its late events land on the new one. (The old
+      // *process*, if any, is stopped inside startRemote by its record.)
       await discardRemote(instance.id);
       return startRemote(instance);
     },
@@ -722,20 +853,9 @@ export function createT3Manager(
       let dirty = false;
       for (const instance of instances.values()) {
         if (instance.targetId !== LOCAL_TARGET_ID) {
-          // A remote instance is supervised through its transport's pty and
-          // endpoint, and neither outlives this process — so nothing is left
-          // to adopt. Reporting it as stopped beats linking a dead endpoint.
-          if (instance.status !== 'stopped' || instance.port !== null) {
-            dirty = true;
-            instance.status = 'stopped';
-            instance.pid = null;
-            instance.port = null;
-            instance.url = null;
-            instance.endpoint = null;
-            instance.statusReason =
-              `apm restarted, which ended the connection supervising this instance on ` +
-              `"${instance.targetId}" — start it again`;
-          }
+          // Detached on the target, so it survived the restart on purpose —
+          // re-link it from the target's record, or report why not.
+          if (await adoptRemote(instance)) dirty = true;
           continue;
         }
         const pid = instance.pid;
@@ -764,15 +884,15 @@ export function createT3Manager(
     },
 
     async shutdown(): Promise<void> {
-      // Local instances are detached on purpose: only stop watching them.
+      // Instances are detached on purpose — local and remote alike: only stop
+      // watching them. A remote instance's process *and* its published
+      // endpoint stay up on the target while the daemon is away (its handles
+      // are opened persistent, so closing the transports leaves the serve
+      // entry alone); adopt() re-links both on the way back up, and stop() is
+      // what terminates the process and withdraws the endpoint.
       for (const watcher of watchers) watcher.cancelled = true;
       watchers.clear();
-      // Remote ones are not detached and must not be left behind. Clearing the
-      // map alone used to leak both the process and its published endpoint:
-      // the pty child survived its connection and the tailnet listener stayed
-      // up, so a restart met an occupied port and a URL nobody was watching.
-      const running = [...remotes.keys()];
-      await Promise.all(running.map((id) => discardRemote(id)));
+      remotes.clear();
     },
   };
 }
@@ -787,9 +907,9 @@ function loopbackEndpoint(port: number, url: string | null): T3Endpoint {
   return { scope: 'loopback', protocol: 'http', port, url };
 }
 
-function describeExit(status: ExitStatus): string {
-  if (status.signal) return `was killed by ${status.signal}`;
-  return `exited with code ${status.exitCode ?? 'unknown'}`;
+/** Message of an ApiFailure/TransportError/Error, for a statusReason. */
+function describeError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 /** Lowest free TCP port at or above `from`, skipping ports we already handed out. */
@@ -877,15 +997,4 @@ function writeJsonAtomic(file: string, data: unknown): void {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-/** Wait for `promise`, but no longer than `ms`; the timer is cleared either way. */
-function settleWithin(promise: Promise<unknown>, ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    const timer = setTimeout(resolve, ms);
-    void promise.then(() => {
-      clearTimeout(timer);
-      resolve();
-    });
-  });
 }

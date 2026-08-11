@@ -9,10 +9,14 @@ import type {
 /**
  * Transport contract: the one seam every execution target is driven through.
  *
- * Three jobs, deliberately kept separate:
- *   - one-shot commands  (exec)
- *   - interactive ptys   (openPty)
- *   - service endpoints  (openEndpoint) for HTTP/WS apps such as T3
+ * Four jobs, deliberately kept separate:
+ *   - one-shot commands   (exec)
+ *   - interactive ptys    (openPty)
+ *   - service endpoints   (openEndpoint) for HTTP/WS apps such as T3
+ *   - detached services   (spawnDetached / inspectDetached / stopDetached),
+ *     the managed-T3 exception to "nothing outlives the connection": the
+ *     process runs in its own session on the target, is recorded in a state
+ *     file inside its base dir, and is re-linked by pid after a daemon restart
  *
  * Everything crossing the seam is a structured value. There is no "command
  * line" anywhere in this file: a command is argv plus an env map plus a cwd,
@@ -90,6 +94,42 @@ export interface PtyHandle {
   close(): Promise<void>;
 }
 
+/**
+ * A managed service to spawn *detached* on the target — its own session and
+ * process group, so it survives the transport connection and the daemon that
+ * asked for it. This is deliberately the only way a transport starts anything
+ * that outlives it, and it is scoped to managed T3 instances: the target
+ * refuses a base dir that is not an immediate child of its managed T3
+ * directory named after the instance.
+ */
+export interface DetachedServiceSpec extends CommandSpec {
+  /** Opaque instance id; must equal the base dir's final path segment. */
+  instanceId: string;
+  /** Loopback port the service is expected to bind on the target. */
+  port: number;
+  /** Instance-private base dir on the target; the state record lives inside. */
+  baseDir: string;
+}
+
+/**
+ * What the target records about a live detached service. Only opaque ids,
+ * pids and ports — never credentials, never the process's output.
+ */
+export interface DetachedServiceState {
+  instanceId: string;
+  pid: number;
+  port: number;
+  /** ISO timestamp of the spawn. */
+  startedAt: string;
+}
+
+export interface DetachedServiceInspection {
+  /** The recorded state, when the recorded pid is verifiably still that process. */
+  state: DetachedServiceState | null;
+  /** Why `state` is null when it is (process exited, nothing recorded, ...). */
+  reason: string | null;
+}
+
 export type EndpointProtocol = 'http' | 'https';
 
 /** How the endpoint's URL is reachable from the machine running the daemon. */
@@ -109,6 +149,12 @@ export interface EndpointRequest {
   healthPath?: string;
   /** Human label for diagnostics and logs. */
   label?: string;
+  /**
+   * The published endpoint deliberately outlives this transport connection
+   * (a detached service is behind it), so closing the transport must not
+   * withdraw it. `EndpointHandle.close()` still does.
+   */
+  persistent?: boolean;
 }
 
 export interface ServiceEndpoint {
@@ -154,6 +200,26 @@ export interface TargetTransport {
   exec(spec: CommandSpec, options?: ExecOptions): Promise<CommandResult>;
   openPty(spec: PtySpec): Promise<PtyHandle>;
   openEndpoint(request: EndpointRequest): Promise<EndpointHandle>;
+  /**
+   * Spawn a managed service detached on the target and record it there. The
+   * process belongs to the *target* afterwards, not to this connection: it
+   * survives close(), agent death and a daemon restart, and is reached again
+   * only through inspectDetached/stopDetached.
+   */
+  spawnDetached(spec: DetachedServiceSpec): Promise<DetachedServiceState>;
+  /**
+   * Re-read the recorded state of a detached service. `state` is null unless
+   * the recorded pid verifiably still is that process — a recycled pid is
+   * reported as gone, never as the service.
+   */
+  inspectDetached(instanceId: string, baseDir: string): Promise<DetachedServiceInspection>;
+  /**
+   * Terminate the recorded detached service (SIGTERM, then SIGKILL, delivered
+   * to its process group) and drop the record. Idempotent: nothing recorded or
+   * an already-dead process is a clean no-op. Never kills a pid it cannot
+   * verify as the recorded process.
+   */
+  stopDetached(instanceId: string, baseDir: string): Promise<void>;
   /** Profiles as the target sees them — no homes, no credentials. */
   profiles(): Promise<TargetProfileSummary[]>;
   /**

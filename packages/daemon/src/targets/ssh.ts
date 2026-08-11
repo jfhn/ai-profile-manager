@@ -8,6 +8,9 @@ import {
   TransportError,
   type CommandResult,
   type CommandSpec,
+  type DetachedServiceInspection,
+  type DetachedServiceSpec,
+  type DetachedServiceState,
   type EndpointHandle,
   type EndpointRequest,
   type ExecOptions,
@@ -45,8 +48,17 @@ export function createSshTransport(options: SshTargetOptions): TargetTransport {
   // 'endpoint' is served by Tailscale on the target (see tailscale.ts). It is
   // declared unconditionally because capabilities are static and the picker
   // needs them before anything is started; a target without Tailscale fails
-  // openEndpoint with a TransportError naming the prerequisite.
-  const capabilities: TargetCapability[] = ['exec', 'pty', 'signal', 'endpoint', 'profiles'];
+  // openEndpoint with a TransportError naming the prerequisite. The same goes
+  // for 'detached': an agent too old for it fails the request with a clear
+  // error instead of being filtered out up front.
+  const capabilities: TargetCapability[] = [
+    'exec',
+    'pty',
+    'signal',
+    'endpoint',
+    'profiles',
+    'detached',
+  ];
   const target: ExecutionTarget = {
     id: options.id,
     label: options.label,
@@ -114,9 +126,34 @@ export function createSshTransport(options: SshTargetOptions): TargetTransport {
         probe: (url, timeoutMs) => urlProbe(url, timeoutMs),
         reserved: reservedPorts,
       });
-      endpoints.add(handle);
-      handle.onClose(() => void endpoints.delete(handle));
+      // A persistent endpoint fronts a detached service and must keep serving
+      // while the daemon is away, so closing this transport leaves it
+      // published; only its own close() (the stop path) withdraws it.
+      if (!request.persistent) {
+        endpoints.add(handle);
+        handle.onClose(() => void endpoints.delete(handle));
+      }
       return handle;
+    },
+
+    async spawnDetached(spec: DetachedServiceSpec): Promise<DetachedServiceState> {
+      guard();
+      const response = await detachedCall({ type: 'detached-spawn', spec });
+      if (!response.state) {
+        throw failure('spawn-failed', `Target "${target.id}" recorded no detached process`);
+      }
+      return response.state;
+    },
+
+    async inspectDetached(instanceId: string, baseDir: string): Promise<DetachedServiceInspection> {
+      guard();
+      const response = await detachedCall({ type: 'detached-inspect', instanceId, baseDir });
+      return { state: response.state, reason: response.reason };
+    },
+
+    async stopDetached(instanceId: string, baseDir: string): Promise<void> {
+      guard();
+      await detachedCall({ type: 'detached-stop', instanceId, baseDir });
     },
 
     async profiles(): Promise<TargetProfileSummary[]> {
@@ -140,7 +177,33 @@ export function createSshTransport(options: SshTargetOptions): TargetTransport {
     },
   };
 
-  async function oneShot<T extends 'ready' | 'profiles' | 'result'>(
+  /**
+   * A detached verb against an agent that predates them fails schema parsing
+   * over there and comes back as a generic invalid-request error. Name the
+   * real problem — the target's apm is too old — instead of passing that on.
+   */
+  async function detachedCall(
+    request: AgentRequest,
+  ): Promise<Extract<AgentResponse, { type: 'detached' }>> {
+    try {
+      return await oneShot(request, 'detached');
+    } catch (error: unknown) {
+      if (
+        error instanceof TransportError &&
+        error.code === 'spawn-failed' &&
+        error.message.includes('Invalid target-agent request')
+      ) {
+        throw failure(
+          'unsupported',
+          `The apm agent on target "${target.id}" is too old to manage detached T3 instances — ` +
+            'update apm on the target',
+        );
+      }
+      throw error;
+    }
+  }
+
+  async function oneShot<T extends 'ready' | 'profiles' | 'result' | 'detached'>(
     request: AgentRequest,
     expected: T,
   ): Promise<Extract<AgentResponse, { type: T }>> {

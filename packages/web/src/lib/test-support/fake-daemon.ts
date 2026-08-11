@@ -140,7 +140,7 @@ export class FakeDaemon implements WizardApi {
       kind: target.id === 'local' ? 'local' : 'remote',
       transport: target.id === 'local' ? 'local' : 'fake',
       identity: { hostname: target.id, address: null, fingerprint: null },
-      capabilities: ['exec', 'pty', 'signal', 'endpoint', 'profiles'],
+      capabilities: ['exec', 'pty', 'signal', 'endpoint', 'profiles', 'detached'],
       approved: true,
       status: 'online',
       ...target,

@@ -26,7 +26,7 @@ interface ExecutionTarget {
   kind: 'local' | 'remote';
   transport: string; // implementation id, diagnostics only
   identity: { hostname; address; fingerprint }; // never anything secret
-  capabilities: TargetCapability[]; // 'exec' | 'pty' | 'signal' | 'endpoint' | 'profiles'
+  capabilities: TargetCapability[]; // 'exec' | 'pty' | 'signal' | 'endpoint' | 'profiles' | 'detached'
   approved: boolean; // remote targets run nothing until a human approved them
   status: 'online' | 'offline' | 'unknown';
 }
@@ -196,6 +196,16 @@ funnelled is withdrawn instead of handed out. The capability is declared
 unconditionally because capabilities are static; a target without Tailscale
 fails `openEndpoint` with `endpoint-failed` naming the prerequisite.
 
+Its `detached` capability is three agent verbs (`detached-spawn`,
+`detached-inspect`, `detached-stop`) backed by the local transport on the
+target: the process runs in its own session, scoped to an immediate child of
+the target's managed T3 directory, with a state file (`apm-service.json`)
+recording instance id, pid, port and the pid's kernel start time. Inspect and
+stop go by that record and verify the start time first, so a recycled pid is
+never mistaken for the service. An agent too old for the verbs makes them fail
+with `unsupported`, naming the fix — the daemon degrades to a clear error, it
+does not crash.
+
 ## What consumers may assume
 
 ### `apm run --target <target>` (issue #18)
@@ -233,27 +243,25 @@ Implemented in `packages/daemon/src/t3/manager.ts`; the user-facing side is
   reachable from the daemon's machine only.
 - `onClose` means the endpoint is gone (forward dropped, connection lost); the
   instance is shown as unhealthy, not silently linked.
-- `onError` is a live transport failure; it is remembered and reported by the
-  exit that follows, because "the connection died" is more useful than the exit
-  code a dead connection synthesizes.
-- Launch T3 through `openPty` with argv and a `profileId`, not `exec`: a managed
-  instance has to be stoppable, and `signal`/`onExit` on the pty handle are the
-  only lifecycle the contract offers. The bound profile's credentials stay on
-  the target — the pty's output is never read, because `t3 serve` prints a
+- Launch T3 through `spawnDetached` with argv and the bound profiles' ids, not
+  `exec` and not `openPty`: a managed instance must survive the daemon and
+  still be stoppable, and the detached trio (`spawnDetached` /
+  `inspectDetached` / `stopDetached`) is the only lifecycle the contract
+  offers for that. The bound profiles' credentials stay on the target — and
+  the process's output is discarded over there, because `t3 serve` prints a
   one-time pairing token into it.
-- A remote instance binds exactly one profile: a `CommandSpec` carries one
-  `profileId`, and a second provider's env could only come from moving
-  credentials.
-- `endpoint`, `pty`, `signal` and `profiles` are all required. A target missing
+- `endpoint`, `detached` and `profiles` are all required. A target missing
   any of them cannot host managed T3 instances and is filtered out of the
   picker (`GET /api/targets` exposes the capability list for exactly this).
-- Nothing outlives the daemon on a remote target, and that is enforced rather
-  than assumed. `shutdown()` terminates every remote runtime and revokes its
-  endpoint before the transports are released; the agent kills its own process
-  group on hangup, stdin EOF and exit, so even a killed daemon leaves nothing
-  behind; and a start steps over service ports an existing serve entry already
-  proxies to. `adopt()` then reports remote instances as stopped rather than
-  re-adopting them.
+- Managed T3 instances are the one thing that outlives the daemon on a remote
+  target, and only under their target-side record. Everything else is enforced
+  rather than assumed: the agent kills its own process group on hangup, stdin
+  EOF and exit, so a dropped connection leaves no pty child behind; a start
+  first stops whatever the instance's record still names, then steps over
+  service ports an existing serve entry already proxies to; `shutdown()` only
+  lets go of the handles (the process and its serve entry keep serving); and
+  `adopt()` re-links a still-verified process — or reports the instance
+  stopped with the reason, never relaunching it.
 - Existing local instances keep their loopback URL: they still use the detached
   spawn + HTTP probe path (`packages/daemon/src/targets/net.ts`), because only a
   detached process survives a daemon restart, and their endpoint is recorded

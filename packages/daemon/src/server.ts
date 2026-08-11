@@ -43,7 +43,7 @@ export async function createContext(config: DaemonConfig): Promise<AppContext> {
   const usage = createUsageService(config, events, profiles);
   // One local transport for the whole daemon; configured remotes are resolved
   // only through the same approved registry.
-  const localTransport = createLocalTransport({ profiles });
+  const localTransport = createLocalTransport({ profiles, detachedDir: config.t3Dir });
   const targets = createTargetRegistry(localTransport, createConfiguredTransports(config));
   const sessions = createSessionHost(config, events, profiles, { targets });
   const t3 = createT3Manager(config, events, profiles, { targets });
@@ -157,8 +157,8 @@ export async function startDaemon(config: DaemonConfig): Promise<DaemonHandle> {
     closed = true;
     ctx.usage.stop();
     ctx.sessions.shutdown();
-    // Ahead of the transports, because terminating remote instances and
-    // revoking their endpoints needs the connections close() releases.
+    // Only lets go of handles: managed instances — local and remote alike —
+    // are detached on purpose and keep serving until adopt() re-links them.
     await ctx.t3.shutdown();
     await ctx.targets.close();
     removeRunFile(config);

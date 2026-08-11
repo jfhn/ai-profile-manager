@@ -328,6 +328,26 @@ describe('openTailscaleEndpoint', () => {
     expect(h.calls).toContainEqual(serveArgv(8443, 4900));
   });
 
+  it('reuses the existing listener when re-adopting a still-served port', async () => {
+    // A detached instance kept serving through a daemon restart, so its serve
+    // entry survived too. Re-publishing its port must reuse that listener,
+    // not stack a second HTTPS port onto the same backend forever.
+    const h = harness(serveStatusJson({ entries: [{ https: 8445, backend: 4802 }] }));
+    // The backend answers — the live instance — so it is not reclaimed.
+    h.script(backendProbeArgv(4802), { exitCode: 0 });
+    const handle = await openTailscaleEndpoint(
+      { port: 4802 },
+      deps(h, async () => true),
+    );
+    expect(handle.endpoint.port).toBe(4802);
+    // Republished idempotently onto the very same HTTPS port.
+    expect(h.calls).toContainEqual(serveArgv(8445, 4802));
+    expect(h.calls.filter((argv) => argv[1] === 'serve' && argv[2] === '--bg')).toHaveLength(1);
+    const healthy = await handle.waitUntilHealthy(200);
+    expect(healthy.state).toBe('healthy');
+    expect(handle.endpoint.url).toBe(`https://${DNS_NAME}:8445`);
+  });
+
   it('unpublishes on close and frees the ports again', async () => {
     const reserved = new Set<number>();
     const h = harness();

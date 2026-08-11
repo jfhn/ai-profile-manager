@@ -11,6 +11,9 @@ import {
   TransportError,
   type CommandResult,
   type CommandSpec,
+  type DetachedServiceInspection,
+  type DetachedServiceSpec,
+  type DetachedServiceState,
   type EndpointHandle,
   type EndpointHealth,
   type EndpointRequest,
@@ -50,6 +53,21 @@ export interface FakeRemoteOptions {
   endpointHost?: string;
   /** Poll cadence of `waitUntilHealthy` (tests that flip health mid-wait). */
   healthPollIntervalMs?: number;
+  /**
+   * The target's record of detached services. It models state that lives *on
+   * the target machine*, so a test that simulates a daemon restart hands the
+   * same map to the next fake transport.
+   */
+  detachedStore?: Map<string, FakeDetachedService>;
+  /** Model an agent too old for the detached verbs. */
+  detachedUnsupported?: boolean;
+}
+
+/** One detached service as the fake target records it. */
+export interface FakeDetachedService {
+  state: DetachedServiceState;
+  spec: DetachedServiceSpec;
+  alive: boolean;
 }
 
 export interface FakeExecCall {
@@ -85,6 +103,14 @@ export interface FakeRemoteTransport extends TargetTransport {
   readonly execs: FakeExecCall[];
   readonly ptys: FakePty[];
   readonly endpoints: FakeEndpoint[];
+  /** The target-side record of detached services (shared across "restarts"). */
+  readonly detached: Map<string, FakeDetachedService>;
+  /** Every spawnDetached call, in order. */
+  readonly detachedSpawns: DetachedServiceSpec[];
+  /** Every stopDetached call, in order. */
+  readonly detachedStops: Array<{ instanceId: string; baseDir: string }>;
+  /** Simulate the detached service dying on the target. */
+  killDetached(instanceId: string): void;
   /** Result returned for commands with exactly this argv. */
   scriptExec(argv: readonly string[], result: Partial<CommandResult>): void;
   /** Reject exec/openPty for exactly this argv with a transport error. */
@@ -103,7 +129,14 @@ export function createFakeRemoteTransport(options: FakeRemoteOptions = {}): Fake
     kind: 'remote',
     transport: 'fake',
     identity: { hostname: id, address: `${id}.example`, fingerprint: `fp-${id}` },
-    capabilities: options.capabilities ?? ['exec', 'pty', 'signal', 'endpoint', 'profiles'],
+    capabilities: options.capabilities ?? [
+      'exec',
+      'pty',
+      'signal',
+      'endpoint',
+      'profiles',
+      'detached',
+    ],
     approved: options.approved ?? true,
     status: options.online === false ? 'offline' : 'online',
   };
@@ -111,6 +144,10 @@ export function createFakeRemoteTransport(options: FakeRemoteOptions = {}): Fake
   const execs: FakeExecCall[] = [];
   const ptys: FakePty[] = [];
   const endpoints: FakeEndpoint[] = [];
+  const detached = options.detachedStore ?? new Map<string, FakeDetachedService>();
+  const detachedSpawns: DetachedServiceSpec[] = [];
+  const detachedStops: Array<{ instanceId: string; baseDir: string }> = [];
+  let nextDetachedPid = 32_000 + detached.size;
   const results = new Map<string, Partial<CommandResult>>();
   const failures = new Map<string, TransportError>();
   const profiles = options.profiles ?? [];
@@ -141,6 +178,19 @@ export function createFakeRemoteTransport(options: FakeRemoteOptions = {}): Fake
   function scripted(argv: readonly string[]): void {
     const failure = failures.get(key(argv));
     if (failure) throw failure;
+  }
+
+  /** The detached verbs, gated like everything else plus the agent's age. */
+  function guardDetached(): void {
+    guard('detached');
+    if (options.detachedUnsupported) {
+      throw new TransportError(
+        'unsupported',
+        id,
+        `The apm agent on target "${id}" is too old to manage detached T3 instances — ` +
+          'update apm on the target',
+      );
+    }
   }
 
   function makePty(spec: PtySpec, index: number): FakePty {
@@ -306,6 +356,9 @@ export function createFakeRemoteTransport(options: FakeRemoteOptions = {}): Fake
     execs,
     ptys,
     endpoints,
+    detached,
+    detachedSpawns,
+    detachedStops,
 
     supports: (capability) => target.capabilities.includes(capability),
 
@@ -344,6 +397,49 @@ export function createFakeRemoteTransport(options: FakeRemoteOptions = {}): Fake
       return entry.handle;
     },
 
+    async spawnDetached(spec): Promise<DetachedServiceState> {
+      guardDetached();
+      scripted(spec.argv);
+      const existing = detached.get(spec.instanceId);
+      if (existing?.alive) {
+        throw new TransportError(
+          'spawn-failed',
+          id,
+          `Instance ${spec.instanceId} is already running as pid ${existing.state.pid}`,
+        );
+      }
+      const state: DetachedServiceState = {
+        instanceId: spec.instanceId,
+        pid: nextDetachedPid++,
+        port: spec.port,
+        startedAt: new Date().toISOString(),
+      };
+      detached.set(spec.instanceId, { state, spec, alive: true });
+      detachedSpawns.push(spec);
+      return { ...state };
+    },
+
+    async inspectDetached(instanceId): Promise<DetachedServiceInspection> {
+      guardDetached();
+      const record = detached.get(instanceId);
+      if (!record) {
+        return { state: null, reason: 'no detached process is recorded in the base dir' };
+      }
+      if (!record.alive) {
+        return { state: null, reason: `recorded process ${record.state.pid} is no longer running` };
+      }
+      return { state: { ...record.state }, reason: null };
+    },
+
+    async stopDetached(instanceId, baseDir): Promise<void> {
+      guardDetached();
+      detachedStops.push({ instanceId, baseDir });
+      const record = detached.get(instanceId);
+      if (!record) return; // idempotent, like the real target
+      record.alive = false;
+      detached.delete(instanceId);
+    },
+
     async profiles(): Promise<TargetProfileSummary[]> {
       guard('profiles');
       return profiles.map((profile) => ({ ...profile }));
@@ -351,7 +447,11 @@ export function createFakeRemoteTransport(options: FakeRemoteOptions = {}): Fake
 
     async close(): Promise<void> {
       closed = true;
-      for (const endpoint of endpoints) await endpoint.handle.close();
+      // Persistent endpoints front detached services and survive the
+      // connection, exactly as the SSH transport leaves its serve entries up.
+      for (const endpoint of endpoints) {
+        if (!endpoint.request.persistent) await endpoint.handle.close();
+      }
     },
 
     scriptExec(argv, result) {
@@ -369,6 +469,11 @@ export function createFakeRemoteTransport(options: FakeRemoteOptions = {}): Fake
 
     setApproved(next) {
       target.approved = next;
+    },
+
+    killDetached(instanceId) {
+      const record = detached.get(instanceId);
+      if (record) record.alive = false;
     },
 
     lastPty() {

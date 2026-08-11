@@ -3,11 +3,16 @@
  * local transport and the deterministic fake remote one. Anything asserted
  * here is what #18 (CLI) and #19 (T3) may rely on for *any* target.
  */
+import fs from 'node:fs';
 import http from 'node:http';
+import os from 'node:os';
+import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   isTransportError,
   type CommandSpec,
+  type DetachedServiceSpec,
+  type DetachedServiceState,
   type EndpointHandle,
   type EndpointRequest,
   type Profile,
@@ -52,6 +57,10 @@ interface Fixture {
   endpointRequest(): Promise<EndpointRequest>;
   /** Make the endpoint's service answer. */
   serve(handle: EndpointHandle): Promise<void>;
+  /** A detached-service spec whose process stays up until it is stopped. */
+  detachedSpec(): DetachedServiceSpec;
+  /** Kill that service out-of-band — a crash while nobody is connected. */
+  killService(state: DetachedServiceState): Promise<void>;
   cleanup(): Promise<void>;
 }
 
@@ -63,8 +72,16 @@ function fakeProfiles(): Pick<ProfileService, 'list' | 'envFor'> {
 }
 
 async function localFixture(): Promise<Fixture> {
-  const transport = createLocalTransport({ profiles: fakeProfiles(), pollIntervalMs: 20 });
+  // The managed root the detached exception is scoped to, per transport.
+  const detachedRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'apm-contract-t3-'));
+  const transport = createLocalTransport({
+    profiles: fakeProfiles(),
+    pollIntervalMs: 20,
+    detachedDir: detachedRoot,
+    detachedStopGraceMs: 500,
+  });
   const servers: http.Server[] = [];
+  let services = 0;
   return {
     transport,
     echo: (text) => ({ argv: ['printf', '%s', text] }),
@@ -80,15 +97,42 @@ async function localFixture(): Promise<Fixture> {
         servers.push(server);
         server.listen({ port: handle.endpoint.port, host: '127.0.0.1' }, () => resolve());
       }),
+    detachedSpec: () => {
+      const instanceId = `svc-${++services}`;
+      const baseDir = path.join(detachedRoot, instanceId);
+      fs.mkdirSync(baseDir, { recursive: true });
+      return { argv: ['sleep', '60'], cwd: baseDir, instanceId, port: 45_000 + services, baseDir };
+    },
+    killService: async (state) => {
+      try {
+        process.kill(state.pid, 'SIGKILL');
+      } catch {
+        /* already gone */
+      }
+      await waitFor(() => !pidAlive(state.pid));
+    },
     cleanup: async () => {
       for (const server of servers) {
         await new Promise<void>((resolve) => server.close(() => resolve()));
       }
+      // Reap anything a failing test left behind before dropping the root.
+      for (const child of fs.readdirSync(detachedRoot)) {
+        try {
+          const record = JSON.parse(
+            fs.readFileSync(path.join(detachedRoot, child, 'apm-service.json'), 'utf8'),
+          ) as { pid?: number };
+          if (typeof record.pid === 'number') process.kill(-record.pid, 'SIGKILL');
+        } catch {
+          /* nothing recorded, or already gone */
+        }
+      }
+      fs.rmSync(detachedRoot, { recursive: true, force: true });
     },
   };
 }
 
 async function fakeRemoteFixture(): Promise<Fixture> {
+  let services = 0;
   const transport = createFakeRemoteTransport({
     profiles: [
       {
@@ -126,6 +170,12 @@ async function fakeRemoteFixture(): Promise<Fixture> {
     produce: (_handle, text) => transport.lastPty().emit(text),
     endpointRequest: async () => ({ port: null }),
     serve: async () => transport.lastEndpoint().setHealthy(true),
+    detachedSpec: () => {
+      const instanceId = `svc-${++services}`;
+      const baseDir = `/home/fake/.local/share/apm/t3/${instanceId}`;
+      return { argv: ['sleep', '60'], cwd: baseDir, instanceId, port: 45_000 + services, baseDir };
+    },
+    killService: async (state) => transport.killDetached(state.instanceId),
     cleanup: async () => undefined,
   };
 }
@@ -278,6 +328,49 @@ describe.each(IMPLEMENTATIONS)('transport contract ($name)', ({ create }) => {
     expect((await handle.health()).state).toBe('closed');
   });
 
+  it('runs a detached service that is found again and stopped by its record', async () => {
+    const { transport, detachedSpec } = await setup();
+    const spec = detachedSpec();
+    const state = await transport.spawnDetached(spec);
+    expect(state.instanceId).toBe(spec.instanceId);
+    expect(state.port).toBe(spec.port);
+    expect(state.pid).toBeGreaterThan(0);
+
+    // Found purely through the target-side record — no live handle involved,
+    // which is exactly what a daemon restart has to rely on.
+    const inspected = await transport.inspectDetached(spec.instanceId, spec.baseDir);
+    expect(inspected.state).toMatchObject({ instanceId: spec.instanceId, pid: state.pid });
+    expect(inspected.reason).toBeNull();
+
+    await transport.stopDetached(spec.instanceId, spec.baseDir);
+    const stopped = await transport.inspectDetached(spec.instanceId, spec.baseDir);
+    expect(stopped.state).toBeNull();
+    expect(stopped.reason).not.toBeNull();
+    // Stopping again is a clean no-op.
+    await transport.stopDetached(spec.instanceId, spec.baseDir);
+  });
+
+  it('reports a detached service that died on its own as gone, with a reason', async () => {
+    const { transport, detachedSpec, killService } = await setup();
+    const spec = detachedSpec();
+    const state = await transport.spawnDetached(spec);
+    await killService(state);
+
+    const inspected = await transport.inspectDetached(spec.instanceId, spec.baseDir);
+    expect(inspected.state).toBeNull();
+    expect(inspected.reason).toContain('no longer running');
+    // Cleaning up after the corpse is not an error either.
+    await transport.stopDetached(spec.instanceId, spec.baseDir);
+  });
+
+  it('refuses to double-start a detached service that is still running', async () => {
+    const { transport, detachedSpec } = await setup();
+    const spec = detachedSpec();
+    await transport.spawnDetached(spec);
+    await expect(transport.spawnDetached(spec)).rejects.toMatchObject({ code: 'spawn-failed' });
+    await transport.stopDetached(spec.instanceId, spec.baseDir);
+  });
+
   it('lists the target’s profiles without homes or credentials', async () => {
     const { transport } = await setup();
     const profiles = await transport.profiles();
@@ -289,6 +382,15 @@ describe.each(IMPLEMENTATIONS)('transport contract ($name)', ({ create }) => {
     }
   });
 });
+
+function pidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error: unknown) {
+    return (error as NodeJS.ErrnoException).code === 'EPERM';
+  }
+}
 
 async function waitFor(predicate: () => boolean, timeoutMs = 5_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
