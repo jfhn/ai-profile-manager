@@ -42,7 +42,15 @@ export function createProfileService(
     writeStore(config.profilesFile, { version: 2, profiles, defaultProfileIds });
   }
 
-  if (loaded.migrated) persist();
+  {
+    // Older stores (and v1 migrations) may lack a default while eligible
+    // profiles exist; restore the invariant before serving any request.
+    let changed = loaded.migrated;
+    for (const provider of PROVIDER_IDS) {
+      if (ensureDefault(provider)) changed = true;
+    }
+    if (changed) persist();
+  }
 
   function adapterFor(provider: ProviderId): ProviderAdapter {
     const adapter = adapterRegistry[provider];
@@ -104,19 +112,30 @@ export function createProfileService(
     return profile.enabled && profile.status === 'active';
   }
 
-  function assignFirstDefault(provider: ProviderId): void {
-    if (defaultProfileIds[provider] !== undefined) return;
-    const eligible = profiles.filter(
-      (profile) => profile.provider === provider && isEligible(profile),
-    );
-    const only = eligible.length === 1 ? eligible[0] : undefined;
-    if (only) defaultProfileIds = { ...defaultProfileIds, [provider]: only.id };
-  }
-
-  function clearDefaultFor(profile: Profile): void {
-    if (defaultProfileIds[profile.provider] !== profile.id) return;
-    const { [profile.provider]: _removed, ...rest } = defaultProfileIds;
+  /**
+   * Invariant: a provider with at least one eligible profile has exactly one
+   * default. When the current default is gone or ineligible, the eligible
+   * profile with the alphabetically first label is promoted — deterministic
+   * because labels are unique per provider. Returns whether anything changed.
+   */
+  function ensureDefault(provider: ProviderId): boolean {
+    const currentId = defaultProfileIds[provider];
+    const current =
+      currentId === undefined
+        ? undefined
+        : profiles.find((profile) => profile.id === currentId && profile.provider === provider);
+    if (current && isEligible(current)) return false;
+    const next = profiles
+      .filter((profile) => profile.provider === provider && isEligible(profile))
+      .sort((left, right) => left.label.localeCompare(right.label))[0];
+    if (next) {
+      defaultProfileIds = { ...defaultProfileIds, [provider]: next.id };
+      return true;
+    }
+    if (currentId === undefined) return false;
+    const { [provider]: _removed, ...rest } = defaultProfileIds;
     defaultProfileIds = rest;
+    return true;
   }
 
   function suggestedLabel(provider: ProviderId, identity: ProviderIdentity | null): string {
@@ -149,8 +168,11 @@ export function createProfileService(
     setDefault(provider, profileId) {
       adapterFor(provider);
       if (profileId === null) {
+        // "No default" is not a reachable state: clearing recomputes, so the
+        // provider only ends up default-less when nothing is eligible.
         const { [provider]: _removed, ...rest } = defaultProfileIds;
         defaultProfileIds = rest;
+        ensureDefault(provider);
       } else {
         const profile = findProfile(profileId);
         if (profile.provider !== provider) {
@@ -211,7 +233,7 @@ export function createProfileService(
         createdAt: new Date().toISOString(),
       };
       profiles = [...profiles, profile];
-      assignFirstDefault(profile.provider);
+      ensureDefault(profile.provider);
       persist();
       events.emit({ type: 'profiles-changed' });
       return profile;
@@ -227,7 +249,7 @@ export function createProfileService(
         ...(req.enabled !== undefined ? { enabled: req.enabled } : {}),
       };
       profiles = profiles.map((profile) => (profile.id === id ? updated : profile));
-      if (!isEligible(updated)) clearDefaultFor(updated);
+      ensureDefault(updated.provider);
       persist();
       events.emit({ type: 'profiles-changed' });
       return updated;
@@ -253,7 +275,7 @@ export function createProfileService(
         force: true,
       });
       profiles = profiles.filter((candidate) => candidate.id !== id);
-      clearDefaultFor(profile);
+      ensureDefault(profile.provider);
       persist();
       events.emit({ type: 'profiles-changed' });
     },
@@ -349,7 +371,7 @@ export function createProfileService(
         statusReason: null,
       };
       profiles = profiles.map((candidate) => (candidate.id === profileId ? updated : candidate));
-      assignFirstDefault(updated.provider);
+      ensureDefault(updated.provider);
       persist();
       events.emit({ type: 'profiles-changed' });
       return updated;
@@ -382,12 +404,8 @@ function loadStore(file: string): LoadedProfileStore {
   }
   validatePersistedProfileUniqueness(file, result.data.profiles);
   if (result.data.version === 1) {
-    return {
-      version: 2,
-      profiles: result.data.profiles,
-      defaultProfileIds: inferMigratedDefaults(result.data.profiles),
-      migrated: true,
-    };
+    // Defaults are filled in by the startup ensureDefault pass.
+    return { version: 2, profiles: result.data.profiles, defaultProfileIds: {}, migrated: true };
   }
   validatePersistedDefaults(file, result.data.profiles, result.data.defaultProfileIds);
   return {
@@ -439,18 +457,6 @@ function normalizePersistedHomes(value: unknown): { value: unknown; changed: boo
     return { ...candidate, home: path.resolve(candidate.home) };
   });
   return { value: changed ? { ...value, profiles } : value, changed };
-}
-
-function inferMigratedDefaults(profiles: Profile[]): DefaultProfileIds {
-  const defaults: DefaultProfileIds = {};
-  for (const provider of PROVIDER_IDS) {
-    const eligible = profiles.filter(
-      (profile) => profile.provider === provider && profile.enabled && profile.status === 'active',
-    );
-    const only = eligible.length === 1 ? eligible[0] : undefined;
-    if (only) defaults[provider] = only.id;
-  }
-  return defaults;
 }
 
 function validatePersistedDefaults(

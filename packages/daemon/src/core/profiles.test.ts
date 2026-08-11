@@ -148,7 +148,7 @@ describe('profile service', () => {
     expect(createProfileService(config, createEventBus(), fakeAdapters()).list()).toHaveLength(2);
   });
 
-  it('migrates v1 stores and infers only unambiguous eligible defaults', () => {
+  it('migrates v1 stores and promotes the alphabetically first eligible default', () => {
     const config = tempConfig();
     const profiles = [
       storedProfile({
@@ -181,10 +181,11 @@ describe('profile service', () => {
 
     const service = createProfileService(config, createEventBus(), fakeAdapters());
 
-    expect(service.defaults()).toEqual({ codex: 'codex-work' });
+    // 'other' sorts before 'work'; the disabled codex profile is skipped.
+    expect(service.defaults()).toEqual({ claude: 'claude-other', codex: 'codex-work' });
     expect(JSON.parse(fs.readFileSync(config.profilesFile, 'utf8'))).toMatchObject({
       version: 2,
-      defaultProfileIds: { codex: 'codex-work' },
+      defaultProfileIds: { claude: 'claude-other', codex: 'codex-work' },
     });
   });
 
@@ -302,7 +303,7 @@ describe('profile service', () => {
     expect(fs.readFileSync(marker, 'utf8')).toBe('safe');
   });
 
-  it('preserves explicit defaults on rename and clears them without reassignment', async () => {
+  it('preserves explicit defaults on rename and promotes a replacement on disable or removal', async () => {
     const config = tempConfig();
     const service = createProfileService(config, createEventBus(), fakeAdapters());
     const first = await service.create({
@@ -321,15 +322,50 @@ describe('profile service', () => {
     service.update(second.id, { label: 'renamed' });
     expect(service.defaults()).toEqual({ claude: second.id });
 
+    // Disabling the default promotes the alphabetically first eligible
+    // profile; re-enabling does not steal the default back.
+    service.update(second.id, { enabled: false });
+    expect(service.defaults()).toEqual({ claude: first.id });
+    service.update(second.id, { enabled: true });
+    expect(service.defaults()).toEqual({ claude: first.id });
+
+    await service.remove(first.id, false);
+    expect(service.defaults()).toEqual({ claude: second.id });
+
+    // Only a provider with no eligible profiles is left without a default.
     service.update(second.id, { enabled: false });
     expect(service.defaults()).toEqual({});
-    service.update(second.id, { enabled: true });
-    expect(service.defaults()).toEqual({});
+  });
 
-    service.setDefault('claude', first.id);
-    await service.remove(first.id, false);
-    expect(service.defaults()).toEqual({});
-    expect(service.get(second.id)?.enabled).toBe(true);
+  it('promotes the alphabetically first eligible profile and survives a reload', async () => {
+    const config = tempConfig();
+    const service = createProfileService(config, createEventBus(), fakeAdapters());
+    const zeta = await service.create({
+      provider: 'claude',
+      label: 'zeta',
+      home: makeHome(config.dataDir, 'promotion-zeta', true),
+    });
+    const alpha = await service.create({
+      provider: 'claude',
+      label: 'alpha',
+      home: makeHome(config.dataDir, 'promotion-alpha', true),
+    });
+    const mid = await service.create({
+      provider: 'claude',
+      label: 'mid',
+      home: makeHome(config.dataDir, 'promotion-mid', true),
+    });
+
+    // The first created profile became default; removing it promotes 'alpha',
+    // not the next-created one.
+    await service.remove(zeta.id, false);
+    expect(service.defaults()).toEqual({ claude: alpha.id });
+
+    service.update(alpha.id, { enabled: false });
+    expect(service.defaults()).toEqual({ claude: mid.id });
+
+    const reloaded = createProfileService(config, createEventBus(), fakeAdapters());
+    expect(reloaded.defaults()).toEqual({ claude: mid.id });
   });
 
   it('validates default provider, state, and persisted references', async () => {
@@ -348,8 +384,9 @@ describe('profile service', () => {
 
     expect(() => service.setDefault('codex', claude.id)).toThrow(/does not belong/);
     expect(() => service.setDefault('codex', broken.id)).toThrow(/active and enabled/);
+    // Clearing recomputes: with an eligible profile there is no "no default".
     service.setDefault('claude', null);
-    expect(service.defaults()).toEqual({});
+    expect(service.defaults()).toEqual({ claude: claude.id });
 
     fs.writeFileSync(
       config.profilesFile,
