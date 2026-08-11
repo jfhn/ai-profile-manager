@@ -11,12 +11,12 @@ path.
 
 ## What runs where
 
-|                      | local target                                 | remote target                                           |
-| -------------------- | -------------------------------------------- | ------------------------------------------------------- |
-| process              | detached `t3 serve`, survives an apm restart | detached `t3 serve` **on the target**, survives it too  |
-| base dir             | `<dataDir>/t3/<id>`                          | `~/.local/share/apm/t3/<id>` **on the target**          |
-| provider env         | injected here from the bound profiles        | injected **by the target** from its own profiles        |
-| Open link            | `http://127.0.0.1:<port>`                    | whatever the target's endpoint publishes                |
+|                      | local target                                 | remote target                                                      |
+| -------------------- | -------------------------------------------- | ------------------------------------------------------------------ |
+| process              | detached `t3 serve`, survives an apm restart | detached `t3 serve` **on the target**, survives it too             |
+| base dir             | `<dataDir>/t3/<id>`                          | `~/.local/share/apm/t3/<id>` **on the target**                     |
+| provider env         | injected here from the bound profiles        | injected **by the target** from its own profiles                   |
+| Open link            | `http://127.0.0.1:<port>`                    | whatever the target's endpoint publishes                           |
 | after an apm restart | re-adopted if still healthy                  | re-adopted if still healthy — stopped, with the reason, if it died |
 
 A remote instance is spawned in its own session on the target and recorded in
@@ -140,9 +140,14 @@ apm pair
 `apm pair` locally finds the live `t3 serve` process whose base directory is an
 immediate child of APM's managed T3 directory, matches its backend port to the
 target's published Tailscale Serve endpoint, and runs `t3 pair` with that exact
-base directory and `--ttl 15m`. It replaces T3's localhost origin in the
-pairing URL with the real published endpoint, so the URL printed in this
-terminal is the one another tailnet device should open.
+base directory, `--ttl 15m` and `--tailscale --tailscale-serve-port <port>`.
+The tailscale flags make T3 itself build the pairing URL from the published
+tailnet endpoint, so both the URL and the QR code printed in this terminal are
+the ones another tailnet device should open. Any localhost origin an older T3
+still prints in text is additionally replaced with the published endpoint.
+
+This requires a T3 Code version whose `t3 pair` supports `--tailscale`; with an
+older `t3`, `apm pair` fails with a clear message asking you to upgrade.
 
 Process discovery requires Linux `/proc`; Linux and WSL are the supported
 target contexts for `apm pair`. The command fails closed on other platforms.
@@ -172,13 +177,14 @@ unlogged.
 
 If local discovery or endpoint matching needs troubleshooting, the previous
 raw command remains available. Copy the exact base directory and published URL
-from the instance card, then run:
+from the instance card, then run (using the HTTPS port of the published URL):
 
 ```sh
-t3 pair --base-dir <exact base dir> --ttl 15m
+t3 pair --base-dir <exact base dir> --ttl 15m --tailscale --tailscale-serve-port <https port>
 ```
 
-T3 prints a localhost URL in this fallback flow; use its token at the
+Without the tailscale flags T3 prints a localhost URL and QR code in this
+fallback flow; use its token at the
 published endpoint from the card. Do not use plain `t3 pair`: it operates on
 T3's default environment, not the APM-managed instance.
 
@@ -229,7 +235,7 @@ From the widest hammer to the narrowest:
 
 Nothing apm starts on a target through a pty (`apm run` sessions) is meant to
 outlive the connection that started it, and a managed T3 instance — the one
-deliberate exception — is meant to outlive it *only under its record*. Four
+deliberate exception — is meant to outlive it _only under its record_. Four
 things keep that honest:
 
 - the remote agent kills its whole process group on `SIGHUP`, on stdin EOF and

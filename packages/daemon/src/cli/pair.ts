@@ -66,9 +66,10 @@ export async function runPair(invocation: PairInvocation, deps: PairDeps): Promi
     run(['tailscale', 'serve', 'status', '--json']),
     "read this target's published services",
   );
-  const endpoint = resolvePublishedEndpoint(selected, status.stdout, serve.stdout);
+  const published = resolvePublishedEndpoint(selected, status.stdout, serve.stdout);
+  const endpoint = published.url;
 
-  const pairArgv = t3PairArgv(selected.baseDir);
+  const pairArgv = t3PairArgv(selected.baseDir, published.httpsPort);
   let paired: PairProcessResult;
   try {
     paired = await run(pairArgv);
@@ -85,6 +86,12 @@ export async function runPair(invocation: PairInvocation, deps: PairDeps): Promi
   if (paired.exitCode !== 0 || paired.signal !== null) {
     if (stdout) writeStdout(stdout);
     if (stderr) writeStderr(stderr);
+    if (indicatesUnknownTailscaleFlag(paired.stderr)) {
+      throw new CliError(
+        'this `t3` does not understand `t3 pair --tailscale` — upgrade T3 Code to a version ' +
+          'whose `t3 pair` supports `--tailscale`, then run `apm pair` again',
+      );
+    }
     throw new CliError(
       paired.signal
         ? `t3 pair was killed by ${paired.signal}`
@@ -101,9 +108,29 @@ export async function runPair(invocation: PairInvocation, deps: PairDeps): Promi
   if (stderr) writeStderr(stderr);
 }
 
-/** Exact argv used for the short-lived token; no shell string is constructed. */
-export function t3PairArgv(baseDir: string): string[] {
-  return ['t3', 'pair', '--base-dir', baseDir, '--ttl', PAIR_TTL];
+/**
+ * Exact argv used for the short-lived token; no shell string is constructed.
+ * `--tailscale --tailscale-serve-port` makes t3 itself build the pairing URL —
+ * and thus the printed QR code — from the published tailnet HTTPS base rather
+ * than localhost.
+ */
+export function t3PairArgv(baseDir: string, tailscaleServePort: number): string[] {
+  return [
+    't3',
+    'pair',
+    '--base-dir',
+    baseDir,
+    '--ttl',
+    PAIR_TTL,
+    '--tailscale',
+    '--tailscale-serve-port',
+    String(tailscaleServePort),
+  ];
+}
+
+/** Heuristic for an older t3 rejecting the tailscale pairing flags. */
+export function indicatesUnknownTailscaleFlag(stderr: string): boolean {
+  return /(unknown|unrecognized|invalid)[^\n]*--tailscale/i.test(stderr);
 }
 
 /**
@@ -258,12 +285,17 @@ function readProcessMarker(processDir: string, readFile: ProcFileReader): string
   return instanceMarker === '' ? null : instanceMarker;
 }
 
+export interface PublishedEndpoint {
+  url: string;
+  httpsPort: number;
+}
+
 /** Match the selected backend to the same published URL the hub exposed. */
 export function resolvePublishedEndpoint(
   instance: Pick<ManagedT3Process, 'instanceId' | 'port'>,
   tailscaleStatus: string,
   serveStatus: string,
-): string {
+): PublishedEndpoint {
   const dnsName = parseSelfDnsName(tailscaleStatus);
   if (dnsName === null) {
     throw new CliError(
@@ -292,7 +324,7 @@ export function resolvePublishedEndpoint(
         'Funnel; disable Funnel before pairing',
     );
   }
-  return `https://${dnsName}:${match.httpsPort}`;
+  return { url: `https://${dnsName}:${match.httpsPort}`, httpsPort: match.httpsPort };
 }
 
 /** Replace only localhost URL origins, retaining T3's pairing path and token. */
