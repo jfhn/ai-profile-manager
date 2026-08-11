@@ -229,7 +229,7 @@ describe('session host', () => {
       cwd: undefined,
       cols: 90,
       rows: 30,
-      profileId: remoteProfile.id,
+      profileIds: [remoteProfile.id],
     });
 
     const streams = host.streams(session.id);

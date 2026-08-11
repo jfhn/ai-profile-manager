@@ -26,13 +26,27 @@ import { createT3Manager, type T3ManagerDeps, type T3SpawnRequest } from './mana
 const TARGET_ID = 'dev-box';
 const TARGET_HOME = '/home/dev';
 const TARGET_HOST = 'dev-box.tailnet.ts.net';
-/** The profile as the *target* reports it — its ids mean nothing here. */
+/** The profiles as the *target* reports them — their ids mean nothing here. */
 const REMOTE_PROFILE: TargetProfileSummary = {
   id: 'claude-remote',
   provider: 'claude',
   label: 'dev box work',
   status: 'active',
   enabled: true,
+};
+const REMOTE_CODEX_PROFILE: TargetProfileSummary = {
+  id: 'codex-remote',
+  provider: 'codex',
+  label: 'dev box codex',
+  status: 'active',
+  enabled: true,
+};
+const REMOTE_DISABLED_PROFILE: TargetProfileSummary = {
+  id: 'codex-disabled',
+  provider: 'codex',
+  label: 'dev box parked',
+  status: 'active',
+  enabled: false,
 };
 
 /** A local profile, for the tests that put both targets side by side. */
@@ -99,7 +113,7 @@ describe('t3 manager on a remote target', () => {
     const transport = createFakeRemoteTransport({
       id: TARGET_ID,
       label: 'dev box',
-      profiles: [REMOTE_PROFILE],
+      profiles: [REMOTE_PROFILE, REMOTE_CODEX_PROFILE, REMOTE_DISABLED_PROFILE],
       // What a tailnet transport does: the instance answers on the target's
       // own address, not on anything this machine forwards.
       endpointScope: 'published',
@@ -173,9 +187,34 @@ describe('t3 manager on a remote target', () => {
     expect(pty.spec.cwd).toBe(created.baseDir);
     // The target injects the profile's env itself; only this instance id
     // marker crosses the seam, never anything about the home or credentials.
-    expect(pty.spec.profileId).toBe(REMOTE_PROFILE.id);
+    expect(pty.spec.profileIds).toEqual([REMOTE_PROFILE.id]);
     expect(pty.spec.env).toEqual({ [APM_MANAGED_T3_INSTANCE_ENV]: created.id });
     expect(started.pid).toBeNull();
+  });
+
+  it('binds one profile per provider and hands the target every id', async () => {
+    const { manager, transport } = harness();
+    const created = await manager.create({
+      label: 'both',
+      profiles: { claude: REMOTE_PROFILE.id, codex: REMOTE_CODEX_PROFILE.id },
+      targetId: TARGET_ID,
+    });
+    expect(created.profiles).toEqual({
+      claude: REMOTE_PROFILE.id,
+      codex: REMOTE_CODEX_PROFILE.id,
+    });
+
+    const started = await startHealthy(manager, transport, created.id);
+    expect(started.status).toBe('running');
+    // Both opaque ids cross the seam, in provider order, and nothing else —
+    // the target resolves each one to its own provider env locally.
+    expect(transport.lastPty().spec.profileIds).toEqual([
+      REMOTE_PROFILE.id,
+      REMOTE_CODEX_PROFILE.id,
+    ]);
+    expect(transport.lastPty().spec.env).toEqual({
+      [APM_MANAGED_T3_INSTANCE_ENV]: created.id,
+    });
   });
 
   it('opens the instance on the target address the transport published', async () => {
@@ -296,19 +335,37 @@ describe('t3 manager on a remote target', () => {
     expect(manager.list()[0]?.status).toBe('stopped');
   });
 
-  it('rejects a profile the target does not have, and more than one profile', async () => {
+  it('validates every bound profile against the target, not just the first', async () => {
     const { manager } = harness();
+    // Local ids mean nothing on the target, even next to a valid binding.
     await expect(
       manager.create({ label: 'a', profiles: { claude: 'claude-local' }, targetId: TARGET_ID }),
     ).rejects.toMatchObject({ statusCode: 404, code: 'profile-not-found' });
-
     await expect(
       manager.create({
         label: 'b',
-        profiles: { claude: REMOTE_PROFILE.id, codex: 'codex-remote' },
+        profiles: { claude: REMOTE_PROFILE.id, codex: 'codex-nope' },
         targetId: TARGET_ID,
       }),
-    ).rejects.toMatchObject({ statusCode: 400, code: 'multi-profile-unsupported' });
+    ).rejects.toMatchObject({ statusCode: 404, code: 'profile-not-found' });
+
+    // A profile bound under the wrong provider key is refused per profile.
+    await expect(
+      manager.create({
+        label: 'c',
+        profiles: { claude: REMOTE_PROFILE.id, codex: REMOTE_PROFILE.id },
+        targetId: TARGET_ID,
+      }),
+    ).rejects.toMatchObject({ statusCode: 409, code: 'provider-mismatch' });
+
+    // So is one the target reports as unusable.
+    await expect(
+      manager.create({
+        label: 'd',
+        profiles: { claude: REMOTE_PROFILE.id, codex: REMOTE_DISABLED_PROFILE.id },
+        targetId: TARGET_ID,
+      }),
+    ).rejects.toMatchObject({ statusCode: 409, code: 'profile-not-active' });
   });
 
   it('reports an endpoint that never answers as unhealthy', async () => {

@@ -17,8 +17,8 @@ import type {
  * Everything crossing the seam is a structured value. There is no "command
  * line" anywhere in this file: a command is argv plus an env map plus a cwd,
  * so no user-controlled string is ever handed to a shell. Credentials never
- * cross either — a command names a `profileId` and the *target* injects that
- * profile's provider env locally.
+ * cross either — a command names `profileIds` and the *target* injects those
+ * profiles' provider env locally.
  */
 
 /** A command to run on a target. argv only — never a shell string. */
@@ -30,10 +30,11 @@ export interface CommandSpec {
   /** Absolute path on the target; defaults to the target user's home. */
   cwd?: string;
   /**
-   * Profile whose provider env the target injects (CLAUDE_CONFIG_DIR etc.).
-   * The resolved value never travels back: credentials stay on the target.
+   * Profiles whose provider env the target injects (CLAUDE_CONFIG_DIR etc.),
+   * merged in order — at most one per provider, which the caller enforces.
+   * The resolved values never travel back: credentials stay on the target.
    */
-  profileId?: string;
+  profileIds?: readonly string[];
 }
 
 export interface ExecOptions {

@@ -77,7 +77,12 @@ export function createLocalTransport(deps: LocalTransportDeps): TargetTransport 
     if (command === undefined) {
       throw fail('spawn-failed', 'A command needs at least argv[0]');
     }
-    const profileEnv = spec.profileId ? deps.profiles.envFor(spec.profileId) : {};
+    // One env per bound profile, merged in the order the spec names them; the
+    // caller binds at most one profile per provider, so nothing collides.
+    const profileEnv: Record<string, string> = {};
+    for (const profileId of spec.profileIds ?? []) {
+      Object.assign(profileEnv, deps.profiles.envFor(profileId));
+    }
     const env = { ...process.env, ...profileEnv, ...spec.env };
 
     const cwd = spec.cwd ?? os.homedir();

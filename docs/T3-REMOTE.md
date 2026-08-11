@@ -11,13 +11,13 @@ path.
 
 ## What runs where
 
-|                      | local target                                 | remote target                                   |
-| -------------------- | -------------------------------------------- | ----------------------------------------------- |
-| process              | detached `t3 serve`, survives an apm restart | `t3 serve` on the transport's pty               |
-| base dir             | `<dataDir>/t3/<id>`                          | `~/.local/share/apm/t3/<id>` **on the target**  |
-| provider env         | injected here from the bound profiles        | injected **by the target** from its own profile |
-| Open link            | `http://127.0.0.1:<port>`                    | whatever the target's endpoint publishes        |
-| after an apm restart | re-adopted if still healthy                  | reported as stopped, start it again             |
+|                      | local target                                 | remote target                                    |
+| -------------------- | -------------------------------------------- | ------------------------------------------------ |
+| process              | detached `t3 serve`, survives an apm restart | `t3 serve` on the transport's pty                |
+| base dir             | `<dataDir>/t3/<id>`                          | `~/.local/share/apm/t3/<id>` **on the target**   |
+| provider env         | injected here from the bound profiles        | injected **by the target** from its own profiles |
+| Open link            | `http://127.0.0.1:<port>`                    | whatever the target's endpoint publishes         |
+| after an apm restart | re-adopted if still healthy                  | reported as stopped, start it again              |
 
 ## Prerequisites on the target
 
@@ -33,9 +33,9 @@ path.
    refused by the API (`target-unsupported`, HTTP 400).
 3. **T3 Code is installed on the target** and `t3` is on the PATH of the user
    the transport connects as. A missing binary is reported as `app-not-found`.
-4. The target has its own **active provider profile**. Profile ids are
-   target-scoped: the picker asks the target (`GET /api/targets/:id/profiles`)
-   and never offers this machine's profiles for a remote instance.
+4. The target has its own **active provider profiles**. Profile ids are
+   target-scoped: the pickers ask the target (`GET /api/targets/:id/profiles`)
+   and never offer this machine's profiles for a remote instance.
 5. `printenv` and `mkdir` exist on the target — apm resolves the target user's
    home and creates the instance-private base dir with them, as plain argv.
 6. **Tailscale is installed and logged in on the target**, and the SSH user may
@@ -51,10 +51,12 @@ path.
    over HTTPS. Without Tailscale the instance fails to start with
    `endpoint-failed` naming the prerequisite; nothing hangs.
 
-One remote instance binds **one** profile. A command carries a single profile
-id and the target resolves it locally; injecting a second provider's
-environment would mean moving credentials between machines, which the transport
-contract deliberately makes impossible.
+A remote instance binds **up to one profile per provider** — a Claude and a
+Codex profile side by side, exactly like a local instance. A command carries
+only the bound profiles' opaque ids and the target resolves each one to its
+provider environment locally, so no credential ever moves between machines. A
+provider left unbound falls back to the target machine's default home — never
+to an apm default profile.
 
 ## Trusted network only
 
@@ -199,7 +201,6 @@ From the widest hammer to the narrowest:
   and withdraws its serve entry, and `adopt()` reports remote instances as
   stopped rather than linking an endpoint nobody is watching. Start it again
   from the dashboard.
-- One bound profile per remote instance (see above).
 - The instance's working directory is its base dir on the target, as it is
   locally; per-instance project directories are not modelled yet.
 - apm cannot enumerate the target's busy TCP ports, so it picks a port that no
@@ -242,7 +243,8 @@ The live test this feature is gated on, in order:
    `GET /api/targets` with `approved: true` and the four capabilities — without
    restarting the daemon.
 3. Dashboard → **T3 Instances** → **New instance**. Pick the remote target; the
-   profile select must fill with the **target's** profiles, not this machine's.
+   per-provider profile selects must fill with the **target's** profiles, not
+   this machine's.
 4. Create, then **Start**. The card must show the target's name, a `remote`
    badge, a `published` endpoint badge, and a URL that is not `127.0.0.1`.
 5. On the target, run `apm pair`. On a second tailnet device, open the

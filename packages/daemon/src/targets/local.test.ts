@@ -28,10 +28,22 @@ const PROFILE: Profile = {
   createdAt: new Date().toISOString(),
 };
 
+const CODEX_PROFILE: Profile = {
+  ...PROFILE,
+  id: 'profile-2',
+  provider: 'codex',
+  label: 'codex work',
+  home: '/tmp/apm-codex-home',
+};
+
 function profiles(): Pick<ProfileService, 'list' | 'envFor'> {
   return {
-    list: () => [PROFILE],
-    envFor: (id) => (id === PROFILE.id ? { CLAUDE_CONFIG_DIR: PROFILE.home } : {}),
+    list: () => [PROFILE, CODEX_PROFILE],
+    envFor: (id) => {
+      if (id === PROFILE.id) return { CLAUDE_CONFIG_DIR: PROFILE.home };
+      if (id === CODEX_PROFILE.id) return { CODEX_HOME: CODEX_PROFILE.home };
+      return {};
+    },
   };
 }
 
@@ -61,7 +73,7 @@ describe('local transport', () => {
   it('injects the named profile’s env on the target and lets spec env win', async () => {
     const bound = await transport.exec({
       argv: ['sh', '-c', 'printf %s "$CLAUDE_CONFIG_DIR"'],
-      profileId: PROFILE.id,
+      profileIds: [PROFILE.id],
       cwd: dir,
     });
     expect(bound.stdout).toBe(PROFILE.home);
@@ -78,6 +90,23 @@ describe('local transport', () => {
       cwd: dir,
     });
     expect(unbound.stdout).toBe('');
+  });
+
+  it('merges every bound profile’s env — one per provider — into one process', async () => {
+    const both = await transport.exec({
+      argv: ['sh', '-c', 'printf %s:%s "$CLAUDE_CONFIG_DIR" "$CODEX_HOME"'],
+      profileIds: [PROFILE.id, CODEX_PROFILE.id],
+      cwd: dir,
+    });
+    expect(both.stdout).toBe(`${PROFILE.home}:${CODEX_PROFILE.home}`);
+
+    // One binding leaves the other provider on the machine's default home.
+    const codexOnly = await transport.exec({
+      argv: ['sh', '-c', 'printf %s:%s "$CLAUDE_CONFIG_DIR" "$CODEX_HOME"'],
+      profileIds: [CODEX_PROFILE.id],
+      cwd: dir,
+    });
+    expect(codexOnly.stdout).toBe(`:${CODEX_PROFILE.home}`);
   });
 
   it('runs in the requested cwd and defaults to the home directory', async () => {
