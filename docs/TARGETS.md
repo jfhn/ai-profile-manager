@@ -226,6 +226,10 @@ does not crash.
   does not close the target PTY, and a later `apm attach` replays scrollback and
   resumes live I/O. A target transport failure emits a terminal error and a
   recorded exit, so no process is silently left untracked.
+- The CLI's reliable detach escape is Enter followed by `~d`, recognized only
+  at the start of input or immediately after CR/LF. `~~` sends one literal
+  leading tilde, unknown `~x` pairs pass through, bracketed paste is never
+  interpreted, and the legacy `Ctrl-]` byte remains supported.
 - `apm run --ephemeral` requests the opt-in `connection-bound` lifecycle. Once
   its first WebSocket has attached, losing the last attached client sends one
   `SIGHUP` to the PTY; ordinary sessions remain persistent and attachable.
