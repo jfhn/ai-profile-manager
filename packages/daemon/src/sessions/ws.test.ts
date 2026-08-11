@@ -241,6 +241,22 @@ describe('terminal websocket', () => {
     second.ws.close();
   });
 
+  it('kills a connection-bound remote pty when its websocket disconnects', async () => {
+    const session = await host.create({
+      targetId: 'workstation',
+      profileId: 'remote-profile',
+      app: 'claude',
+      lifecycle: 'connection-bound',
+    });
+    const { ws } = connect(session.id);
+    await new Promise<void>((resolve) => ws.on('open', resolve));
+    await waitFor(() => host.streams(session.id)?.session().attachedClients === 1);
+
+    ws.close();
+    await waitFor(() => remote.lastPty().signals.length === 1);
+    expect(remote.lastPty().signals).toEqual(['SIGHUP']);
+  });
+
   it('rejects bad tokens, foreign origins and unknown sessions before touching a pty', async () => {
     const session = await host.create({
       profileId: profile.id,

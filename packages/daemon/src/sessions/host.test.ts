@@ -179,6 +179,43 @@ describe('session host', () => {
     expect(streams.session().attachedClients).toBe(0);
   });
 
+  it('kills a connection-bound target pty after its final client detaches', async () => {
+    const localProfiles = [makeProfile()];
+    const remote = createFakeRemoteTransport({
+      id: 'workstation',
+      profiles: [
+        {
+          id: 'remote-1',
+          provider: 'claude',
+          label: 'remote',
+          status: 'active',
+          enabled: true,
+        },
+      ],
+    });
+    const targets = createTargetRegistry(
+      createLocalTransport({ profiles: fakeProfiles(localProfiles) }),
+      [remote],
+    );
+    const host = makeHost(localProfiles, { targets });
+    const session = await host.create({
+      targetId: 'workstation',
+      profileId: 'remote-1',
+      app: 'claude',
+      lifecycle: 'connection-bound',
+    });
+    const streams = host.streams(session.id);
+    if (!streams) throw new Error('no streams');
+    const listener = { onData: () => undefined, onError: () => undefined, onExit: () => undefined };
+    const detachFirst = streams.attach(listener);
+    const detachSecond = streams.attach({ ...listener });
+
+    detachFirst();
+    expect(remote.lastPty().signals).toEqual([]);
+    detachSecond();
+    expect(remote.lastPty().signals).toEqual(['SIGHUP']);
+  });
+
   it('emits sessions-changed on create, attach and exit', async () => {
     const { bus, events } = fakeEvents();
     const host = createSessionHost(config, bus, fakeProfiles([makeProfile()]));
@@ -220,13 +257,18 @@ describe('session host', () => {
       profileId: remoteProfile.id,
       app: 'claude',
       args: ['--prompt', 'spaces; $(stay-an-argument)', '--', '-x'],
+      cwd: '/srv/work tree',
       cols: 90,
       rows: 30,
     });
-    expect(session).toMatchObject({ targetId: 'workstation', cwd: '~', status: 'running' });
+    expect(session).toMatchObject({
+      targetId: 'workstation',
+      cwd: '/srv/work tree',
+      status: 'running',
+    });
     expect(remote.lastPty().spec).toEqual({
       argv: ['claude', '--prompt', 'spaces; $(stay-an-argument)', '--', '-x'],
-      cwd: undefined,
+      cwd: '/srv/work tree',
       cols: 90,
       rows: 30,
       profileIds: [remoteProfile.id],

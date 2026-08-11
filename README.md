@@ -36,6 +36,7 @@ reference `dist/` yourself. From any directory:
 apm          # start (or reuse) the daemon, print its URL, open the dashboard
 apm url      # print the authenticated URL, open nothing
 apm profiles --json # stable profile/default/usage contract for integrations
+apm targets --json  # stable execution-target contract for integrations
 apm status
 apm stop
 ```
@@ -77,10 +78,16 @@ apm profiles              # human-readable profiles and provider defaults
 apm profiles --json       # versioned machine contract, JSON only on stdout
 apm profiles --json --refresh
                           # refresh usage first, then print the contract
+apm targets               # local plus configured remote execution targets
+apm targets --json        # versioned machine contract for integrations
+apm targets --profiles devbox --json
+                          # target-scoped profiles, without local home paths
 apm run work claude       # run claude bound to profile "work"
 apm run work bash         # any command; children inherit the profile env
-apm run --target devbox work claude --resume
-                          # run on the approved target "devbox"
+apm run --target devbox --cwd /srv/repo work claude --resume
+                          # run in an explicit directory on approved target "devbox"
+apm run --target devbox --cwd /srv/repo --ephemeral work claude
+                          # close the target process when this client disconnects
 apm pair                 # on a target, pair its one running managed T3 instance
 apm pair <instance-id>   # select exactly when several instances run there
 apm attach claude-work-1  # reattach to a running session

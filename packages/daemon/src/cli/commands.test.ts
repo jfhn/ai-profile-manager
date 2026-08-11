@@ -1,6 +1,67 @@
-import type { OverviewResponse, UsageSnapshot } from '@apm/shared';
+import type {
+  OverviewResponse,
+  TargetProfilesResponse,
+  TargetsResponse,
+  UsageSnapshot,
+} from '@apm/shared';
 import { describe, expect, it } from 'vitest';
-import { profilesContract } from './commands.js';
+import {
+  buildRunSessionRequest,
+  profilesContract,
+  targetProfilesContract,
+  targetsContract,
+} from './commands.js';
+
+describe('buildRunSessionRequest', () => {
+  it('forwards an explicit target cwd and opts into connection-bound lifecycle', () => {
+    expect(
+      buildRunSessionRequest(
+        {
+          target: 'dev-box',
+          cwd: '/srv/work tree',
+          ephemeral: true,
+          profile: 'work',
+          app: 'codex',
+          args: ['--no-alt-screen'],
+        },
+        'remote-profile',
+        { cols: 120, rows: 40 },
+      ),
+    ).toEqual({
+      targetId: 'dev-box',
+      profileId: 'remote-profile',
+      app: 'codex',
+      args: ['--no-alt-screen'],
+      cwd: '/srv/work tree',
+      lifecycle: 'connection-bound',
+      cols: 120,
+      rows: 40,
+    });
+  });
+
+  it('keeps ordinary target sessions persistent and lets the target choose its default cwd', () => {
+    expect(
+      buildRunSessionRequest(
+        {
+          target: 'dev-box',
+          ephemeral: false,
+          profile: 'work',
+          app: 'claude',
+          args: [],
+        },
+        'remote-profile',
+        { cols: 80, rows: 24 },
+      ),
+    ).toEqual({
+      targetId: 'dev-box',
+      profileId: 'remote-profile',
+      app: 'claude',
+      args: [],
+      cols: 80,
+      rows: 24,
+    });
+  });
+});
 
 describe('profilesContract', () => {
   it('emits the versioned integration shape with explicit null usage', () => {
@@ -137,6 +198,67 @@ describe('profilesContract', () => {
     };
 
     expect(profilesContract(overview).profiles[0]?.usage).toBeNull();
+  });
+});
+
+describe('target integration contracts', () => {
+  it('emits versioned target metadata without credential material', () => {
+    const response: TargetsResponse = {
+      targets: [
+        {
+          id: 'dev-box',
+          label: 'Dev Box',
+          kind: 'remote',
+          transport: 'ssh',
+          identity: {
+            hostname: 'dev-box',
+            address: 'dev-box.example',
+            fingerprint: null,
+          },
+          capabilities: ['exec', 'pty', 'signal', 'profiles'],
+          approved: true,
+          status: 'online',
+        },
+      ],
+    };
+
+    expect(targetsContract(response)).toEqual({ schemaVersion: 1, targets: response.targets });
+  });
+
+  it('emits target-scoped profiles without homes and preserves opaque ids', () => {
+    const id = 'remote/work 日本';
+    const response: TargetProfilesResponse = {
+      profiles: [
+        {
+          id,
+          provider: 'codex',
+          label: 'Remote work',
+          status: 'active',
+          enabled: true,
+        },
+      ],
+    };
+
+    const contract = targetProfilesContract('dev-box', response);
+    expect(contract).toEqual({
+      schemaVersion: 1,
+      targetId: 'dev-box',
+      profiles: response.profiles,
+    });
+    expect(JSON.stringify(contract)).not.toContain('home');
+  });
+
+  it('rejects duplicate target-scoped profile ids', () => {
+    const profile = {
+      id: 'duplicate',
+      provider: 'claude' as const,
+      label: 'Work',
+      status: 'active' as const,
+      enabled: true,
+    };
+    expect(() =>
+      targetProfilesContract('dev-box', { profiles: [profile, { ...profile, label: 'Other' }] }),
+    ).toThrow(/duplicates/);
   });
 });
 

@@ -7,6 +7,7 @@ import {
   parseProfileArgv,
   parseProfilesArgv,
   parseRunArgv,
+  parseTargetsArgv,
   resolveProfile,
 } from './parse.js';
 
@@ -28,20 +29,48 @@ function makeProfile(overrides: Partial<Profile> = {}): Profile {
 
 describe('parseRunArgv', () => {
   it('takes both positionals and passes the rest verbatim', () => {
-    expect(parseRunArgv(['work', 'claude'])).toEqual({ profile: 'work', app: 'claude', args: [] });
+    expect(parseRunArgv(['work', 'claude'])).toEqual({
+      ephemeral: false,
+      profile: 'work',
+      app: 'claude',
+      args: [],
+    });
     expect(parseRunArgv(['work', 'claude', '--resume', '-p', 'hi'])).toEqual({
       profile: 'work',
       app: 'claude',
       args: ['--resume', '-p', 'hi'],
+      ephemeral: false,
     });
   });
 
   it('accepts one target flag before the existing positionals', () => {
     expect(parseRunArgv(['--target', 'workstation', 'work', 'claude', '--resume'])).toEqual({
       target: 'workstation',
+      ephemeral: false,
       profile: 'work',
       app: 'claude',
       args: ['--resume'],
+    });
+  });
+
+  it('accepts remote cwd and connection-bound lifecycle flags in any option order', () => {
+    expect(
+      parseRunArgv([
+        '--ephemeral',
+        '--cwd',
+        '/srv/work tree',
+        '--target',
+        'workstation',
+        'work',
+        'codex',
+      ]),
+    ).toEqual({
+      target: 'workstation',
+      cwd: '/srv/work tree',
+      ephemeral: true,
+      profile: 'work',
+      app: 'codex',
+      args: [],
     });
   });
 
@@ -50,16 +79,19 @@ describe('parseRunArgv', () => {
       profile: 'work',
       app: 'claude',
       args: ['--resume'],
+      ephemeral: false,
     });
     expect(parseRunArgv(['work', 'claude', '--', '--resume'])).toEqual({
       profile: 'work',
       app: 'claude',
       args: ['--resume'],
+      ephemeral: false,
     });
     expect(parseRunArgv(['work', '--', 'claude', '--', '--resume'])).toEqual({
       profile: 'work',
       app: 'claude',
       args: ['--resume'],
+      ephemeral: false,
     });
   });
 
@@ -94,6 +126,29 @@ describe('parseRunArgv', () => {
     expect(() => parseRunArgv(['--target', '--', 'work', 'claude'])).toThrow(
       '--target requires <target>',
     );
+    expect(() => parseRunArgv(['--cwd'])).toThrow('--cwd requires <path>');
+    expect(() => parseRunArgv(['--cwd', '--ephemeral', 'work', 'claude'])).toThrow(
+      '--cwd requires <path>',
+    );
+  });
+});
+
+describe('parseTargetsArgv', () => {
+  it('parses list and target-profile JSON modes', () => {
+    expect(parseTargetsArgv([])).toEqual({ json: false });
+    expect(parseTargetsArgv(['--json'])).toEqual({ json: true });
+    expect(parseTargetsArgv(['--profiles', 'dev-box', '--json'])).toEqual({
+      json: true,
+      profilesTarget: 'dev-box',
+    });
+  });
+
+  it('rejects missing, repeated, and unknown options', () => {
+    expect(() => parseTargetsArgv(['--profiles'])).toThrow('--profiles requires <target>');
+    expect(() => parseTargetsArgv(['--profiles', 'one', '--profiles', 'two'])).toThrow(
+      '--profiles may be supplied only once',
+    );
+    expect(() => parseTargetsArgv(['--refresh'])).toThrow('unknown targets option');
   });
 });
 

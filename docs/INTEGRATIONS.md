@@ -6,6 +6,8 @@ metadata instead of embedding apm or using `apm run`:
 ```sh
 apm profiles --json
 apm profiles --json --refresh
+apm targets --json
+apm targets --profiles <target-id> --json
 ```
 
 The command starts or reuses the local daemon. `--refresh` forces a usage
@@ -14,6 +16,34 @@ before reading the result. Without it, the latest persisted snapshots are
 returned. Successful `--json` output writes one JSON document and a trailing
 newline to stdout; daemon logs and failures never share stdout. A failure is
 reported on stderr with a non-zero exit status.
+
+Target discovery follows the same stdout and schema-version rules. `apm
+targets --json` returns the local target plus configured remotes, including
+their capability, approval, and status fields. `apm targets --profiles
+<target-id> --json` returns profile summaries from that target's own namespace:
+
+```json
+{
+  "schemaVersion": 1,
+  "targetId": "devbox",
+  "profiles": [
+    {
+      "id": "codex-work",
+      "provider": "codex",
+      "label": "work",
+      "status": "active",
+      "enabled": true
+    }
+  ]
+}
+```
+
+Target profile summaries never contain `home`: a local path is meaningless on
+another machine. A process-owning integration launches the selected entry with
+`apm run --target <target-id> --cwd <target-path> <profile-id> <app> ...`.
+When its local connection is the intended lifetime owner, it may add
+`--ephemeral`; after the first attach, loss of the last client then terminates
+the APM session instead of leaving it available to `apm attach`.
 
 ## Version 1 stdout schema
 

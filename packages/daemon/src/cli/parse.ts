@@ -1,7 +1,7 @@
 /**
  * Pure argv/profile resolution for the CLI — no I/O, so it can be unit tested.
  *
- * Grammar: `apm run [--target <target>] <profile> <app> [args...]`. Both
+ * Grammar: `apm run [options] <profile> <app> [args...]`. Both
  * positionals are always required (the app decides the provider, so profile
  * names are only unique per provider). Everything after <app> is passed to the
  * app verbatim; a literal `--` directly after <profile> or after <app> is an
@@ -13,13 +13,14 @@ import { isProviderId, PROVIDER_IDS, type ProviderId } from '@apm/shared';
 export class CliError extends Error {}
 
 export const USAGE =
-  `usage: apm [start|profile|profiles|run|pair|attach|sessions|status|url|stop]\n` +
+  `usage: apm [start|profile|profiles|targets|run|pair|attach|sessions|status|url|stop]\n` +
   `  apm [start] [--port N] [--no-open] [--foreground]   start or reuse the daemon, open the UI\n` +
   `  apm url                                             print the authenticated URL, open nothing\n` +
   `  apm profile add <claude|codex> [--label <label>] [--new] [-- login-args...]\n` +
   `                                                      log in to a fresh managed profile\n` +
   `  apm profiles [--json] [--refresh]                   list profiles and provider defaults\n` +
-  `  apm run [--target <target>] <profile> <app> [args...]\n` +
+  `  apm targets [--json] [--profiles <target>]          list targets or one target's profiles\n` +
+  `  apm run [--target <target>] [--cwd <path>] [--ephemeral] <profile> <app> [args...]\n` +
   `                                                      run an app bound to a profile\n` +
   `  apm pair [<instance-id>]                            pair with a running managed T3 instance\n` +
   `  apm attach <session>                                attach to a running session\n` +
@@ -33,6 +34,7 @@ const COMMANDS = new Set([
   'profile',
   'run',
   'profiles',
+  'targets',
   'pair',
   'attach',
   'sessions',
@@ -67,6 +69,8 @@ export function parseCommand(argv: string[]): CommandInvocation {
 
 export interface RunInvocation {
   target?: string;
+  cwd?: string;
+  ephemeral: boolean;
   profile: string;
   app: string;
   args: string[];
@@ -75,6 +79,11 @@ export interface RunInvocation {
 export interface ProfilesInvocation {
   json: boolean;
   refresh: boolean;
+}
+
+export interface TargetsInvocation {
+  json: boolean;
+  profilesTarget?: string;
 }
 
 export interface PairInvocation {
@@ -105,7 +114,35 @@ export function parseProfilesArgv(argv: string[]): ProfilesInvocation {
   return invocation;
 }
 
-const RUN_USAGE = 'usage: apm run [--target <target>] <profile> <app> [args...]';
+const TARGETS_USAGE = 'usage: apm targets [--json] [--profiles <target>]';
+
+export function parseTargetsArgv(argv: string[]): TargetsInvocation {
+  const invocation: TargetsInvocation = { json: false };
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (arg === '--json') {
+      invocation.json = true;
+      continue;
+    }
+    if (arg === '--profiles') {
+      const target = argv[index + 1];
+      if (target === undefined || target.startsWith('-')) {
+        throw new CliError(`--profiles requires <target>\n${TARGETS_USAGE}`);
+      }
+      if (invocation.profilesTarget !== undefined) {
+        throw new CliError(`--profiles may be supplied only once\n${TARGETS_USAGE}`);
+      }
+      invocation.profilesTarget = target;
+      index += 1;
+      continue;
+    }
+    throw new CliError(`unknown targets option: ${arg}\n${TARGETS_USAGE}`);
+  }
+  return invocation;
+}
+
+const RUN_USAGE =
+  'usage: apm run [--target <target>] [--cwd <path>] [--ephemeral] <profile> <app> [args...]';
 
 /** Known provider apps — these scope the profile lookup to one provider. */
 export const APP_PROVIDERS: Record<string, ProviderId> = {
@@ -116,13 +153,32 @@ export const APP_PROVIDERS: Record<string, ProviderId> = {
 export function parseRunArgv(argv: string[]): RunInvocation {
   const rest = [...argv];
   let target: string | undefined;
+  let cwd: string | undefined;
+  let ephemeral = false;
 
-  if (rest[0] === '--target') {
-    rest.shift();
-    target = rest.shift();
-    if (target === undefined || target.startsWith('-')) {
-      throw new CliError(`--target requires <target>\n${RUN_USAGE}`);
+  while (rest[0]?.startsWith('-') && rest[0] !== '--') {
+    const option = rest.shift();
+    if (option === '--target') {
+      target = rest.shift();
+      if (target === undefined || target.startsWith('-')) {
+        throw new CliError(`--target requires <target>\n${RUN_USAGE}`);
+      }
+      continue;
     }
+    if (option === '--cwd') {
+      cwd = rest.shift();
+      if (cwd === undefined || cwd.startsWith('-')) {
+        throw new CliError(`--cwd requires <path>\n${RUN_USAGE}`);
+      }
+      continue;
+    }
+    if (option === '--ephemeral') {
+      ephemeral = true;
+      continue;
+    }
+    throw new CliError(
+      `unknown flag: ${option} (apm flags go before the positionals)\n${RUN_USAGE}`,
+    );
   }
 
   const profile = rest.shift();
@@ -149,7 +205,14 @@ export function parseRunArgv(argv: string[]): RunInvocation {
   // further `--` belongs to the app.
   if (rest[0] === '--') rest.shift();
 
-  return target === undefined ? { profile, app, args: rest } : { target, profile, app, args: rest };
+  return {
+    ...(target === undefined ? {} : { target }),
+    ...(cwd === undefined ? {} : { cwd }),
+    ephemeral,
+    profile,
+    app,
+    args: rest,
+  };
 }
 
 // ------------------------------------------------------------ profile add --

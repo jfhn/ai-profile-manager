@@ -70,7 +70,8 @@ export function attachTerminalWs(server: Server, ctx: AppContext): void {
         }
       });
 
-      // Closing the socket detaches only — the pty keeps running.
+      // Persistent sessions keep running. A connection-bound session treats
+      // the final detach as its owner disappearing and signals the PTY.
       ws.on('close', detach);
       ws.on('error', detach);
     });

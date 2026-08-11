@@ -226,6 +226,15 @@ does not crash.
   does not close the target PTY, and a later `apm attach` replays scrollback and
   resumes live I/O. A target transport failure emits a terminal error and a
   recorded exit, so no process is silently left untracked.
+- `apm run --ephemeral` requests the opt-in `connection-bound` lifecycle. Once
+  its first WebSocket has attached, losing the last attached client sends one
+  `SIGHUP` to the PTY; ordinary sessions remain persistent and attachable.
+  Integrations that own a durable local wrapper can use this mode so killing
+  that wrapper also tears down the target-side process.
+- `apm targets --json` and `apm targets --profiles <target> --json` are the
+  versioned discovery contracts for process-owning integrations. Profiles are
+  always resolved in the selected target's namespace; the target-scoped
+  contract intentionally contains no local `home` path.
 
 ### Managed T3 on a target (issue #19)
 
