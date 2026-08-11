@@ -33,8 +33,6 @@ import {
 } from './parse.js';
 import { ApiRequestError, runProfileAdd } from './profile-add.js';
 
-export { parseRunArgv, resolveProfile } from './parse.js';
-
 /** Ctrl-] — detaches without touching the session, like telnet/tmux. */
 const DETACH_KEY = 0x1d;
 const DAEMON_START_TIMEOUT_MS = 15_000;

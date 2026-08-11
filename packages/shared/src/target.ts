@@ -61,10 +61,6 @@ export interface ExecutionTarget {
   status: TargetStatus;
 }
 
-export function isLocalTarget(target: ExecutionTarget): boolean {
-  return target.kind === 'local';
-}
-
 export function hasCapability(target: ExecutionTarget, capability: TargetCapability): boolean {
   return target.capabilities.includes(capability);
 }
@@ -109,10 +105,4 @@ export interface TargetProfileSummary {
   label: string;
   status: ProfileStatus;
   enabled: boolean;
-}
-
-/** A profile addressed on a specific target. */
-export interface TargetProfileRef {
-  targetId: TargetId;
-  profileId: string;
 }
