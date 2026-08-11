@@ -48,6 +48,8 @@ the APM session instead of leaving it available to `apm attach`.
 Target capability names are open-ended within schema version 1. Consumers must
 check the capabilities they require and ignore or preserve unknown strings;
 an added capability must never make an otherwise usable target invalid.
+`targetsCliProducerSchema` from `@apm/shared` is a producer-side assertion used
+by APM itself, not a forward-compatible consumer validator.
 
 ## Version 1 stdout schema
 

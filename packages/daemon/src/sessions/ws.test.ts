@@ -14,7 +14,7 @@ import {
   type FakeRemoteTransport,
 } from '../targets/test-support/fake-remote.js';
 import { createSessionHost, type SessionHostInternals } from './host.js';
-import { attachTerminalWs } from './ws.js';
+import { attachTerminalWs, type TerminalWsHandle } from './ws.js';
 
 const TOKEN = 'test-token';
 
@@ -54,6 +54,7 @@ describe('terminal websocket', () => {
   let server: http.Server;
   let port: number;
   let remote: FakeRemoteTransport;
+  let terminalWs: TerminalWsHandle;
 
   beforeEach(async () => {
     dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'apm-ws-'));
@@ -83,15 +84,20 @@ describe('terminal websocket', () => {
     } as unknown as AppContext;
 
     server = http.createServer((_req, res) => res.end('ok'));
-    attachTerminalWs(server, ctx);
+    terminalWs = attachTerminalWs(server, ctx);
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
     const address = server.address();
     port = typeof address === 'object' && address !== null ? address.port : 0;
   });
 
   afterEach(async () => {
-    host.shutdown();
-    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await terminalWs.close();
+    await host.shutdown();
+    if (server.listening) {
+      await new Promise<void>((resolve, reject) =>
+        server.close((error) => (error ? reject(error) : resolve())),
+      );
+    }
     fs.rmSync(dataDir, { recursive: true, force: true });
   });
 
@@ -255,6 +261,28 @@ describe('terminal websocket', () => {
     ws.close();
     await waitFor(() => remote.lastPty().signals.length === 1);
     expect(remote.lastPty().signals).toEqual(['SIGHUP']);
+  });
+
+  it('disconnects attached clients during shutdown so the HTTP server can close', async () => {
+    const session = await host.create({
+      targetId: 'workstation',
+      profileId: 'remote-profile',
+      app: 'claude',
+    });
+    const { ws } = connect(session.id);
+    await new Promise<void>((resolve) => ws.on('open', resolve));
+    await waitFor(() => host.streams(session.id)?.session().attachedClients === 1);
+    const disconnected = new Promise<void>((resolve) => ws.once('close', () => resolve()));
+
+    await terminalWs.close();
+
+    await disconnected;
+    expect(ws.readyState).toBe(WebSocket.CLOSED);
+    expect(host.streams(session.id)?.session().attachedClients).toBe(0);
+    await new Promise<void>((resolve, reject) =>
+      server.close((error) => (error ? reject(error) : resolve())),
+    );
+    expect(server.listening).toBe(false);
   });
 
   it('rejects bad tokens, foreign origins and unknown sessions before touching a pty', async () => {

@@ -257,8 +257,14 @@ const executionTargetSchema = z
   })
   .strict();
 
-/** Runtime form of the stable `apm targets --json` version-1 contract. */
-export const targetsCliResponseSchema = z
+/**
+ * Producer-side assertion for APM's own `apm targets --json` output.
+ *
+ * This deliberately rejects capabilities unknown to this APM build so its
+ * emitted values cannot drift from `TARGET_CAPABILITIES`. Integrations must
+ * treat capability names as open strings and ignore names they do not know.
+ */
+export const targetsCliProducerSchema = z
   .object({
     schemaVersion: z.literal(1),
     targets: z.array(executionTargetSchema),

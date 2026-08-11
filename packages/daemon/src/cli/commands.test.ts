@@ -4,7 +4,7 @@ import type {
   TargetsResponse,
   UsageSnapshot,
 } from '@apm/shared';
-import { TARGET_CAPABILITIES, targetsCliResponseSchema } from '@apm/shared';
+import { TARGET_CAPABILITIES, targetsCliProducerSchema } from '@apm/shared';
 import { describe, expect, it } from 'vitest';
 import {
   buildRunSessionRequest,
@@ -243,12 +243,12 @@ describe('target integration contracts', () => {
       ],
     } as const;
 
-    const parsed = targetsCliResponseSchema.parse(response);
+    const parsed = targetsCliProducerSchema.parse(response);
 
     expect(parsed.targets[0]?.capabilities).toEqual(TARGET_CAPABILITIES);
     expect(parsed.targets[0]?.capabilities).toContain('detached');
     expect(() =>
-      targetsCliResponseSchema.parse({
+      targetsCliProducerSchema.parse({
         ...response,
         targets: [{ ...response.targets[0], capabilities: ['future-capability'] }],
       }),

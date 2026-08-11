@@ -297,10 +297,11 @@ export function createSessionHost(
       entry.pty?.resize(cols, rows);
     },
 
-    shutdown() {
-      for (const entry of sessions.values()) {
-        void entry.pty?.close().catch(() => undefined);
-      }
+    async shutdown() {
+      const openPtys = [...sessions.values()].flatMap((entry) =>
+        entry.pty === null ? [] : [entry.pty],
+      );
+      await Promise.allSettled(openPtys.map((pty) => pty.close()));
     },
 
     recentDirs() {

@@ -70,8 +70,8 @@ describe('session host', () => {
     hosts = [];
   });
 
-  afterEach(() => {
-    for (const host of hosts) host.shutdown();
+  afterEach(async () => {
+    await Promise.all(hosts.map((host) => host.shutdown()));
     fs.rmSync(dataDir, { recursive: true, force: true });
   });
 
@@ -214,6 +214,53 @@ describe('session host', () => {
     expect(remote.lastPty().signals).toEqual([]);
     detachSecond();
     expect(remote.lastPty().signals).toEqual(['SIGHUP']);
+  });
+
+  it('waits for every live pty to close during shutdown', async () => {
+    const localProfiles = [makeProfile()];
+    const remote = createFakeRemoteTransport({
+      id: 'workstation',
+      profiles: [
+        {
+          id: 'remote-1',
+          provider: 'claude',
+          label: 'remote',
+          status: 'active',
+          enabled: true,
+        },
+      ],
+    });
+    const targets = createTargetRegistry(
+      createLocalTransport({ profiles: fakeProfiles(localProfiles) }),
+      [remote],
+    );
+    const host = makeHost(localProfiles, { targets });
+    await host.create({
+      targetId: 'workstation',
+      profileId: 'remote-1',
+      app: 'claude',
+    });
+
+    let releaseClose: (() => void) | undefined;
+    remote.lastPty().handle.close = () =>
+      new Promise<void>((resolve) => {
+        releaseClose = () => {
+          remote.lastPty().exit({ signal: 'SIGHUP' });
+          resolve();
+        };
+      });
+    let settled = false;
+
+    const shutdown = host.shutdown().then(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    releaseClose?.();
+    await shutdown;
+    expect(settled).toBe(true);
+    expect(remote.lastPty().exited).toBe(true);
   });
 
   it('emits sessions-changed on create, attach and exit', async () => {

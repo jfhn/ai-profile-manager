@@ -11,12 +11,12 @@ path.
 
 ## What runs where
 
-|                      | local target                                 | remote target                                           |
-| -------------------- | -------------------------------------------- | ------------------------------------------------------- |
-| process              | detached `t3 serve`, survives an apm restart | detached `t3 serve` **on the target**, survives it too  |
-| base dir             | `<dataDir>/t3/<id>`                          | `~/.local/share/apm/t3/<id>` **on the target**          |
-| provider env         | injected here from the bound profiles        | injected **by the target** from its own profiles        |
-| Open link            | `http://127.0.0.1:<port>`                    | whatever the target's endpoint publishes                |
+|                      | local target                                 | remote target                                                      |
+| -------------------- | -------------------------------------------- | ------------------------------------------------------------------ |
+| process              | detached `t3 serve`, survives an apm restart | detached `t3 serve` **on the target**, survives it too             |
+| base dir             | `<dataDir>/t3/<id>`                          | `~/.local/share/apm/t3/<id>` **on the target**                     |
+| provider env         | injected here from the bound profiles        | injected **by the target** from its own profiles                   |
+| Open link            | `http://127.0.0.1:<port>`                    | whatever the target's endpoint publishes                           |
 | after an apm restart | re-adopted if still healthy                  | re-adopted if still healthy — stopped, with the reason, if it died |
 
 A remote instance is spawned in its own session on the target and recorded in
@@ -229,7 +229,7 @@ From the widest hammer to the narrowest:
 
 Nothing apm starts on a target through a pty (`apm run` sessions) is meant to
 outlive the connection that started it, and a managed T3 instance — the one
-deliberate exception — is meant to outlive it *only under its record*. Four
+deliberate exception — is meant to outlive it _only under its record_. Four
 things keep that honest:
 
 - the remote agent kills its whole process group on `SIGHUP`, on stdin EOF and

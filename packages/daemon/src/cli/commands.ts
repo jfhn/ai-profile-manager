@@ -16,7 +16,7 @@ import {
   LOCAL_TARGET_ID,
   profilesCliResponseSchema,
   targetProfilesCliResponseSchema,
-  targetsCliResponseSchema,
+  targetsCliProducerSchema,
   usageSnapshotSchema,
 } from '@apm/shared';
 import type {
@@ -237,7 +237,7 @@ export async function profilesCommand(argv: string[]): Promise<void> {
 }
 
 export function targetsContract(response: TargetsResponse): TargetsCliResponse {
-  return targetsCliResponseSchema.parse({
+  return targetsCliProducerSchema.parse({
     schemaVersion: 1,
     targets: response.targets.map((target) => ({
       ...target,
