@@ -6,9 +6,13 @@
  * spawn underneath it stays untested like the rest of ssh.ts; the two-device
  * live check covers that.
  */
+import net from 'node:net';
 import { describe, expect, it } from 'vitest';
 import { TransportError, type CommandResult, type CommandSpec } from '@apm/shared';
 import {
+  BACKEND_PROBE_DEAD_EXIT_CODE,
+  backendIsListening,
+  backendProbeArgv,
   openTailscaleEndpoint,
   parseFunnelPorts,
   parseSelfDnsName,
@@ -18,6 +22,7 @@ import {
   serveArgv,
   serveOffArgv,
 } from './tailscale.js';
+import { createLocalTransport } from './local.js';
 
 const TARGET_ID = 'dev-box';
 const DNS_NAME = 'dev-box.tailnet.ts.net';
@@ -115,6 +120,30 @@ describe('tailscale serve argv', () => {
       'http://127.0.0.1:4800',
       'off',
     ]);
+  });
+});
+
+describe('target-local backend probe', () => {
+  it('distinguishes a bound loopback backend from a free port', async () => {
+    const server = net.createServer();
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    if (address === null || typeof address === 'string') throw new Error('No TCP listen address');
+
+    const transport = createLocalTransport({
+      profiles: { list: () => [], envFor: () => ({}) },
+    });
+    const exec = (spec: CommandSpec, options?: { timeoutMs?: number }) =>
+      transport.exec(spec, options);
+
+    try {
+      expect(await backendIsListening(exec, address.port)).toBe(true);
+    } finally {
+      await new Promise<void>((resolve, reject) =>
+        server.close((error) => (error ? reject(error) : resolve())),
+      );
+    }
+    expect(await backendIsListening(exec, address.port)).toBe(false);
   });
 });
 
@@ -228,9 +257,10 @@ describe('openTailscaleEndpoint', () => {
     // Exactly the state a daemon restart met live: the previous instance
     // outlived it, still bound to 4800, still published on 8443.
     const h = harness(serveStatusJson({ entries: [{ https: 8443, backend: 4800 }] }));
+    h.script(backendProbeArgv(4800), { exitCode: 0 });
     const handle = await openTailscaleEndpoint(
       { port: null },
-      deps(h, async () => true), // the orphan answers, so its entry is not stale
+      deps(h, async () => true),
     );
 
     expect(handle.endpoint.port).toBe(4801);
@@ -241,16 +271,34 @@ describe('openTailscaleEndpoint', () => {
 
   it('reclaims its own listener once nothing answers behind it', async () => {
     const h = harness(serveStatusJson({ entries: [{ https: 8443, backend: 4800 }] }));
+    h.script(backendProbeArgv(4800), { exitCode: BACKEND_PROBE_DEAD_EXIT_CODE });
     const handle = await openTailscaleEndpoint(
       { port: null },
-      deps(h, async () => false), // nothing is serving it any more
+      deps(h, async () => {
+        throw new Error('published URL probe must not decide stale-entry reclaim');
+      }),
     );
 
     // The dead entry is withdrawn and both of its ports come back into use,
     // so a crashed daemon cannot leave listeners piling up one port at a time.
+    expect(h.calls).toContainEqual(backendProbeArgv(4800));
     expect(h.calls).toContainEqual(serveOffArgv(8443, 4800));
     expect(handle.endpoint.port).toBe(4800);
     expect(h.calls).toContainEqual(serveArgv(8443, 4800));
+  });
+
+  it('keeps a listener when the target-local backend probe is inconclusive', async () => {
+    const h = harness(serveStatusJson({ entries: [{ https: 8443, backend: 4800 }] }));
+    h.script(backendProbeArgv(4800), { exitCode: 1, stderr: 'node could not run the probe' });
+
+    const handle = await openTailscaleEndpoint(
+      { port: null },
+      deps(h, async () => true),
+    );
+
+    expect(h.calls.some((argv) => argv.includes('off'))).toBe(false);
+    expect(handle.endpoint.port).toBe(4801);
+    expect(h.calls).toContainEqual(serveArgv(8444, 4801));
   });
 
   it('never withdraws an entry outside its own port ranges', async () => {
