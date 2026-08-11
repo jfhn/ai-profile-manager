@@ -16,7 +16,7 @@ let nextId = 1;
 class ToastStore {
   items = $state<Toast[]>([]);
 
-  push(title: string, options: { description?: string; variant?: ToastVariant } = {}): number {
+  push(title: string, options: { description?: string; variant?: ToastVariant } = {}): void {
     const id = nextId++;
     const toast: Toast = {
       id,
@@ -26,7 +26,6 @@ class ToastStore {
     };
     this.items = [...this.items, toast];
     setTimeout(() => this.dismiss(id), DISMISS_AFTER);
-    return id;
   }
 
   dismiss(id: number): void {
@@ -40,12 +39,11 @@ export function toast(title: string, description?: string): void {
   toasts.push(title, description === undefined ? {} : { description });
 }
 
-/** Report an unhandled error from an action; returns the message it showed. */
-export function toastError(error: unknown, context?: string): string {
+/** Report an unhandled error from an action. */
+export function toastError(error: unknown, context?: string): void {
   const message = errorMessage(error);
   toasts.push(context ?? 'Something went wrong', {
     description: message,
     variant: 'destructive',
   });
-  return message;
 }

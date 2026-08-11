@@ -2,6 +2,7 @@ import type { Profile } from '@apm/shared';
 import { fireEvent, render, screen, waitFor } from '@testing-library/svelte';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { profileView } from '../runway';
+import { app } from '../stores.svelte';
 import { FakeDaemon, loginCommand } from '../test-support/fake-daemon';
 import ProfileCard from './ProfileCard.svelte';
 
@@ -9,7 +10,10 @@ import ProfileCard from './ProfileCard.svelte';
  * Hoisted so the `../api` factory below can reach it. The daemon itself is
  * rebuilt per test in `beforeEach`.
  */
-const mocks = vi.hoisted(() => ({ daemon: null as unknown as FakeDaemon }));
+const mocks = vi.hoisted(() => ({
+  daemon: null as unknown as FakeDaemon,
+  refreshedProfiles: [] as string[],
+}));
 
 // The card pulls in the real api module transitively (via stores and toasts),
 // which would resolve a daemon token and make network calls. Everything the
@@ -24,6 +28,9 @@ vi.mock('../api', () => ({
     confirmWizard: (id: string, body: Parameters<FakeDaemon['confirmWizard']>[1]) =>
       mocks.daemon.confirmWizard(id, body),
     deleteProfile: (id: string, purge?: boolean) => mocks.daemon.deleteProfile(id, purge),
+    refreshProfile: async (id: string) => {
+      mocks.refreshedProfiles.push(id);
+    },
     overview: async () => ({
       providers: [],
       profiles: mocks.daemon.profiles,
@@ -45,6 +52,8 @@ beforeEach(() => {
   // working while we jump the wizard's 2s credential poll by hand.
   vi.useFakeTimers({ shouldAdvanceTime: true });
   mocks.daemon = new FakeDaemon();
+  mocks.refreshedProfiles = [];
+  app.usage = {};
   // Seeded first so the profile under test is neither the only pending one nor
   // the first id the fake hands out. A card that resumed a hard-coded or
   // otherwise wrong profile would now talk to the decoy and fail.
@@ -133,5 +142,19 @@ describe('ProfileCard: resuming a pending profile', () => {
     await waitFor(() => expect(screen.queryByText(loginCommand(pending))).toBeNull());
     expect(mocks.daemon.deleted).toEqual([]);
     expect(mocks.daemon.profile(pending.id)?.status).toBe('pending');
+  });
+});
+
+describe('ProfileCard: refreshing usage', () => {
+  it('completes a refresh from the daemon 204 response and waits for the SSE update', async () => {
+    const active: Profile = { ...pending, status: 'active', label: 'work' };
+    renderCard(active);
+
+    const refresh = screen.getByRole('button', { name: 'Refresh usage for work' });
+    await fireEvent.click(refresh);
+
+    await waitFor(() => expect(mocks.refreshedProfiles).toEqual([active.id]));
+    expect(app.usage[active.id]).toBeUndefined();
+    await waitFor(() => expect(refresh.hasAttribute('disabled')).toBe(false));
   });
 });

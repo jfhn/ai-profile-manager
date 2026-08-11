@@ -1,5 +1,5 @@
 import type { Profile } from '@apm/shared';
-import { render, screen, waitFor } from '@testing-library/svelte';
+import { fireEvent, render, screen, waitFor } from '@testing-library/svelte';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { app, loadTargetProfiles } from '../stores.svelte';
 import { FakeDaemon } from '../test-support/fake-daemon';
@@ -42,9 +42,27 @@ beforeEach(() => {
   app.targets = [];
   app.profiles = [];
   app.providers = [];
+  app.t3Instances = [];
   // Shared with the create modal and outliving any one component, so each test
   // starts from an unread cache.
   app.targetProfiles = {};
+});
+
+describe('T3Card: applying command responses', () => {
+  it('replaces the card state with the valid instance returned by stop', async () => {
+    const instance = mocks.daemon.runT3Instance(mocks.daemon.seedT3Instance({ label: 'work' }), {
+      scope: 'loopback',
+      port: 4800,
+      url: 'http://127.0.0.1:4800',
+    });
+    app.t3Instances = [instance];
+
+    render(T3Card, { instance });
+    await fireEvent.click(screen.getByRole('button', { name: 'Stop' }));
+
+    await waitFor(() => expect(app.t3Instances[0]?.status).toBe('stopped'));
+    expect(app.t3Instances[0]?.url).toBeNull();
+  });
 });
 
 describe('T3Card: which machine an instance runs on', () => {

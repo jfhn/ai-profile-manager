@@ -8,7 +8,6 @@
     size?: number;
     spinning?: boolean;
     disabled?: boolean;
-    danger?: boolean;
     active?: boolean;
     onclick?: (event: MouseEvent) => void;
   }
@@ -19,7 +18,6 @@
     size = 16,
     spinning = false,
     disabled = false,
-    danger = false,
     active = false,
     onclick,
   }: Props = $props();
@@ -27,7 +25,6 @@
 
 <button
   class="icon-btn"
-  class:danger
   class:active
   type="button"
   aria-label={label}
@@ -62,11 +59,6 @@
   .icon-btn.active {
     background: var(--hover);
     color: var(--fg);
-  }
-
-  .icon-btn.danger:hover:not(:disabled) {
-    color: var(--destructive);
-    background: color-mix(in oklab, var(--destructive) 12%, transparent);
   }
 
   .icon-btn:disabled {

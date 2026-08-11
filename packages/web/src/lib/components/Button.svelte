@@ -5,7 +5,6 @@
   interface Props {
     variant?: 'primary' | 'secondary' | 'ghost' | 'destructive';
     size?: 'sm' | 'md';
-    type?: 'button' | 'submit';
     disabled?: boolean;
     loading?: boolean;
     full?: boolean;
@@ -20,7 +19,6 @@
   let {
     variant = 'secondary',
     size = 'md',
-    type = 'button',
     disabled = false,
     loading = false,
     full = false,
@@ -41,7 +39,7 @@
   <button
     class="btn {variant} {size}"
     class:full
-    {type}
+    type="button"
     {title}
     disabled={disabled || loading}
     {onclick}

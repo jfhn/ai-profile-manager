@@ -12,15 +12,16 @@ import type {
   Profile,
   ProviderId,
   RecentDirsResponse,
+  SessionsResponse,
   StartWizardRequest,
   StatusResponse,
   T3Instance,
-  TargetCandidate,
-  TargetProfileSummary,
+  TargetCandidatesResponse,
+  TargetProfilesResponse,
+  TargetsResponse,
   TerminalSession,
   UpdateProfileRequest,
   UpdateDefaultProfileRequest,
-  UsageSnapshot,
   WizardStateResponse,
 } from '@apm/shared';
 
@@ -56,18 +57,6 @@ function resolveToken(): string | null {
 
 export const token: string | null = resolveToken();
 
-export class ApiRequestError extends Error {
-  readonly code: string;
-  readonly status: number;
-
-  constructor(code: string, message: string, status: number) {
-    super(message);
-    this.name = 'ApiRequestError';
-    this.code = code;
-    this.status = status;
-  }
-}
-
 function isApiError(value: unknown): value is ApiError {
   if (typeof value !== 'object' || value === null) return false;
   const envelope = (value as { error?: unknown }).error;
@@ -90,7 +79,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   try {
     response = await fetch(path, { ...init, headers });
   } catch {
-    throw new ApiRequestError('network', 'Cannot reach the apm daemon', 0);
+    throw new Error('Cannot reach the apm daemon');
   }
 
   if (response.status === 204) return undefined as T;
@@ -107,9 +96,9 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 
   if (!response.ok) {
     if (isApiError(payload)) {
-      throw new ApiRequestError(payload.error.code, payload.error.message, response.status);
+      throw new Error(payload.error.message);
     }
-    throw new ApiRequestError('http-error', `Request failed (${response.status})`, response.status);
+    throw new Error(`Request failed (${response.status})`);
   }
 
   return payload as T;
@@ -117,25 +106,10 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 
 const json = (body: unknown): RequestInit => ({ body: JSON.stringify(body) });
 
-/**
- * The daemon answers list endpoints with an envelope ({ sessions }, { instances })
- * while the shared types describe bare arrays. Accept either so the client keeps
- * working whichever way the contract settles.
- */
-function unwrapList<T>(payload: unknown, key: string): T[] {
-  if (Array.isArray(payload)) return payload as T[];
-  if (payload && typeof payload === 'object') {
-    const inner = (payload as Record<string, unknown>)[key];
-    if (Array.isArray(inner)) return inner as T[];
-  }
-  return [];
-}
-
 export const api = {
   status: () => request<StatusResponse>('/api/status'),
   overview: () => request<OverviewResponse>('/api/overview'),
   discovery: () => request<DiscoveryResponse>('/api/discovery'),
-  defaults: () => request<DefaultsResponse>('/api/defaults'),
   setDefault: (provider: ProviderId, body: UpdateDefaultProfileRequest) =>
     request<DefaultsResponse>(`/api/defaults/${encodeURIComponent(provider)}`, {
       method: 'PUT',
@@ -150,9 +124,8 @@ export const api = {
     request<void>(`/api/profiles/${encodeURIComponent(id)}${purge ? '?purge=true' : ''}`, {
       method: 'DELETE',
     }),
-  /** Answers 204 today; tolerates a snapshot body so the card can settle early. */
   refreshProfile: (id: string) =>
-    request<UsageSnapshot | undefined>(`/api/profiles/${encodeURIComponent(id)}/refresh`, {
+    request<void>(`/api/profiles/${encodeURIComponent(id)}/refresh`, {
       method: 'POST',
     }),
   refreshAll: () => request<void>('/api/usage/refresh', { method: 'POST' }),
@@ -167,24 +140,17 @@ export const api = {
       ...json(body),
     }),
 
-  sessions: async () =>
-    unwrapList<TerminalSession>(await request<unknown>('/api/sessions'), 'sessions'),
+  sessions: async () => (await request<SessionsResponse>('/api/sessions')).sessions,
   createSession: (body: CreateSessionRequest) =>
     request<TerminalSession>('/api/sessions', { method: 'POST', ...json(body) }),
-  resizeSession: (id: string, cols: number, rows: number) =>
-    request<void>(`/api/sessions/${encodeURIComponent(id)}/resize`, {
-      method: 'POST',
-      ...json({ cols, rows }),
-    }),
   deleteSession: (id: string) =>
     request<void>(`/api/sessions/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   recentDirs: () => request<RecentDirsResponse>('/api/recent-dirs'),
 
-  targets: async () =>
-    unwrapList<ExecutionTarget>(await request<unknown>('/api/targets'), 'targets'),
+  targets: async () => (await request<TargetsResponse>('/api/targets')).targets,
   /** Machines on this hub's tailnet. Listing them approves nothing. */
   targetCandidates: async () =>
-    unwrapList<TargetCandidate>(await request<unknown>('/api/targets/candidates'), 'candidates'),
+    (await request<TargetCandidatesResponse>('/api/targets/candidates')).candidates,
   /** The approval act: one named machine becomes an execution target. */
   addTarget: (body: AddTargetRequest) =>
     request<ExecutionTarget>('/api/targets', { method: 'POST', ...json(body) }),
@@ -193,12 +159,9 @@ export const api = {
     request<void>(`/api/targets/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   /** Profile ids are target-scoped, so a picker must ask the target itself. */
   targetProfiles: async (id: string) =>
-    unwrapList<TargetProfileSummary>(
-      await request<unknown>(`/api/targets/${encodeURIComponent(id)}/profiles`),
-      'profiles',
-    ),
+    (await request<TargetProfilesResponse>(`/api/targets/${encodeURIComponent(id)}/profiles`))
+      .profiles,
 
-  t3List: async () => unwrapList<T3Instance>(await request<unknown>('/api/t3'), 'instances'),
   createT3: (body: CreateT3InstanceRequest) =>
     request<T3Instance>('/api/t3', { method: 'POST', ...json(body) }),
   startT3: (id: string) =>
@@ -220,7 +183,6 @@ export function terminalSocketUrl(sessionId: string): string {
 
 /** Human-readable message for anything thrown by the api layer. */
 export function errorMessage(error: unknown): string {
-  if (error instanceof ApiRequestError) return error.message;
   if (error instanceof Error) return error.message;
   return 'Something went wrong';
 }

@@ -81,6 +81,7 @@ describe('NewT3Modal: choosing where an instance runs', () => {
       label: 'work',
       profiles: { claude: 'claude-local' },
     });
+    expect(app.t3Instances.map((instance) => instance.label)).toEqual(['work']);
   });
 
   it('offers the remote target’s own active profiles and sends its id', async () => {

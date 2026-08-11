@@ -114,6 +114,15 @@ node -e 'fetch(process.argv[1]).then((r) => process.exit(r.ok ? 0 : 1), () => pr
   die "the url from \`apm url\` is not usable: GET /api/status was rejected"
 say 'url ok (authenticated request accepted)'
 
+web="${url%%\?*}"
+node -e '
+  fetch(process.argv[1]).then(async (response) => {
+    const html = await response.text();
+    process.exit(response.ok && html.includes("<div id=\"app\">") ? 0 : 1);
+  }, () => process.exit(1));
+' "$web" || die 'the installed daemon did not serve the built web app'
+say 'web app ok'
+
 json=$("$APM" profiles --json)
 lines=$(printf '%s\n' "$json" | wc -l | tr -d '[:space:]')
 [ "$lines" -eq 1 ] || die "profiles --json printed $lines lines, expected one JSON document:

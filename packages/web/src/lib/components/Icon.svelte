@@ -27,14 +27,12 @@
     name: IconName;
     size?: number;
     strokeWidth?: number;
-    class?: string;
   }
 
-  let { name, size = 16, strokeWidth = 1.5, class: className = '' }: Props = $props();
+  let { name, size = 16, strokeWidth = 1.5 }: Props = $props();
 </script>
 
 <svg
-  class={className}
   width={size}
   height={size}
   viewBox="0 0 16 16"

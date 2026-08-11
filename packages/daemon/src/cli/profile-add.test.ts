@@ -58,17 +58,17 @@ class FakeDaemon {
     if (method === 'POST' && confirm) {
       const profile = this.mustGet(confirm[1] as string);
       if (!this.credentialed.has(profile.home)) {
-        throw new ApiRequestError('No credentials found', 409, 'no-credentials');
+        throw new ApiRequestError('No credentials found', 'no-credentials');
       }
       const { label } = body as { label: string };
       if (this.takenLabels.has(label)) {
-        throw new ApiRequestError(`Label "${label}" is already in use`, 409, 'label-taken');
+        throw new ApiRequestError(`Label "${label}" is already in use`, 'label-taken');
       }
       const active = { ...profile, label, identity: this.identity, status: 'active' as const };
       this.profiles.set(profile.id, active);
       return active as T;
     }
-    throw new ApiRequestError(`${method} ${endpoint} failed with 404`, 404, 'not-found');
+    throw new ApiRequestError(`${method} ${endpoint} failed with 404`, 'not-found');
   };
 
   private wizardState(profile: Profile) {
@@ -84,7 +84,7 @@ class FakeDaemon {
 
   private mustGet(id: string): Profile {
     const profile = this.profiles.get(id);
-    if (!profile) throw new ApiRequestError('Profile not found', 404, 'not-found');
+    if (!profile) throw new ApiRequestError('Profile not found', 'not-found');
     return profile;
   }
 }

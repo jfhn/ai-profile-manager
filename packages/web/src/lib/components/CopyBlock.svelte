@@ -3,10 +3,9 @@
 
   interface Props {
     value: string;
-    label?: string;
   }
 
-  let { value, label = 'Copy command' }: Props = $props();
+  let { value }: Props = $props();
 
   let copied = $state(false);
   let timer: ReturnType<typeof setTimeout> | null = null;
@@ -39,7 +38,14 @@
 
 <div class="block">
   <code class="code">{value}</code>
-  <button class="copy" class:copied type="button" aria-label={label} title={label} onclick={copy}>
+  <button
+    class="copy"
+    class:copied
+    type="button"
+    aria-label="Copy command"
+    title="Copy command"
+    onclick={copy}
+  >
     <Icon name={copied ? 'check' : 'copy'} size={14} />
     <span>{copied ? 'Copied' : 'Copy'}</span>
   </button>

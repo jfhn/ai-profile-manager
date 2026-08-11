@@ -8,11 +8,10 @@
   interface Props {
     /** 0..1 share of the window already elapsed, or null when unknown. */
     elapsed: number | null;
-    size?: number;
     title?: string;
   }
 
-  let { elapsed, size = 26, title }: Props = $props();
+  let { elapsed, title }: Props = $props();
 
   const RADIUS = 11;
   const CIRCUMFERENCE = 2 * Math.PI * RADIUS;
@@ -21,7 +20,7 @@
   const offset = $derived(CIRCUMFERENCE * (1 - fraction));
 </script>
 
-<span class="ring" style="width: {size}px; height: {size}px" {title}>
+<span class="ring" {title}>
   <svg viewBox="0 0 26 26" aria-hidden="true">
     <circle class="r-track" cx="13" cy="13" r={RADIUS}></circle>
     <circle
@@ -40,6 +39,8 @@
     position: relative;
     display: block;
     flex: none;
+    width: 26px;
+    height: 26px;
   }
 
   svg {

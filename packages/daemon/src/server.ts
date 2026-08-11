@@ -30,16 +30,10 @@ export interface DaemonHandle {
 
 function findWebDist(): string | null {
   const here = path.dirname(fileURLToPath(import.meta.url));
-  const candidates = [
-    // packages/daemon/dist/server.js -> packages/web/dist
-    path.resolve(here, '..', '..', 'web', 'dist'),
-    // packages/daemon/src/server.ts (tsx dev) -> packages/web/dist
-    path.resolve(here, '..', '..', 'web', 'dist'),
-  ];
-  for (const dir of candidates) {
-    if (fs.existsSync(path.join(dir, 'index.html'))) return dir;
-  }
-  return null;
+  // Both packages/daemon/dist/server.js and packages/daemon/src/server.ts sit
+  // one directory below the package root, so the same path works in both modes.
+  const dir = path.resolve(here, '..', '..', 'web', 'dist');
+  return fs.existsSync(path.join(dir, 'index.html')) ? dir : null;
 }
 
 export async function createContext(config: DaemonConfig): Promise<AppContext> {
