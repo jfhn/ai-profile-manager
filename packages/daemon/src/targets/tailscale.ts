@@ -37,8 +37,24 @@ const DEFAULT_HEALTH_TIMEOUT_MS = 30_000;
 const DEFAULT_POLL_INTERVAL_MS = 500;
 /** `tailscale` calls are local to the target and should never hang a start. */
 const COMMAND_TIMEOUT_MS = 15_000;
-/** Short: this only decides whether a leftover listener is worth reclaiming. */
-const RECLAIM_PROBE_TIMEOUT_MS = 2_000;
+/** Short: this only decides whether a leftover backend is worth reclaiming. */
+const BACKEND_PROBE_TIMEOUT_MS = 3_000;
+/** Distinct from ordinary command failures, which must never trigger cleanup. */
+export const BACKEND_PROBE_DEAD_EXIT_CODE = 10;
+const BACKEND_PROBE_SCRIPT = `
+const net = require('node:net');
+const server = net.createServer();
+let finished = false;
+const finish = (code) => {
+  if (finished) return;
+  finished = true;
+  if (server.listening) server.close(() => { process.exitCode = code; });
+  else process.exitCode = code;
+};
+server.once('error', (error) => finish(error.code === 'EADDRINUSE' ? 0 : 1));
+server.listen({ host: '127.0.0.1', port: Number(process.argv[1]), exclusive: true },
+  () => finish(${BACKEND_PROBE_DEAD_EXIT_CODE}));
+`.trim();
 
 export interface TailscaleEndpointDeps {
   targetId: TargetId;
@@ -63,6 +79,34 @@ export function serveArgv(httpsPort: number, servicePort: number): string[] {
 /** The same invocation with `off` appended, which is how serve is undone. */
 export function serveOffArgv(httpsPort: number, servicePort: number): string[] {
   return ['tailscale', 'serve', `--https=${httpsPort}`, `http://127.0.0.1:${servicePort}`, 'off'];
+}
+
+/** A shell-free target-local bind check for the loopback backend port. */
+export function backendProbeArgv(port: number): string[] {
+  return ['node', '-e', BACKEND_PROBE_SCRIPT, String(port)];
+}
+
+/**
+ * True when the backend port is bound, false when it is definitely free, and
+ * null when the probe itself failed. Unknown must fail closed: reclaiming a
+ * listener is destructive, so only the script's dedicated "free" exit code
+ * authorizes it.
+ */
+export async function backendIsListening(
+  exec: TailscaleEndpointDeps['exec'],
+  port: number,
+): Promise<boolean | null> {
+  try {
+    const result = await exec(
+      { argv: backendProbeArgv(port) },
+      { timeoutMs: BACKEND_PROBE_TIMEOUT_MS },
+    );
+    if (result.exitCode === 0) return true;
+    if (result.exitCode === BACKEND_PROBE_DEAD_EXIT_CODE) return false;
+    return null;
+  } catch {
+    return null;
+  }
 }
 
 /** The target's own MagicDNS name from `tailscale status --json`. */
@@ -169,7 +213,7 @@ export async function openTailscaleEndpoint(
   const pollIntervalMs = deps.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
 
   const dnsName = await readDnsName();
-  const entries = await reclaimStaleEntries(dnsName, await readServeEntries());
+  const entries = await reclaimStaleEntries(await readServeEntries());
   const listeners = entries.map((entry) => entry.httpsPort);
   // A backend port is a port something on the target is already expected to be
   // listening on. Stepping over those is what keeps a new run from colliding
@@ -338,30 +382,31 @@ export async function openTailscaleEndpoint(
    * Withdraw serve entries this feature left behind.
    *
    * Only entries in both of apm's own port ranges are considered, and only
-   * when the published URL no longer answers — a live instance keeps its
-   * listener, and anything a human published is never touched. Without this
-   * step a crashed daemon's listeners would pile up one port at a time.
+   * when the target-local loopback backend port is no longer bound — a live
+   * instance keeps its listener, and anything a human published is never
+   * touched. The Tailscale listener itself is deliberately not probed here:
+   * tailscaled returns an HTTP 502 even when the backend is dead, which still
+   * looks like a response to the endpoint health probe. Without this step a
+   * crashed daemon's listeners would pile up one port at a time.
    */
-  async function reclaimStaleEntries(
-    dnsName: string,
-    entries: ServeEntry[],
-  ): Promise<ServeEntry[]> {
+  async function reclaimStaleEntries(entries: ServeEntry[]): Promise<ServeEntry[]> {
     const kept: ServeEntry[] = [];
     for (const entry of entries) {
       if (!isOurs(entry) || reserved.has(entry.httpsPort)) {
         kept.push(entry);
         continue;
       }
-      if (await probe(`https://${dnsName}:${entry.httpsPort}`, RECLAIM_PROBE_TIMEOUT_MS)) {
-        kept.push(entry); // something is still serving there
+      const listening = await backendIsListening(exec, entry.backendPort);
+      if (listening !== false) {
+        kept.push(entry); // live, or the target-local probe could not decide safely
         continue;
       }
-      await offQuietly(entry.httpsPort, entry.backendPort ?? entry.httpsPort);
+      await offQuietly(entry.httpsPort, entry.backendPort);
     }
     return kept;
   }
 
-  function isOurs(entry: ServeEntry): boolean {
+  function isOurs(entry: ServeEntry): entry is ServeEntry & { backendPort: number } {
     return (
       inRange(entry.httpsPort, TAILSCALE_HTTPS_PORT_BASE) &&
       entry.backendPort !== null &&
