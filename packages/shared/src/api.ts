@@ -68,6 +68,25 @@ export interface ProfilesCliResponse {
   }>;
 }
 
+/** Stable stdout contract returned by `apm targets --json`. */
+export interface TargetCliSummary extends Omit<ExecutionTarget, 'capabilities'> {
+  /** Capability names are open-ended so version-1 consumers can ignore
+   * features they do not understand without rejecting the target. */
+  capabilities: string[];
+}
+
+export interface TargetsCliResponse {
+  schemaVersion: 1;
+  targets: TargetCliSummary[];
+}
+
+/** Stable stdout contract returned by `apm targets --profiles <target> --json`. */
+export interface TargetProfilesCliResponse {
+  schemaVersion: 1;
+  targetId: TargetId;
+  profiles: TargetProfileSummary[];
+}
+
 /** GET /api/discovery — existing provider homes not yet adopted as profiles. */
 export interface DiscoveryCandidate {
   provider: ProviderId;
@@ -135,6 +154,12 @@ export interface CreateSessionRequest {
   app: string;
   args?: string[];
   cwd?: string;
+  /**
+   * Persistent sessions survive client disconnects and may be reattached.
+   * Connection-bound sessions are killed after their last attached client
+   * disconnects; this is intended for process-owning integrations.
+   */
+  lifecycle?: 'persistent' | 'connection-bound';
   cols?: number;
   rows?: number;
 }

@@ -7,7 +7,8 @@
  *   apm profile add <claude|codex> [--label <label>] [--new] [-- login-args...]
  *                                                       log in to a fresh managed profile
  *   apm profiles [--json] [--refresh]                   list profiles and provider defaults
- *   apm run [--target <target>] <profile> <app> [args...]
+ *   apm targets [--json] [--profiles <target>]          list targets or one target's profiles
+ *   apm run [--target <target>] [--cwd <path>] [--ephemeral] <profile> <app> [args...]
  *                                                       run an app bound to a profile
  *   apm pair [<instance-id>]                            pair with a running managed T3 instance
  *   apm attach <session>                                attach to a running session
@@ -33,6 +34,7 @@ import {
   sessionsCommand,
   statusCommand,
   stopCommand,
+  targetsCommand,
   urlCommand,
 } from './cli/commands.js';
 import { parseCommand, USAGE } from './cli/parse.js';
@@ -149,6 +151,8 @@ async function main(): Promise<void> {
       return runCommand(argv);
     case 'profiles':
       return profilesCommand(argv);
+    case 'targets':
+      return targetsCommand(argv);
     case 'pair':
       return pairCommand(argv);
     case 'attach':

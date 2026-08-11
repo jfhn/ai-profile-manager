@@ -3,8 +3,10 @@
  * profile's environment, keeps a bounded scrollback per session, and fans
  * output out to any number of attached clients (web + CLI).
  *
- * A session outlives every client: closing a socket only detaches. Exited
- * sessions stay listed until they are disposed explicitly.
+ * Persistent sessions outlive every client. A connection-bound session is
+ * killed when its last attached client disconnects, which lets an embedding
+ * process own the remote lifecycle without leaking a detached target PTY.
+ * Exited sessions stay listed until they are disposed explicitly.
  *
  * The pty is opened through the approved target registry. An omitted target
  * still resolves to the daemon's local transport.
@@ -54,7 +56,8 @@ export interface SessionStreams {
   write(data: string): void;
   /**
    * Register a live listener and count the caller as an attached client.
-   * Returns the detach function; detaching never kills the pty.
+   * Returns the detach function. Detaching kills a connection-bound session
+   * after its final client leaves; persistent sessions keep running.
    */
   attach(listener: SessionListener): () => void;
 }
@@ -84,6 +87,9 @@ interface SessionRecord {
   chunks: string[];
   bytes: number;
   listeners: Set<SessionListener>;
+  connectionBound: boolean;
+  hasAttached: boolean;
+  closing: boolean;
 }
 
 export function createSessionHost(
@@ -229,7 +235,16 @@ export function createSessionHost(
         createdAt: new Date().toISOString(),
         exitedAt: null,
       };
-      sessions.set(id, { session, pty, chunks: [], bytes: 0, listeners: new Set() });
+      sessions.set(id, {
+        session,
+        pty,
+        chunks: [],
+        bytes: 0,
+        listeners: new Set(),
+        connectionBound: req.lifecycle === 'connection-bound',
+        hasAttached: false,
+        closing: false,
+      });
 
       pty.onData((data) => record(id, data));
       pty.onError((error) => {
@@ -282,10 +297,11 @@ export function createSessionHost(
       entry.pty?.resize(cols, rows);
     },
 
-    shutdown() {
-      for (const entry of sessions.values()) {
-        void entry.pty?.close().catch(() => undefined);
-      }
+    async shutdown() {
+      const openPtys = [...sessions.values()].flatMap((entry) =>
+        entry.pty === null ? [] : [entry.pty],
+      );
+      await Promise.allSettled(openPtys.map((pty) => pty.close()));
     },
 
     recentDirs() {
@@ -300,6 +316,7 @@ export function createSessionHost(
         session: () => ({ ...entry.session }),
         write: (data) => entry.pty?.write(data),
         attach(listener) {
+          entry.hasAttached = true;
           entry.listeners.add(listener);
           entry.session.attachedClients = entry.listeners.size;
           changed();
@@ -310,6 +327,16 @@ export function createSessionHost(
             entry.listeners.delete(listener);
             entry.session.attachedClients = entry.listeners.size;
             changed();
+            if (
+              entry.connectionBound &&
+              entry.hasAttached &&
+              entry.listeners.size === 0 &&
+              entry.session.status === 'running' &&
+              !entry.closing
+            ) {
+              entry.closing = true;
+              entry.pty?.signal('SIGHUP');
+            }
           };
         },
       };

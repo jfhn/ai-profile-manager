@@ -13,39 +13,39 @@ Type definitions for every payload live in `packages/shared/src/api.ts`.
 
 ## REST
 
-| Method | Path                             | Description                                                     |
-| ------ | -------------------------------- | --------------------------------------------------------------- |
-| GET    | `/api/status`                    | Daemon version, pid, data dir                                   |
-| GET    | `/api/overview`                  | Providers + profiles + defaults + usage + sessions + T3         |
-| GET    | `/api/events`                    | SSE stream (`ServerEvent` types)                                |
-| GET    | `/api/profiles`                  | List profiles                                                   |
-| GET    | `/api/defaults`                  | Current provider defaults (`DefaultsResponse`)                  |
-| PUT    | `/api/defaults/:provider`        | Set/recompute a default (`{profileId: string \| null}`)         |
-| POST   | `/api/profiles`                  | Adopt an existing home as a profile (`CreateProfileRequest`)    |
-| PATCH  | `/api/profiles/:id`              | Rename / enable / disable                                       |
-| DELETE | `/api/profiles/:id?purge=`       | Remove profile; `purge=true` also deletes managed homes         |
-| POST   | `/api/profiles/:id/refresh`      | Refresh usage for one profile now                               |
-| POST   | `/api/usage/refresh`             | Refresh all enabled profiles now                                |
-| GET    | `/api/usage`                     | Latest snapshot per profile                                     |
-| GET    | `/api/discovery`                 | Unadopted provider homes (incl. global `~/.claude`, `~/.codex`) |
-| POST   | `/api/wizard`                    | Start prepare-login flow (`StartWizardRequest`)                 |
-| GET    | `/api/wizard/:profileId`         | Wizard state: login command, credentials found, identity        |
-| POST   | `/api/wizard/:profileId/confirm` | Name + activate the pending profile                             |
-| GET    | `/api/sessions`                  | List terminal sessions (`SessionsResponse`)                     |
-| POST   | `/api/sessions`                  | Spawn a PTY session (`CreateSessionRequest`)                    |
-| POST   | `/api/sessions/:id/resize`       | Resize (`{cols, rows}`)                                         |
-| DELETE | `/api/sessions/:id`              | Kill (running) or dispose (exited)                              |
-| GET    | `/api/recent-dirs`               | Recent working directories for the cwd picker                   |
-| GET    | `/api/targets`                   | Execution targets + capabilities (`TargetsResponse`)            |
-| GET    | `/api/targets/candidates`        | Tailnet machines, display-only (`TargetCandidatesResponse`)     |
-| POST   | `/api/targets`                   | Approve one machine as a target (`AddTargetRequest`)            |
-| DELETE | `/api/targets/:id`               | Revoke a target; closes its connection                          |
-| GET    | `/api/targets/:id/profiles`      | Profiles as that target reports them (`TargetProfilesResponse`) |
-| GET    | `/api/t3`                        | List managed T3 instances (`T3ListResponse`)                    |
-| POST   | `/api/t3`                        | Create instance (`CreateT3InstanceRequest`)                     |
-| POST   | `/api/t3/:id/start`              | Start instance                                                  |
-| POST   | `/api/t3/:id/stop`               | Stop instance                                                   |
-| DELETE | `/api/t3/:id`                    | Remove instance (must be stopped)                               |
+| Method | Path                             | Description                                                         |
+| ------ | -------------------------------- | ------------------------------------------------------------------- |
+| GET    | `/api/status`                    | Daemon version, pid, data dir                                       |
+| GET    | `/api/overview`                  | Providers + profiles + defaults + usage + sessions + T3             |
+| GET    | `/api/events`                    | SSE stream (`ServerEvent` types)                                    |
+| GET    | `/api/profiles`                  | List profiles                                                       |
+| GET    | `/api/defaults`                  | Current provider defaults (`DefaultsResponse`)                      |
+| PUT    | `/api/defaults/:provider`        | Set/recompute a default (`{profileId: string \| null}`)             |
+| POST   | `/api/profiles`                  | Adopt an existing home as a profile (`CreateProfileRequest`)        |
+| PATCH  | `/api/profiles/:id`              | Rename / enable / disable                                           |
+| DELETE | `/api/profiles/:id?purge=`       | Remove profile; `purge=true` also deletes managed homes             |
+| POST   | `/api/profiles/:id/refresh`      | Refresh usage for one profile now                                   |
+| POST   | `/api/usage/refresh`             | Refresh all enabled profiles now                                    |
+| GET    | `/api/usage`                     | Latest snapshot per profile                                         |
+| GET    | `/api/discovery`                 | Unadopted provider homes (incl. global `~/.claude`, `~/.codex`)     |
+| POST   | `/api/wizard`                    | Start prepare-login flow (`StartWizardRequest`)                     |
+| GET    | `/api/wizard/:profileId`         | Wizard state: login command, credentials found, identity            |
+| POST   | `/api/wizard/:profileId/confirm` | Name + activate the pending profile                                 |
+| GET    | `/api/sessions`                  | List terminal sessions (`SessionsResponse`)                         |
+| POST   | `/api/sessions`                  | Spawn a persistent or connection-bound PTY (`CreateSessionRequest`) |
+| POST   | `/api/sessions/:id/resize`       | Resize (`{cols, rows}`)                                             |
+| DELETE | `/api/sessions/:id`              | Kill (running) or dispose (exited)                                  |
+| GET    | `/api/recent-dirs`               | Recent working directories for the cwd picker                       |
+| GET    | `/api/targets`                   | Execution targets + capabilities (`TargetsResponse`)                |
+| GET    | `/api/targets/candidates`        | Tailnet machines, display-only (`TargetCandidatesResponse`)         |
+| POST   | `/api/targets`                   | Approve one machine as a target (`AddTargetRequest`)                |
+| DELETE | `/api/targets/:id`               | Revoke a target; closes its connection                              |
+| GET    | `/api/targets/:id/profiles`      | Profiles as that target reports them (`TargetProfilesResponse`)     |
+| GET    | `/api/t3`                        | List managed T3 instances (`T3ListResponse`)                        |
+| POST   | `/api/t3`                        | Create instance (`CreateT3InstanceRequest`)                         |
+| POST   | `/api/t3/:id/start`              | Start instance                                                      |
+| POST   | `/api/t3/:id/stop`               | Stop instance                                                       |
+| DELETE | `/api/t3/:id`                    | Remove instance (must be stopped)                                   |
 
 The wizard endpoints back both the dashboard modal and the headless CLI flow
 (`apm profile add <provider>` — see the README); the CLI adds no endpoints of
@@ -78,6 +78,13 @@ machine, so an existing client is unaffected. A remote instance's `url` and
 [TARGETS.md](TARGETS.md) and [T3-REMOTE.md](T3-REMOTE.md). Transport failures
 use the shared codes (`target-not-found`, `target-not-approved`,
 `target-unsupported`, `target-unreachable`, `endpoint-failed`, …).
+
+`CreateSessionRequest.lifecycle` is optional and defaults to `persistent`,
+which preserves the existing detach/reattach behavior. `connection-bound` is
+an opt-in for process-owning integrations: after at least one terminal
+WebSocket has attached, closing the last attached client sends `SIGHUP` to the
+session exactly once. It does not make a never-attached session self-destruct;
+clients should delete a session if their initial attach fails.
 
 ## Terminal WebSocket
 

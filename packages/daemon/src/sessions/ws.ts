@@ -15,11 +15,16 @@ import type { SessionHostInternals } from './host.js';
 
 const TERMINAL_PATH = /^\/ws\/terminal\/([^/]+)$/;
 
-export function attachTerminalWs(server: Server, ctx: AppContext): void {
+export interface TerminalWsHandle {
+  /** Stop upgrades and forcibly disconnect every attached terminal client. */
+  close(): Promise<void>;
+}
+
+export function attachTerminalWs(server: Server, ctx: AppContext): TerminalWsHandle {
   const host = internals(ctx.sessions);
   const wss = new WebSocketServer({ noServer: true });
 
-  server.on('upgrade', (req: IncomingMessage, socket: Duplex, head: Buffer) => {
+  const onUpgrade = (req: IncomingMessage, socket: Duplex, head: Buffer) => {
     const url = new URL(req.url ?? '/', 'http://127.0.0.1');
     const match = TERMINAL_PATH.exec(url.pathname);
     if (!match) return reject(socket, 404, 'not-found', 'No such WebSocket endpoint');
@@ -70,11 +75,26 @@ export function attachTerminalWs(server: Server, ctx: AppContext): void {
         }
       });
 
-      // Closing the socket detaches only — the pty keeps running.
+      // Persistent sessions keep running. A connection-bound session treats
+      // the final detach as its owner disappearing and signals the PTY.
       ws.on('close', detach);
       ws.on('error', detach);
     });
-  });
+  };
+  server.on('upgrade', onUpgrade);
+
+  let closePromise: Promise<void> | null = null;
+  return {
+    close() {
+      if (closePromise) return closePromise;
+      server.off('upgrade', onUpgrade);
+      for (const client of wss.clients) client.terminate();
+      closePromise = new Promise<void>((resolve, rejectClose) => {
+        wss.close((error) => (error ? rejectClose(error) : resolve()));
+      });
+      return closePromise;
+    },
+  };
 }
 
 function send(ws: WebSocket, message: TerminalServerMessage): void {

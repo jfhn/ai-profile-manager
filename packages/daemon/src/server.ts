@@ -144,7 +144,7 @@ export async function startDaemon(config: DaemonConfig): Promise<DaemonHandle> {
   await app.listen({ host: config.host, port: config.port });
 
   // Terminal WebSocket upgrades (token + origin enforced inside).
-  attachTerminalWs(app.server, ctx);
+  const terminalWs = attachTerminalWs(app.server, ctx);
 
   writeRunFile(config);
   await ctx.t3.adopt();
@@ -156,7 +156,10 @@ export async function startDaemon(config: DaemonConfig): Promise<DaemonHandle> {
     if (closed) return;
     closed = true;
     ctx.usage.stop();
-    ctx.sessions.shutdown();
+    // Upgraded sockets are not owned by Fastify. Close them explicitly or
+    // app.close() waits forever while a terminal client remains attached.
+    await terminalWs.close();
+    await ctx.sessions.shutdown();
     // Only lets go of handles: managed instances — local and remote alike —
     // are detached on purpose and keep serving until adopt() re-links them.
     await ctx.t3.shutdown();

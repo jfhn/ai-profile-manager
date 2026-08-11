@@ -505,7 +505,10 @@ function processStartTicks(pid: number): number | null {
     // The comm field may contain spaces and parentheses; the fixed-format
     // fields resume after the *last* ')'. starttime is field 22 overall,
     // i.e. the 20th after pid and comm.
-    const tail = stat.slice(stat.lastIndexOf(')') + 2).trimStart().split(/\s+/);
+    const tail = stat
+      .slice(stat.lastIndexOf(')') + 2)
+      .trimStart()
+      .split(/\s+/);
     const ticks = Number(tail[19]);
     return Number.isFinite(ticks) ? ticks : null;
   } catch {

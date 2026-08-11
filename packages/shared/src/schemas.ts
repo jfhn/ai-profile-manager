@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { PROVIDER_IDS } from './provider.js';
-import { LOCAL_TARGET_ID } from './target.js';
+import { LOCAL_TARGET_ID, TARGET_CAPABILITIES } from './target.js';
 
 /**
  * Zod schemas for API request validation (daemon-side) and persisted state.
@@ -123,6 +123,7 @@ export const createSessionRequestSchema = z.object({
   app: z.string().min(1),
   args: z.array(z.string()).default([]),
   cwd: z.string().min(1).optional(),
+  lifecycle: z.enum(['persistent', 'connection-bound']).default('persistent'),
   cols: z.number().int().min(2).max(1000).default(80),
   rows: z.number().int().min(2).max(500).default(24),
 });
@@ -222,6 +223,60 @@ export const profilesCliResponseSchema = z
           .strict(),
       )
       .superRefine(assertUniqueProfileIds),
+  })
+  .strict();
+
+const targetProfileSummarySchema = z
+  .object({
+    id: profileIdSchema,
+    provider: providerIdSchema,
+    label: nonBlankString,
+    status: z.enum(['pending', 'active', 'error']),
+    enabled: z.boolean(),
+  })
+  .strict();
+
+const targetIdentitySchema = z
+  .object({
+    hostname: z.string().nullable(),
+    address: z.string().nullable(),
+    fingerprint: z.string().nullable(),
+  })
+  .strict();
+
+const executionTargetSchema = z
+  .object({
+    id: targetIdSchema,
+    label: nonBlankString,
+    kind: z.enum(['local', 'remote']),
+    transport: nonBlankString,
+    identity: targetIdentitySchema,
+    capabilities: z.array(z.enum(TARGET_CAPABILITIES)),
+    approved: z.boolean(),
+    status: z.enum(['online', 'offline', 'unknown']),
+  })
+  .strict();
+
+/**
+ * Producer-side assertion for APM's own `apm targets --json` output.
+ *
+ * This deliberately rejects capabilities unknown to this APM build so its
+ * emitted values cannot drift from `TARGET_CAPABILITIES`. Integrations must
+ * treat capability names as open strings and ignore names they do not know.
+ */
+export const targetsCliProducerSchema = z
+  .object({
+    schemaVersion: z.literal(1),
+    targets: z.array(executionTargetSchema),
+  })
+  .strict();
+
+/** Runtime form of the stable target-scoped profile contract. */
+export const targetProfilesCliResponseSchema = z
+  .object({
+    schemaVersion: z.literal(1),
+    targetId: targetIdSchema,
+    profiles: z.array(targetProfileSummarySchema).superRefine(assertUniqueProfileIds),
   })
   .strict();
 

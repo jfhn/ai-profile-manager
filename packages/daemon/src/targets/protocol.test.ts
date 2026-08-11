@@ -72,8 +72,8 @@ describe('target agent protocol', () => {
       expect(agentRequestSchema.parse(JSON.parse(encodeAgentMessage(request)))).toEqual(request);
     }
     // No verb without its base dir: the record is scoped to the instance dir.
-    expect(
-      agentRequestSchema.safeParse({ type: 'detached-stop', instanceId: 'a' }).success,
-    ).toBe(false);
+    expect(agentRequestSchema.safeParse({ type: 'detached-stop', instanceId: 'a' }).success).toBe(
+      false,
+    );
   });
 });

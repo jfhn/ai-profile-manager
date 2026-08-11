@@ -12,13 +12,23 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { StringDecoder } from 'node:string_decoder';
 import WebSocket from 'ws';
-import { LOCAL_TARGET_ID, profilesCliResponseSchema, usageSnapshotSchema } from '@apm/shared';
+import {
+  LOCAL_TARGET_ID,
+  profilesCliResponseSchema,
+  targetProfilesCliResponseSchema,
+  targetsCliProducerSchema,
+  usageSnapshotSchema,
+} from '@apm/shared';
 import type {
   ApiError,
+  CreateSessionRequest,
   OverviewResponse,
   ProfilesCliResponse,
   StatusResponse,
+  TargetProfilesCliResponse,
   TargetProfilesResponse,
+  TargetsCliResponse,
+  TargetsResponse,
   TerminalClientMessage,
   TerminalServerMessage,
   TerminalSession,
@@ -30,7 +40,9 @@ import {
   parseProfileArgv,
   parseProfilesArgv,
   parseRunArgv,
+  parseTargetsArgv,
   resolveProfile,
+  type RunInvocation,
 } from './parse.js';
 import { ApiRequestError, runProfileAdd } from './profile-add.js';
 import { runPair } from './pair.js';
@@ -120,19 +132,44 @@ export async function runCommand(argv: string[]): Promise<void> {
     fail(`${errorMessage(error)}${target}`);
   }
 
-  const session = await api<TerminalSession>(run, 'POST', '/api/sessions', {
+  const session = await api<TerminalSession>(
+    run,
+    'POST',
+    '/api/sessions',
+    buildRunSessionRequest(invocation, profile.id, terminalSize()),
+  );
+
+  try {
+    await attachSession(run, session);
+  } catch (error: unknown) {
+    if (invocation.ephemeral) {
+      await api<void>(run, 'DELETE', `/api/sessions/${encodeURIComponent(session.id)}`).catch(
+        () => undefined,
+      );
+    }
+    throw error;
+  }
+}
+
+export function buildRunSessionRequest(
+  invocation: RunInvocation,
+  profileId: string,
+  size: { cols: number; rows: number },
+): CreateSessionRequest {
+  return {
     ...(invocation.target === undefined ? {} : { targetId: invocation.target }),
-    profileId: profile.id,
+    profileId,
     app: invocation.app,
     args: invocation.args,
-    ...(invocation.target === undefined || invocation.target === LOCAL_TARGET_ID
-      ? { cwd: process.cwd() }
-      : {}),
-    cols: terminalSize().cols,
-    rows: terminalSize().rows,
-  });
-
-  await attachSession(run, session);
+    ...(invocation.cwd !== undefined
+      ? { cwd: invocation.cwd }
+      : invocation.target === undefined || invocation.target === LOCAL_TARGET_ID
+        ? { cwd: process.cwd() }
+        : {}),
+    ...(invocation.ephemeral ? { lifecycle: 'connection-bound' } : {}),
+    cols: size.cols,
+    rows: size.rows,
+  };
 }
 
 export async function pairCommand(argv: string[]): Promise<void> {
@@ -197,6 +234,81 @@ export async function profilesCommand(argv: string[]): Promise<void> {
     profile.home,
   ]);
   printTable(['DEFAULT', 'PROVIDER', 'LABEL', 'STATUS', 'USAGE', 'HOME'], rows);
+}
+
+export function targetsContract(response: TargetsResponse): TargetsCliResponse {
+  return targetsCliProducerSchema.parse({
+    schemaVersion: 1,
+    targets: response.targets.map((target) => ({
+      ...target,
+      identity: { ...target.identity },
+      capabilities: [...target.capabilities],
+    })),
+  });
+}
+
+export function targetProfilesContract(
+  targetId: string,
+  response: TargetProfilesResponse,
+): TargetProfilesCliResponse {
+  return targetProfilesCliResponseSchema.parse({
+    schemaVersion: 1,
+    targetId,
+    profiles: response.profiles.map((profile) => ({ ...profile })),
+  });
+}
+
+export async function targetsCommand(argv: string[]): Promise<void> {
+  let invocation;
+  try {
+    invocation = parseTargetsArgv(argv);
+  } catch (error: unknown) {
+    fail(errorMessage(error));
+  }
+
+  const run = await daemonOrStart();
+  if (invocation.profilesTarget !== undefined) {
+    const response = await api<TargetProfilesResponse>(
+      run,
+      'GET',
+      `/api/targets/${encodeURIComponent(invocation.profilesTarget)}/profiles`,
+    );
+    const contract = targetProfilesContract(invocation.profilesTarget, response);
+    if (invocation.json) {
+      process.stdout.write(`${JSON.stringify(contract)}\n`);
+      return;
+    }
+    if (contract.profiles.length === 0) {
+      console.log(`no profiles on target ${contract.targetId}`);
+      return;
+    }
+    printTable(
+      ['PROVIDER', 'LABEL', 'STATUS', 'ID'],
+      contract.profiles.map((profile) => [
+        profile.provider,
+        profile.label,
+        profile.enabled ? profile.status : 'disabled',
+        profile.id,
+      ]),
+    );
+    return;
+  }
+
+  const contract = targetsContract(await api<TargetsResponse>(run, 'GET', '/api/targets'));
+  if (invocation.json) {
+    process.stdout.write(`${JSON.stringify(contract)}\n`);
+    return;
+  }
+  printTable(
+    ['ID', 'LABEL', 'KIND', 'STATUS', 'CAPABILITIES'],
+    contract.targets.map((target) => [
+      target.id,
+      target.label,
+      target.kind,
+      target.approved ? target.status : 'unapproved',
+      target.capabilities.join(','),
+    ]),
+  );
 }
 
 export async function attachCommand(argv: string[]): Promise<void> {
@@ -384,8 +496,6 @@ async function attachSession(run: RunFileData, session: TerminalSession): Promis
       restore();
       resolve();
     });
-  }).catch((error: unknown) => {
-    fail(errorMessage(error));
   });
 
   restore();

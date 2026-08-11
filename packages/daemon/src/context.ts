@@ -76,7 +76,7 @@ export interface SessionHost {
   dispose(id: string): void;
   resize(id: string, cols: number, rows: number): void;
   /** Kill all PTYs on daemon shutdown. */
-  shutdown(): void;
+  shutdown(): Promise<void>;
   recentDirs(): string[];
 }
 
