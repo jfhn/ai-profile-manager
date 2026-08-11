@@ -70,6 +70,35 @@ export function hasCapability(target: ExecutionTarget, capability: TargetCapabil
 }
 
 /**
+ * A machine apm *could* be pointed at — never one it may run anything on.
+ *
+ * Candidates come from the tailnet the daemon's own machine is part of, and
+ * they are display-only: a candidate becomes an execution target when a human
+ * approves that one machine, which is what creates the target entry. Nothing
+ * here is a transport and nothing here is addressable until then.
+ */
+export interface TargetCandidate {
+  /** Hostname as the tailnet reports it. */
+  hostname: string;
+  /** MagicDNS name without its trailing dot; empty when the tailnet has none. */
+  dnsName: string;
+  /** What the target's address would be: the MagicDNS name, else the hostname. */
+  address: string;
+  /** Last state the tailnet reported for the machine. */
+  online: boolean;
+  /** OS the machine reports ('linux', 'macOS', …); null when it reports none. */
+  os: string | null;
+  /** Id of the registered target already using this machine, else null. */
+  registeredTargetId: TargetId | null;
+  /**
+   * Target id to offer if this machine is approved: the hostname reduced to
+   * what a target id may contain, and free at the time of the scan. Empty when
+   * the hostname leaves nothing usable — the user then names it themselves.
+   */
+  suggestedId: string;
+}
+
+/**
  * A profile as one target reports it. Deliberately without `home` and without
  * any credential material: provider credentials stay on the machine that owns
  * them, so profile resolution is always scoped to a target.

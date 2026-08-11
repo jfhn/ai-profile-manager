@@ -1,4 +1,5 @@
 import type {
+  AddTargetRequest,
   ApiError,
   ConfirmWizardRequest,
   CreateProfileRequest,
@@ -14,6 +15,7 @@ import type {
   StartWizardRequest,
   StatusResponse,
   T3Instance,
+  TargetCandidate,
   TargetProfileSummary,
   TerminalSession,
   UpdateProfileRequest,
@@ -180,6 +182,15 @@ export const api = {
 
   targets: async () =>
     unwrapList<ExecutionTarget>(await request<unknown>('/api/targets'), 'targets'),
+  /** Machines on this hub's tailnet. Listing them approves nothing. */
+  targetCandidates: async () =>
+    unwrapList<TargetCandidate>(await request<unknown>('/api/targets/candidates'), 'candidates'),
+  /** The approval act: one named machine becomes an execution target. */
+  addTarget: (body: AddTargetRequest) =>
+    request<ExecutionTarget>('/api/targets', { method: 'POST', ...json(body) }),
+  /** Revoke a target: it leaves targets.json and its connection is closed. */
+  deleteTarget: (id: string) =>
+    request<void>(`/api/targets/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   /** Profile ids are target-scoped, so a picker must ask the target itself. */
   targetProfiles: async (id: string) =>
     unwrapList<TargetProfileSummary>(

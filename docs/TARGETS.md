@@ -115,13 +115,70 @@ exposed as `AppContext.targets`:
 - `transportFor(undefined | null | 'local')` → the local transport
 - unknown id → `target-not-found`; unapproved remote → `target-not-approved`
 - the local target cannot be replaced
+- `addRemote(transport)` / `removeRemote(id)` are the mutation seam: a target
+  approved while the daemon runs is selectable immediately, and a revoked one
+  is dropped and its transport closed — which revokes the endpoints that
+  transport published and ends the ptys it opened, so nothing is left running
+  on a machine whose approval was just withdrawn, and work still in flight
+  fails with that transport's own `closed` error instead of reaching it
 - `close()` releases remote connections; open handles belong to their owner
 
-Remote targets are persisted in `<dataDir>/targets.json`. Version 1 contains a
-`targets` array whose entries have `id`, `label`, `transport: "ssh"`, `address`
-and an explicit `approved` boolean. Invalid files fail daemon startup; omitted
-files mean no remote targets. Unapproved entries are registered so selection
-gets `target-not-approved`, but the registry never hands out their transport.
+## Adding and removing targets
+
+The dashboard's **Targets** page is the normal way in. It has two lists: the
+machines already registered, and the machines on your tailnet
+(`GET /api/targets/candidates`). Discovery is display-only — seeing a machine
+there grants nothing. **Add** on one row opens a small dialog for that one
+machine, and confirming it is the approval: `POST /api/targets` writes the
+entry with `approved: true`, registers it and makes it selectable at once.
+**Revoke** does the reverse through `DELETE /api/targets/:id`.
+
+Nothing is ever approved implicitly, there is no bulk approve, and there is no
+free-form host field anywhere: the address always comes from a machine the
+tailnet reported, and the API rejects one that does not
+(`not-a-tailnet-machine`, 400). Editing `targets.json` by hand stays the
+deliberate escape hatch for an address the tailnet does not know. Only the
+tailnet is ever consulted — apm never scans hosts or probes ports.
+
+Discovery itself is one structured argv call on **this** machine,
+`tailscale status --json` (`packages/daemon/src/targets/discovery.ts`), with
+the same 15s budget the rest of the tailscale code uses. Peers become
+candidates with their hostname, MagicDNS name (trailing dot stripped), online
+state, OS and the id of the target already using them, if any; this machine is
+never among them. Without tailscale — not installed, not running, not logged in
+— the call fails with `tailscale-unavailable` and the page says so, which is
+deliberately not the same as an empty tailnet.
+
+`<dataDir>/targets.json` remains the store, and it is still the file, not the
+API, that decides what exists at startup. Version 1 contains a `targets` array
+whose entries have `id`, `label`, `transport: "ssh"`, `address` and an explicit
+`approved` boolean:
+
+```json
+{
+  "version": 1,
+  "targets": [
+    {
+      "id": "dev-box",
+      "label": "Dev box",
+      "transport": "ssh",
+      "address": "dev-box.tailnet.ts.net",
+      "approved": true
+    }
+  ]
+}
+```
+
+Editing it by hand keeps working exactly as before, and the API writes the same
+shape: every mutation validates the whole file against the schema it is read
+with and replaces it by rename, so a crash mid-write cannot leave a
+half-approved set behind. Invalid files fail daemon startup, and a request that
+would have to read a broken file fails with `target-config-invalid` rather than
+treating it as "no targets". Omitted files mean no remote targets. Unapproved
+entries are registered so selection gets `target-not-approved`, but the
+registry never hands out their transport. `local` is reserved and duplicate ids
+are rejected — over the API as `target-exists` (409), in the file as a startup
+failure.
 
 The SSH transport starts the fixed `apm __target-agent` command in batch mode.
 All dynamic profile, argv, cwd, env, input, resize and signal values cross that
@@ -214,6 +271,13 @@ Implemented in `packages/daemon/src/t3/manager.ts`; the user-facing side is
 - `registry.test.ts` covers target selection, approval, target-scoped profile
   resolution, unreachable/closed connections and the error mapping.
 - `routes.test.ts` covers the read-only `/api/targets` endpoints.
+- `discovery.test.ts` drives tailnet discovery through a scripted exec channel:
+  peer parsing, hub exclusion, matching candidates against the registry, the
+  suggested target id, and the three ways tailscale can fail to answer.
+- `admin.test.ts` covers the seam between the file and the running daemon —
+  approving persists _and_ registers without a restart, revoking removes the
+  entry _and_ closes the transport, and reserved/duplicate/option-shaped
+  requests are refused without writing anything.
 - `tailscale.test.ts` drives the SSH transport's endpoint through a scripted
   exec channel: serve argv, MagicDNS and serve-status parsing, port allocation
   around live and stale entries, health, revocation on close, the

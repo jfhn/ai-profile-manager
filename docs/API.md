@@ -37,6 +37,9 @@ Type definitions for every payload live in `packages/shared/src/api.ts`.
 | DELETE | `/api/sessions/:id`              | Kill (running) or dispose (exited)                              |
 | GET    | `/api/recent-dirs`               | Recent working directories for the cwd picker                   |
 | GET    | `/api/targets`                   | Execution targets + capabilities (`TargetsResponse`)            |
+| GET    | `/api/targets/candidates`        | Tailnet machines, display-only (`TargetCandidatesResponse`)     |
+| POST   | `/api/targets`                   | Approve one machine as a target (`AddTargetRequest`)            |
+| DELETE | `/api/targets/:id`               | Revoke a target; closes its connection                          |
 | GET    | `/api/targets/:id/profiles`      | Profiles as that target reports them (`TargetProfilesResponse`) |
 | GET    | `/api/t3`                        | List managed T3 instances (`T3ListResponse`)                    |
 | POST   | `/api/t3`                        | Create instance (`CreateT3InstanceRequest`)                     |
@@ -48,10 +51,26 @@ The wizard endpoints back both the dashboard modal and the headless CLI flow
 (`apm profile add <provider>` — see the README); the CLI adds no endpoints of
 its own.
 
-The target endpoints are read-only: approving a machine happens on the machine
-running apm, never over the API. Neither payload carries anything secret — an
-`ExecutionTarget` is identity plus capabilities, a `TargetProfileSummary` has
-no home and no credentials.
+Approval is the boundary in the target endpoints, and it is always explicit.
+`GET /api/targets/candidates` lists the machines this machine's tailnet already
+lets it see (`tailscale status --json`, run here) and grants nothing: a
+candidate carries a hostname, a MagicDNS name, online state, OS and whether it
+is already a target. A machine becomes an execution target only through
+`POST /api/targets` naming that one machine, which writes it to
+`<dataDir>/targets.json` with `approved: true` and registers it immediately —
+no restart and no bulk approve. The address must belong to a machine the
+tailnet just reported (`not-a-tailnet-machine`, 400, otherwise), so a request
+cannot point apm at a host of its choosing. `DELETE /api/targets/:id` is the
+same act in reverse: the entry leaves the file and the transport is closed, so
+anything still in flight fails with `target-closed`. The local target cannot be
+added or removed.
+
+None of these payloads carries anything secret — an `ExecutionTarget` is
+identity plus capabilities, a `TargetCandidate` is a name on the tailnet, and a
+`TargetProfileSummary` has no home and no credentials. Beyond the shared
+transport codes these endpoints use `tailscale-unavailable` (503, tailscale is
+missing or not answering), `not-a-tailnet-machine` (400), `target-exists` (409)
+and `target-config-invalid` (500, `targets.json` no longer parses).
 
 `POST /api/t3` takes an optional `targetId`; omitting it means the local
 machine, so an existing client is unaffected. A remote instance's `url` and

@@ -191,6 +191,22 @@ export function loadTargetProfiles(targetId: string): Promise<void> {
   return request;
 }
 
+/**
+ * Forget one target's cached profile list.
+ *
+ * A ready entry is never re-read, so approving or revoking a target has to drop
+ * it: a target id is chosen by the user and may be reused for a different
+ * machine, and serving the previous machine's profile ids to the new one would
+ * offer bindings that do not exist over there. A revoked target's cards then
+ * report 'unknown' rather than a label nobody can confirm any more.
+ */
+export function forgetTargetProfiles(targetId: string): void {
+  if (!(targetId in app.targetProfiles)) return;
+  const remaining = { ...app.targetProfiles };
+  delete remaining[targetId];
+  app.targetProfiles = remaining;
+}
+
 export async function loadDiscovery(): Promise<void> {
   try {
     const { candidates } = await api.discovery();
