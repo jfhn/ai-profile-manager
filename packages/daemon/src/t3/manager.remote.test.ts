@@ -20,6 +20,7 @@ import {
   type FakeRemoteOptions,
   type FakeRemoteTransport,
 } from '../targets/test-support/fake-remote.js';
+import { APM_MANAGED_T3_INSTANCE_ENV } from './identity.js';
 import { createT3Manager, type T3ManagerDeps, type T3SpawnRequest } from './manager.js';
 
 const TARGET_ID = 'dev-box';
@@ -162,7 +163,7 @@ describe('t3 manager on a remote target', () => {
     expect(fs.existsSync(path.join(config.t3Dir, created.id))).toBe(false);
   });
 
-  it('launches t3 as argv with a profile id and no provider environment', async () => {
+  it('launches t3 with a profile id and a non-secret APM instance marker', async () => {
     const { manager, transport } = harness();
     const created = await create(manager);
     const started = await startHealthy(manager, transport, created.id);
@@ -170,10 +171,10 @@ describe('t3 manager on a remote target', () => {
     const pty = transport.lastPty();
     expect(pty.spec.argv).toEqual(['t3', 'serve', '--port', '9100', '--base-dir', created.baseDir]);
     expect(pty.spec.cwd).toBe(created.baseDir);
-    // The target injects the profile's env itself; nothing about the home or
-    // its credentials crosses the seam.
+    // The target injects the profile's env itself; only this instance id
+    // marker crosses the seam, never anything about the home or credentials.
     expect(pty.spec.profileId).toBe(REMOTE_PROFILE.id);
-    expect(pty.spec.env).toBeUndefined();
+    expect(pty.spec.env).toEqual({ [APM_MANAGED_T3_INSTANCE_ENV]: created.id });
     expect(started.pid).toBeNull();
   });
 

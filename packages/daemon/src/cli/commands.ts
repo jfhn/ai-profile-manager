@@ -26,12 +26,14 @@ import type {
 import { ensureDirs, readLiveRunFile, resolveConfig, type RunFileData } from '../config.js';
 import {
   CliError,
+  parsePairArgv,
   parseProfileArgv,
   parseProfilesArgv,
   parseRunArgv,
   resolveProfile,
 } from './parse.js';
 import { ApiRequestError, runProfileAdd } from './profile-add.js';
+import { runPair } from './pair.js';
 
 export { parseRunArgv, resolveProfile } from './parse.js';
 
@@ -133,6 +135,18 @@ export async function runCommand(argv: string[]): Promise<void> {
   });
 
   await attachSession(run, session);
+}
+
+export async function pairCommand(argv: string[]): Promise<void> {
+  try {
+    const invocation = parsePairArgv(argv);
+    await runPair(invocation, { t3Dir: resolveConfig().t3Dir });
+  } catch (error: unknown) {
+    // Pairing output may contain a large one-time token/link. Natural process
+    // shutdown drains stdout/stderr; process.exit() here can truncate it.
+    process.stderr.write(`apm: ${errorMessage(error)}\n`);
+    process.exitCode = 1;
+  }
 }
 
 export function profilesContract(overview: OverviewResponse): ProfilesCliResponse {

@@ -112,35 +112,58 @@ Authentication is T3's own, and apm stays out of it.
 
 `t3 serve` prints a one-time owner pairing token when it starts — but apm
 starts it headlessly and deliberately never reads its output, so that first
-token is not something you can go and look at. **Mint a fresh one on the
-target instead:**
+token is not something you can go and look at. **Mint a fresh 15-minute token
+on the target instead:**
 
 ```sh
 # on the target, for a running instance
-t3 pair --base-dir <base dir> --ttl 15m
+apm pair
 ```
 
-The base dir is on the instance's card in the dashboard, next to its port —
-copy it from there. `t3 pair` prints a pairing URL on `localhost`; the token in
-it is what matters, and you enter it against the endpoint URL the card shows,
-not against the localhost URL it printed.
+`apm pair` locally finds the live `t3 serve` process whose base directory is an
+immediate child of APM's managed T3 directory, matches its backend port to the
+target's published Tailscale Serve endpoint, and runs `t3 pair` with that exact
+base directory and `--ttl 15m`. It replaces T3's localhost origin in the
+pairing URL with the real published endpoint, so the URL printed in this
+terminal is the one another tailnet device should open.
+
+Process discovery requires Linux `/proc`; Linux and WSL are the supported
+target contexts for `apm pair`. The command fails closed on other platforms.
+
+With one running managed instance, selection is automatic. With several,
+`apm pair` refuses to guess, lists their ids and ports, and asks for an exact
+id:
+
+```sh
+apm pair <instance-id>
+```
 
 So, end to end:
 
-1. Start the instance from the dashboard and copy its **base dir** and **URL**
-   from the card.
-2. On the target, run the `t3 pair` command above and copy the token out of the
-   URL it prints.
-3. On the device you want to use, open the instance's URL from the card and
-   complete T3's pairing with that token. T3 then keeps a session for that
-   device.
+1. Start the instance from the dashboard.
+2. On the target, run `apm pair` (or select the exact id it lists).
+3. On the device you want to use, open the published pairing URL from that
+   command. T3 then keeps a session for that device.
 4. Every later visit from that device uses the session, not the token. Mint a
    new token per device; the short `--ttl` keeps an unused one from lingering.
 
-**apm never reads, stores, logs or forwards a pairing token.** A remote
-instance's output is not streamed, not written to a log file on this machine and
-not part of any API response — failures are reported from the process' exit
-status instead.
+`apm pair` holds T3's output in memory only long enough to replace the local
+URL and writes it directly to the invoking terminal. **The token is never
+persisted, logged, forwarded to the hub daemon or included in API state.** The
+headless managed instance's startup output remains unread, unstreamed and
+unlogged.
+
+If local discovery or endpoint matching needs troubleshooting, the previous
+raw command remains available. Copy the exact base directory and published URL
+from the instance card, then run:
+
+```sh
+t3 pair --base-dir <exact base dir> --ttl 15m
+```
+
+T3 prints a localhost URL in this fallback flow; use its token at the
+published endpoint from the card. Do not use plain `t3 pair`: it operates on
+T3's default environment, not the APM-managed instance.
 
 The apm dashboard's own bearer token is unrelated to T3's pairing token, and
 neither ever appears in the other's UI.
@@ -222,10 +245,11 @@ The live test this feature is gated on, in order:
    profile select must fill with the **target's** profiles, not this machine's.
 4. Create, then **Start**. The card must show the target's name, a `remote`
    badge, a `published` endpoint badge, and a URL that is not `127.0.0.1`.
-5. On the target, run `t3 pair --base-dir <base dir from the card> --ttl 15m`
-   and copy the token. On a second tailnet device, open the card's URL,
-   complete pairing with that token, open a project and confirm the expected
-   provider account is the one in use.
+5. On the target, run `apm pair`. On a second tailnet device, open the
+   published pairing URL it prints, complete pairing, open a project and
+   confirm the expected provider account is the one in use. If two instances
+   run on the target, confirm the bare command refuses to choose and rerun it
+   with the exact instance id it lists.
 6. Confirm the URL is **not** reachable from outside the tailnet, and that
    `tailscale serve status` on the target lists it without any Funnel entry.
 7. **Stop** from the hub. The card returns to `stopped` with no link, the URL
