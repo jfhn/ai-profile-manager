@@ -11,6 +11,7 @@ import {
   replaceLocalPairingUrls,
   resolvePublishedEndpoint,
   runPair,
+  runProcess,
   selectManagedT3Process,
   t3PairArgv,
   type ManagedT3Process,
@@ -272,6 +273,33 @@ describe('pair workflow', () => {
     ).rejects.toThrow(/exited with code 2/);
     expect(stdout).toBe('partial token\n');
     expect(stderr).toBe('pair failed\n');
+  });
+});
+
+describe('pair subprocess capture', () => {
+  it('waits for inherited stdout and stderr pipes to close after the child exits', async () => {
+    const delayedWriter =
+      "setTimeout(() => { process.stdout.write('late stdout\\n'); " +
+      "process.stderr.write('late stderr\\n'); }, 75)";
+    const parent =
+      "const { spawn } = require('node:child_process'); " +
+      `const child = spawn(process.execPath, ['-e', ${JSON.stringify(delayedWriter)}], ` +
+      "{ stdio: ['ignore', 1, 2] }); child.unref()";
+
+    const captured = await runProcess([process.execPath, '-e', parent]);
+
+    expect(captured).toEqual({
+      exitCode: 0,
+      signal: null,
+      stdout: 'late stdout\n',
+      stderr: 'late stderr\n',
+    });
+  });
+
+  it('rejects a spawn error only once even though close follows it', async () => {
+    await expect(runProcess(['/definitely/not/an/apm-command'])).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
   });
 });
 

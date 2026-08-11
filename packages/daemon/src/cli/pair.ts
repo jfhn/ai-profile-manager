@@ -268,19 +268,31 @@ async function requireSuccess(
   );
 }
 
-function runProcess(argv: string[]): Promise<PairProcessResult> {
+export function runProcess(argv: string[]): Promise<PairProcessResult> {
   const [command, ...args] = argv;
   if (command === undefined) return Promise.reject(new CliError('empty command argv'));
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, { shell: false, stdio: ['ignore', 'pipe', 'pipe'] });
     let stdout = '';
     let stderr = '';
+    let settled = false;
     child.stdout.setEncoding('utf8');
     child.stderr.setEncoding('utf8');
     child.stdout.on('data', (chunk: string) => void (stdout += chunk));
     child.stderr.on('data', (chunk: string) => void (stderr += chunk));
-    child.on('error', reject);
-    child.on('exit', (exitCode, signal) => resolve({ exitCode, signal, stdout, stderr }));
+    child.once('error', (error) => {
+      if (settled) return;
+      settled = true;
+      reject(error);
+    });
+    // `exit` only means the process ended; inherited stdout/stderr descriptors
+    // may still be open and delivering the one-time pairing token. `close`
+    // fires after those streams close, so this is the safe capture boundary.
+    child.once('close', (exitCode, signal) => {
+      if (settled) return;
+      settled = true;
+      resolve({ exitCode, signal, stdout, stderr });
+    });
   });
 }
 
