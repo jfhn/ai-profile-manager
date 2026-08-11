@@ -19,7 +19,6 @@
   --mark-inset: rgba(255, 255, 255, 0.06);
   --radius: 10px;
   --radius-sm: 6px;
-  --radius-lg: 14px;
   --font-sans: 'DM Sans', -apple-system, 'Segoe UI', system-ui, sans-serif;
   --font-mono: 'SF Mono', 'JetBrains Mono', Consolas, 'Liberation Mono', monospace;
 }

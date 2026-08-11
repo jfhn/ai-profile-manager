@@ -6,9 +6,6 @@
   "bin": {
     "apm": "./dist/main.js"
   },
-  "exports": {
-    ".": "./dist/index.js"
-  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "dev": "tsx watch src/main.ts start --no-open --foreground",
