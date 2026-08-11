@@ -26,12 +26,14 @@ import type {
 import { ensureDirs, readLiveRunFile, resolveConfig, type RunFileData } from '../config.js';
 import {
   CliError,
+  parsePairArgv,
   parseProfileArgv,
   parseProfilesArgv,
   parseRunArgv,
   resolveProfile,
 } from './parse.js';
 import { ApiRequestError, runProfileAdd } from './profile-add.js';
+import { runPair } from './pair.js';
 
 export { parseRunArgv, resolveProfile } from './parse.js';
 
@@ -133,6 +135,15 @@ export async function runCommand(argv: string[]): Promise<void> {
   });
 
   await attachSession(run, session);
+}
+
+export async function pairCommand(argv: string[]): Promise<void> {
+  try {
+    const invocation = parsePairArgv(argv);
+    await runPair(invocation, { t3Dir: resolveConfig().t3Dir });
+  } catch (error: unknown) {
+    fail(errorMessage(error));
+  }
 }
 
 export function profilesContract(overview: OverviewResponse): ProfilesCliResponse {

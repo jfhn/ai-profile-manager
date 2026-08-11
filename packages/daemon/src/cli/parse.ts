@@ -13,7 +13,7 @@ import { isProviderId, PROVIDER_IDS, type ProviderId } from '@apm/shared';
 export class CliError extends Error {}
 
 export const USAGE =
-  `usage: apm [start|profile|profiles|run|attach|sessions|status|url|stop]\n` +
+  `usage: apm [start|profile|profiles|run|pair|attach|sessions|status|url|stop]\n` +
   `  apm [start] [--port N] [--no-open] [--foreground]   start or reuse the daemon, open the UI\n` +
   `  apm url                                             print the authenticated URL, open nothing\n` +
   `  apm profile add <claude|codex> [--label <label>] [--new] [-- login-args...]\n` +
@@ -21,6 +21,7 @@ export const USAGE =
   `  apm profiles [--json] [--refresh]                   list profiles and provider defaults\n` +
   `  apm run [--target <target>] <profile> <app> [args...]\n` +
   `                                                      run an app bound to a profile\n` +
+  `  apm pair [<instance-id>]                            pair with a running managed T3 instance\n` +
   `  apm attach <session>                                attach to a running session\n` +
   `  apm sessions | status | stop`;
 
@@ -32,6 +33,7 @@ const COMMANDS = new Set([
   'profile',
   'run',
   'profiles',
+  'pair',
   'attach',
   'sessions',
   'status',
@@ -73,6 +75,22 @@ export interface RunInvocation {
 export interface ProfilesInvocation {
   json: boolean;
   refresh: boolean;
+}
+
+export interface PairInvocation {
+  /** Exact managed-instance id; omitted only when one running instance exists. */
+  instanceId?: string;
+}
+
+const PAIR_USAGE = 'usage: apm pair [<instance-id>]';
+
+export function parsePairArgv(argv: string[]): PairInvocation {
+  const instanceId = argv[0];
+  if (instanceId?.startsWith('-')) {
+    throw new CliError(`unknown pair option: ${instanceId}\n${PAIR_USAGE}`);
+  }
+  if (argv.length > 1) throw new CliError(`pair takes at most one instance id\n${PAIR_USAGE}`);
+  return instanceId === undefined ? {} : { instanceId };
 }
 
 const PROFILES_USAGE = 'usage: apm profiles [--json] [--refresh]';

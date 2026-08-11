@@ -81,6 +81,8 @@ apm run work claude       # run claude bound to profile "work"
 apm run work bash         # any command; children inherit the profile env
 apm run --target devbox work claude --resume
                           # run on the approved target "devbox"
+apm pair                 # on a target, pair its one running managed T3 instance
+apm pair <instance-id>   # select exactly when several instances run there
 apm attach claude-work-1  # reattach to a running session
 apm sessions | status | stop
 ```

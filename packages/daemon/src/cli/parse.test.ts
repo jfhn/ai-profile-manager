@@ -3,6 +3,7 @@ import type { Profile } from '@apm/shared';
 import {
   CliError,
   parseCommand,
+  parsePairArgv,
   parseProfileArgv,
   parseProfilesArgv,
   parseRunArgv,
@@ -199,6 +200,10 @@ describe('parseCommand', () => {
       command: 'profiles',
       argv: ['--json'],
     });
+    expect(parseCommand(['pair', 'instance-1'])).toEqual({
+      command: 'pair',
+      argv: ['instance-1'],
+    });
     expect(parseCommand(['url'])).toEqual({ command: 'url', argv: [] });
     expect(parseCommand(['status'])).toEqual({ command: 'status', argv: [] });
   });
@@ -213,6 +218,20 @@ describe('parseCommand', () => {
     expect(() => parseCommand(['nope'])).toThrow(CliError);
     expect(() => parseCommand(['nope'])).toThrow(/unknown command: nope/);
     expect(() => parseCommand(['nope'])).toThrow(/apm url/);
+  });
+});
+
+describe('parsePairArgv', () => {
+  it('accepts automatic selection or one exact instance id', () => {
+    expect(parsePairArgv([])).toEqual({});
+    expect(parsePairArgv(['8f73d37e-13dc-49bb-8d92-a611bcff9811'])).toEqual({
+      instanceId: '8f73d37e-13dc-49bb-8d92-a611bcff9811',
+    });
+  });
+
+  it('rejects options and extra selectors', () => {
+    expect(() => parsePairArgv(['--target', 'box'])).toThrow(/unknown pair option/);
+    expect(() => parsePairArgv(['one', 'two'])).toThrow(/at most one instance id/);
   });
 });
 

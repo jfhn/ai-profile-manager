@@ -9,6 +9,7 @@
  *   apm profiles [--json] [--refresh]                   list profiles and provider defaults
  *   apm run [--target <target>] <profile> <app> [args...]
  *                                                       run an app bound to a profile
+ *   apm pair [<instance-id>]                            pair with a running managed T3 instance
  *   apm attach <session>                                attach to a running session
  *   apm sessions                                        list sessions
  *   apm status                                          show daemon status
@@ -25,6 +26,7 @@ import { readLiveRunFile, resolveConfig, ensureDirs, DEFAULT_PORT } from './conf
 import { startDaemon } from './server.js';
 import {
   attachCommand,
+  pairCommand,
   profileCommand,
   profilesCommand,
   runCommand,
@@ -147,6 +149,8 @@ async function main(): Promise<void> {
       return runCommand(argv);
     case 'profiles':
       return profilesCommand(argv);
+    case 'pair':
+      return pairCommand(argv);
     case 'attach':
       return attachCommand(argv);
     case 'sessions':
