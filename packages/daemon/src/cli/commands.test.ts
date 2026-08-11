@@ -4,7 +4,7 @@ import type {
   TargetsResponse,
   UsageSnapshot,
 } from '@apm/shared';
-import { targetsCliResponseSchema } from '@apm/shared';
+import { TARGET_CAPABILITIES, targetsCliResponseSchema } from '@apm/shared';
 import { describe, expect, it } from 'vitest';
 import {
   buildRunSessionRequest,
@@ -226,8 +226,8 @@ describe('target integration contracts', () => {
     expect(targetsContract(response)).toEqual({ schemaVersion: 1, targets: response.targets });
   });
 
-  it('keeps capability names forward-compatible in schema version 1', () => {
-    const parsed = targetsCliResponseSchema.parse({
+  it('keeps producer capabilities synchronized with the shared model', () => {
+    const response = {
       schemaVersion: 1,
       targets: [
         {
@@ -236,14 +236,23 @@ describe('target integration contracts', () => {
           kind: 'remote',
           transport: 'ssh',
           identity: { hostname: 'dev-box', address: 'dev-box.example', fingerprint: null },
-          capabilities: ['pty', 'detached', 'future-capability'],
+          capabilities: [...TARGET_CAPABILITIES],
           approved: true,
           status: 'online',
         },
       ],
-    });
+    } as const;
 
-    expect(parsed.targets[0]?.capabilities).toEqual(['pty', 'detached', 'future-capability']);
+    const parsed = targetsCliResponseSchema.parse(response);
+
+    expect(parsed.targets[0]?.capabilities).toEqual(TARGET_CAPABILITIES);
+    expect(parsed.targets[0]?.capabilities).toContain('detached');
+    expect(() =>
+      targetsCliResponseSchema.parse({
+        ...response,
+        targets: [{ ...response.targets[0], capabilities: ['future-capability'] }],
+      }),
+    ).toThrow(/Invalid enum value/);
   });
 
   it('emits target-scoped profiles without homes and preserves opaque ids', () => {

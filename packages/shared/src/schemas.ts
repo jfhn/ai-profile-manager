@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { PROVIDER_IDS } from './provider.js';
-import { LOCAL_TARGET_ID } from './target.js';
+import { LOCAL_TARGET_ID, TARGET_CAPABILITIES } from './target.js';
 
 /**
  * Zod schemas for API request validation (daemon-side) and persisted state.
@@ -251,7 +251,7 @@ const executionTargetSchema = z
     kind: z.enum(['local', 'remote']),
     transport: nonBlankString,
     identity: targetIdentitySchema,
-    capabilities: z.array(nonBlankString),
+    capabilities: z.array(z.enum(TARGET_CAPABILITIES)),
     approved: z.boolean(),
     status: z.enum(['online', 'offline', 'unknown']),
   })
