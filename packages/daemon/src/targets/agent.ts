@@ -7,6 +7,13 @@
  * below the child survives, keeps its ports, and becomes a server nobody is
  * supervising. Every way this process can end is therefore wired to the same
  * cleanup: stdin EOF, SIGHUP/SIGTERM/SIGINT, and `exit` as the last resort.
+ *
+ * One narrow, deliberate exception: `detached-*` requests for managed T3
+ * instances. Those are spawned in their own session by the local transport,
+ * recorded in a state file inside their managed base dir, and *meant* to
+ * survive this agent — a daemon restart on the hub must not take the instance
+ * down. They are never registered with the teardown below, and everything else
+ * (every pty, every exec) keeps the kill-everything contract.
  */
 import readline from 'node:readline';
 import { isTransportError, type PtyHandle, type TransportErrorCode } from '@apm/shared';
@@ -75,7 +82,9 @@ export async function runTargetAgent(): Promise<void> {
 
   const config = resolveConfig();
   const profiles = createProfileService(config, createEventBus());
-  const transport = createLocalTransport({ profiles });
+  // The detached scope is pinned to this machine's own managed T3 dir — the
+  // same directory `apm pair` trusts — so no request can point it elsewhere.
+  const transport = createLocalTransport({ profiles, detachedDir: config.t3Dir });
 
   try {
     switch (parsed.type) {
@@ -90,6 +99,20 @@ export async function runTargetAgent(): Promise<void> {
         return;
       case 'pty':
         await servePty(await transport.openPty(parsed.spec), iterator);
+        return;
+      case 'detached-spawn':
+        // Deliberately not registered with tearDown: this is the one process
+        // class that must survive this agent (see the module comment).
+        send({ type: 'detached', state: await transport.spawnDetached(parsed.spec), reason: null });
+        return;
+      case 'detached-inspect': {
+        const inspection = await transport.inspectDetached(parsed.instanceId, parsed.baseDir);
+        send({ type: 'detached', state: inspection.state, reason: inspection.reason });
+        return;
+      }
+      case 'detached-stop':
+        await transport.stopDetached(parsed.instanceId, parsed.baseDir);
+        send({ type: 'detached', state: null, reason: null });
         return;
       default:
         sendError('spawn-failed', 'Expected an operation as the first agent request');

@@ -13,7 +13,7 @@ import {
   type TargetTransport,
 } from '@apm/shared';
 import type { ProfileService } from '../context.js';
-import { createLocalTarget, createLocalTransport } from './local.js';
+import { DETACHED_STATE_FILE, createLocalTarget, createLocalTransport } from './local.js';
 
 const PROFILE: Profile = {
   id: 'profile-1',
@@ -180,6 +180,90 @@ describe('local transport', () => {
     expect(health.state).toBe('unhealthy');
     expect(health.reason).toContain('No HTTP response');
     await handle.close();
+  });
+});
+
+/**
+ * The kill-by-record safety of detached services. The shared contract suite
+ * covers the happy paths; these are the refusals only a real machine can
+ * show — a recycled pid and an unverifiable one must never be signalled.
+ */
+describe('local transport detached-service verification', () => {
+  let root: string;
+  let baseDir: string;
+  let stateFile: string;
+  let detached: TargetTransport;
+  const INSTANCE = 'inst-1';
+
+  beforeEach(() => {
+    root = fs.mkdtempSync(path.join(os.tmpdir(), 'apm-local-detached-'));
+    baseDir = path.join(root, INSTANCE);
+    fs.mkdirSync(baseDir, { recursive: true });
+    stateFile = path.join(baseDir, DETACHED_STATE_FILE);
+    detached = createLocalTransport({
+      profiles: profiles(),
+      detachedDir: root,
+      detachedStopGraceMs: 300,
+    });
+  });
+
+  afterEach(async () => {
+    await detached.close();
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  function writeRecord(record: Record<string, unknown>): void {
+    fs.writeFileSync(
+      stateFile,
+      JSON.stringify({
+        version: 1,
+        instanceId: INSTANCE,
+        port: 45_001,
+        startedAt: new Date().toISOString(),
+        ...record,
+      }),
+    );
+  }
+
+  it('treats a recycled pid as gone instead of killing it', async () => {
+    // This very test process plays the recycled pid: it is alive, but its
+    // start time cannot match the fabricated record. Killing it would fail
+    // the suite loudly — which is the point.
+    writeRecord({ pid: process.pid, startTicks: 1 });
+    const inspected = await detached.inspectDetached(INSTANCE, baseDir);
+    expect(inspected.state).toBeNull();
+
+    await detached.stopDetached(INSTANCE, baseDir);
+    // Still here, and the stale record was cleaned up.
+    expect(fs.existsSync(stateFile)).toBe(false);
+  });
+
+  it('refuses to kill a pid it cannot verify at all', async () => {
+    writeRecord({ pid: process.pid, startTicks: null });
+    await expect(detached.stopDetached(INSTANCE, baseDir)).rejects.toMatchObject({
+      code: 'unsupported',
+    });
+    // The record stays: nothing was proven, so nothing may be forgotten.
+    expect(fs.existsSync(stateFile)).toBe(true);
+  });
+
+  it('scopes detached services to immediate children of the managed dir', async () => {
+    const elsewhere = fs.mkdtempSync(path.join(os.tmpdir(), 'apm-elsewhere-'));
+    const spec = {
+      argv: ['sleep', '60'],
+      cwd: elsewhere,
+      instanceId: path.basename(elsewhere),
+      port: 45_002,
+      baseDir: elsewhere,
+    };
+    await expect(detached.spawnDetached(spec)).rejects.toMatchObject({ code: 'spawn-failed' });
+    // A nested path inside the root is refused as well.
+    const nested = path.join(baseDir, 'deeper', INSTANCE);
+    fs.mkdirSync(nested, { recursive: true });
+    await expect(
+      detached.spawnDetached({ ...spec, cwd: nested, instanceId: INSTANCE, baseDir: nested }),
+    ).rejects.toMatchObject({ code: 'spawn-failed' });
+    fs.rmSync(elsewhere, { recursive: true, force: true });
   });
 });
 

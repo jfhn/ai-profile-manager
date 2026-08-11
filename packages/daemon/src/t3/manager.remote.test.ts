@@ -177,19 +177,23 @@ describe('t3 manager on a remote target', () => {
     expect(fs.existsSync(path.join(config.t3Dir, created.id))).toBe(false);
   });
 
-  it('launches t3 with a profile id and a non-secret APM instance marker', async () => {
+  it('launches t3 detached with a profile id and a non-secret APM instance marker', async () => {
     const { manager, transport } = harness();
     const created = await create(manager);
     const started = await startHealthy(manager, transport, created.id);
 
-    const pty = transport.lastPty();
-    expect(pty.spec.argv).toEqual(['t3', 'serve', '--port', '9100', '--base-dir', created.baseDir]);
-    expect(pty.spec.cwd).toBe(created.baseDir);
+    const spawn = transport.detachedSpawns[0];
+    expect(spawn?.argv).toEqual(['t3', 'serve', '--port', '9100', '--base-dir', created.baseDir]);
+    expect(spawn?.cwd).toBe(created.baseDir);
+    expect(spawn?.instanceId).toBe(created.id);
+    expect(spawn?.port).toBe(9100);
+    expect(spawn?.baseDir).toBe(created.baseDir);
     // The target injects the profile's env itself; only this instance id
     // marker crosses the seam, never anything about the home or credentials.
-    expect(pty.spec.profileIds).toEqual([REMOTE_PROFILE.id]);
-    expect(pty.spec.env).toEqual({ [APM_MANAGED_T3_INSTANCE_ENV]: created.id });
-    expect(started.pid).toBeNull();
+    expect(spawn?.profileIds).toEqual([REMOTE_PROFILE.id]);
+    expect(spawn?.env).toEqual({ [APM_MANAGED_T3_INSTANCE_ENV]: created.id });
+    // The pid the target recorded, so the process can be found again later.
+    expect(started.pid).toBe(transport.detached.get(created.id)?.state.pid);
   });
 
   it('binds one profile per provider and hands the target every id', async () => {
@@ -208,11 +212,11 @@ describe('t3 manager on a remote target', () => {
     expect(started.status).toBe('running');
     // Both opaque ids cross the seam, in provider order, and nothing else —
     // the target resolves each one to its own provider env locally.
-    expect(transport.lastPty().spec.profileIds).toEqual([
+    expect(transport.detachedSpawns[0]?.profileIds).toEqual([
       REMOTE_PROFILE.id,
       REMOTE_CODEX_PROFILE.id,
     ]);
-    expect(transport.lastPty().spec.env).toEqual({
+    expect(transport.detachedSpawns[0]?.env).toEqual({
       [APM_MANAGED_T3_INSTANCE_ENV]: created.id,
     });
   });
@@ -383,22 +387,23 @@ describe('t3 manager on a remote target', () => {
     const created = await create(manager);
 
     // First attempt: the endpoint never answers, which leaves the instance
-    // startable again with its pty and endpoint still open on the target.
+    // startable again with its process and endpoint still up on the target.
     expect((await manager.start(created.id)).status).toBe('unhealthy');
-    const stale = { pty: transport.lastPty(), endpoint: transport.lastEndpoint() };
+    const stale = { endpoint: transport.lastEndpoint(), pid: manager.list()[0]?.pid };
 
     const restarted = await startHealthy(manager, transport, created.id);
     expect(restarted.status).toBe('running');
-    expect(transport.ptys).toHaveLength(2);
+    expect(transport.detachedSpawns).toHaveLength(2);
 
-    // The abandoned attempt was torn down rather than left running over there.
-    expect(stale.pty.exited).toBe(true);
+    // The abandoned attempt was stopped by its record rather than left
+    // running over there, and its endpoint was withdrawn.
+    expect(transport.detachedStops.map((stop) => stop.instanceId)).toContain(created.id);
+    expect(restarted.pid).not.toBe(stale.pid);
     expect(stale.endpoint.closed).toBe(true);
-    expect(stale.pty).not.toBe(transport.lastPty());
+    expect(stale.endpoint).not.toBe(transport.lastEndpoint());
 
     // Its late events belong to a runtime nobody is served by any more, so the
     // healthy instance must not notice them at all.
-    stale.pty.exit({ exitCode: 1 });
     stale.endpoint.drop('stale forward lost');
     const instance = manager.list()[0];
     expect(instance).toMatchObject({
@@ -407,33 +412,6 @@ describe('t3 manager on a remote target', () => {
       statusReason: null,
     });
     expect(transport.lastEndpoint().closed).toBe(false);
-  });
-
-  it('reports an exit by status only, never by output', async () => {
-    const { manager, transport } = harness();
-    const created = await create(manager);
-    await startHealthy(manager, transport, created.id);
-
-    transport.lastPty().exit({ exitCode: 1 });
-    const instance = manager.list()[0];
-    expect(instance?.status).toBe('exited');
-    expect(instance?.statusReason).toBe(`t3 exited with code 1 on target "${TARGET_ID}"`);
-    expect(instance?.url).toBeNull();
-    expect(instance?.endpoint).toBeNull();
-  });
-
-  it('blames a live transport failure rather than the exit it causes', async () => {
-    const { manager, transport } = harness();
-    const created = await create(manager);
-    await startHealthy(manager, transport, created.id);
-
-    // onError first, then the exit the dead connection synthesizes.
-    transport.lastPty().fail('unreachable', 'connection reset');
-    const instance = manager.list()[0];
-    expect(instance?.status).toBe('exited');
-    expect(instance?.statusReason).toBe(
-      `The connection to target "${TARGET_ID}" failed: connection reset`,
-    );
   });
 
   it('marks the instance unhealthy when the endpoint drops on its own', async () => {
@@ -448,27 +426,37 @@ describe('t3 manager on a remote target', () => {
     expect(instance?.url).toBeNull();
   });
 
-  it('stops with SIGTERM and closes the endpoint', async () => {
+  it('stops the recorded process on the target and closes the endpoint', async () => {
     const { manager, transport } = harness();
     const created = await create(manager);
     await startHealthy(manager, transport, created.id);
 
-    const stopping = manager.stop(created.id);
-    transport.lastPty().exit({ signal: 'SIGTERM' });
-    const stopped = await stopping;
+    const stopped = await manager.stop(created.id);
 
-    expect(transport.lastPty().signals).toEqual(['SIGTERM']);
+    // The kill goes by the target's own record, not by any live handle.
+    expect(transport.detachedStops).toContainEqual({
+      instanceId: created.id,
+      baseDir: created.baseDir,
+    });
+    expect(transport.detached.has(created.id)).toBe(false);
     expect(transport.lastEndpoint().closed).toBe(true);
     expect(stopped).toMatchObject({ status: 'stopped', port: null, url: null, endpoint: null });
   });
 
-  it('escalates to SIGKILL when the remote process ignores SIGTERM', async () => {
+  it('fails a stop instead of pretending when the target is unreachable', async () => {
     const { manager, transport } = harness();
     const created = await create(manager);
     await startHealthy(manager, transport, created.id);
 
-    await manager.stop(created.id);
-    expect(transport.lastPty().signals).toEqual(['SIGTERM', 'SIGKILL']);
+    transport.setOnline(false);
+    // Claiming "stopped" would leave a server running with nobody
+    // supervising it; the failure is the honest answer.
+    await expect(manager.stop(created.id)).rejects.toMatchObject({
+      statusCode: 502,
+      code: 'target-unreachable',
+    });
+    expect(manager.list()[0]?.status).toBe('running');
+    expect(transport.detached.get(created.id)?.alive).toBe(true);
   });
 
   it('allocates ports per target', async () => {
@@ -485,20 +473,23 @@ describe('t3 manager on a remote target', () => {
     expect(localPortScans.at(-1)).toEqual([]);
   });
 
-  it('terminates remote instances and revokes their endpoints on shutdown', async () => {
+  it('leaves a remote instance serving through a daemon shutdown', async () => {
     const { manager, transport } = harness();
     const created = await create(manager);
     await startHealthy(manager, transport, created.id);
-    const pty = transport.lastPty();
     const endpoint = transport.lastEndpoint();
 
     await manager.shutdown();
 
-    // Nothing on the target may outlive the daemon that was supervising it:
-    // leaving either behind is how a restart met an occupied port and a
-    // published URL nobody was watching.
-    expect(pty.exited).toBe(true);
-    expect(endpoint.closed).toBe(true);
+    // Both the detached process and its published endpoint stay up on the
+    // target on purpose: the instance keeps serving while apm is away, and
+    // adopt() re-links it on the way back up.
+    expect(transport.detached.get(created.id)?.alive).toBe(true);
+    expect(endpoint.closed).toBe(false);
+    // The transport's own close (daemon shutdown continues with it) leaves a
+    // persistent endpoint published as well.
+    await transport.close();
+    expect(endpoint.closed).toBe(false);
   });
 
   it('leaves a local instance running when the daemon shuts down', async () => {
@@ -517,10 +508,10 @@ describe('t3 manager on a remote target', () => {
     const created = await create(manager);
 
     const starting = manager.start(created.id);
-    await waitFor(() => transport.ptys.length > 0);
-    // What EADDRINUSE looks like from here: the process starts and exits
+    await waitFor(() => transport.detachedSpawns.length > 0);
+    // What EADDRINUSE looks like from here: the process starts and dies
     // straight away instead of binding the port.
-    transport.lastPty().exit({ exitCode: 1 });
+    transport.killDetached(created.id);
     const result = await starting;
 
     expect(result.status).toBe('exited');
@@ -530,22 +521,106 @@ describe('t3 manager on a remote target', () => {
     expect(transport.lastEndpoint().closed).toBe(true);
   });
 
-  it('reports remote instances as stopped after a daemon restart', async () => {
+  /** Restart the daemon: a fresh harness against the same target-side state. */
+  async function restartAndAdopt(first: Harness): Promise<Harness> {
+    const survivor = [...first.transport.detached.values()].some((record) => record.alive);
+    await first.manager.shutdown();
+    const next = harness({ detachedStore: first.transport.detached });
+    const adopting = next.manager.adopt();
+    if (survivor) {
+      // The target answers on its re-published endpoint as soon as it exists.
+      await waitFor(() => next.transport.endpoints.length > 0);
+      next.transport.lastEndpoint().setHealthy(true);
+    }
+    await adopting;
+    return next;
+  }
+
+  it('re-adopts a remote instance that kept serving across a restart', async () => {
+    const first = harness();
+    const created = await create(first.manager);
+    const started = await startHealthy(first.manager, first.transport, created.id);
+
+    const adopted = await restartAndAdopt(first);
+    const instance = adopted.manager.list()[0];
+    expect(instance).toMatchObject({
+      id: created.id,
+      status: 'running',
+      pid: started.pid,
+      port: started.port,
+      url: `http://${TARGET_HOST}:${started.port}`,
+      statusReason: null,
+    });
+    // Re-adopted, not relaunched: the process over there was never touched.
+    expect(adopted.transport.detachedSpawns).toHaveLength(0);
+    expect(adopted.transport.detachedStops).toHaveLength(0);
+    // The re-published endpoint asked for the recorded port, not a new one.
+    expect(adopted.transport.lastEndpoint().request.port).toBe(started.port);
+  });
+
+  it('reports an instance that died while apm was away as stopped, never relaunches it', async () => {
     const first = harness();
     const created = await create(first.manager);
     await startHealthy(first.manager, first.transport, created.id);
-    await first.manager.shutdown();
+    first.transport.killDetached(created.id);
 
-    const adopted = harness();
-    await adopted.manager.adopt();
+    const adopted = await restartAndAdopt(first);
     const instance = adopted.manager.list()[0];
     expect(instance).toMatchObject({
       id: created.id,
       status: 'stopped',
+      pid: null,
       port: null,
       url: null,
       endpoint: null,
     });
+    expect(instance?.statusReason).toContain('while apm was down');
+    expect(adopted.transport.detachedSpawns).toHaveLength(0);
+    expect(adopted.transport.endpoints).toHaveLength(0);
+  });
+
+  it('stops a process recorded by a previous daemon', async () => {
+    const first = harness();
+    const created = await create(first.manager);
+    await startHealthy(first.manager, first.transport, created.id);
+
+    // The daemon that spawned the process is gone; the record is not.
+    const adopted = await restartAndAdopt(first);
+    const stopped = await adopted.manager.stop(created.id);
+
+    expect(stopped.status).toBe('stopped');
+    expect(adopted.transport.detachedStops).toContainEqual({
+      instanceId: created.id,
+      baseDir: created.baseDir,
+    });
+    expect(adopted.transport.detached.has(created.id)).toBe(false);
+    expect(adopted.transport.lastEndpoint().closed).toBe(true);
+  });
+
+  it('degrades to a clear error when the target agent is too old', async () => {
+    // Start: refused with the transport's own words, instance left stopped.
+    const outdated = harness({ detachedUnsupported: true });
+    const created = await create(outdated.manager);
+    await expect(outdated.manager.start(created.id)).rejects.toMatchObject({
+      statusCode: 400,
+      code: 'target-unsupported',
+    });
+    expect(outdated.manager.list()[0]?.status).toBe('stopped');
+
+    // Adoption: the same degradation, as a reported reason, never a crash.
+    const first = harness();
+    const started = await create(first.manager);
+    await startHealthy(first.manager, first.transport, started.id);
+    await first.manager.shutdown();
+    const adopted = harness({
+      detachedStore: first.transport.detached,
+      detachedUnsupported: true,
+    });
+    await adopted.manager.adopt();
+    // Both harnesses share the store file, so select the started instance.
+    const instance = adopted.manager.list().find((entry) => entry.id === started.id);
+    expect(instance?.status).toBe('stopped');
+    expect(instance?.statusReason).toContain('too old');
   });
 
   it('removes a stopped remote instance without touching the target', async () => {

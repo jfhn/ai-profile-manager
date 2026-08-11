@@ -11,13 +11,23 @@ path.
 
 ## What runs where
 
-|                      | local target                                 | remote target                                    |
-| -------------------- | -------------------------------------------- | ------------------------------------------------ |
-| process              | detached `t3 serve`, survives an apm restart | `t3 serve` on the transport's pty                |
-| base dir             | `<dataDir>/t3/<id>`                          | `~/.local/share/apm/t3/<id>` **on the target**   |
-| provider env         | injected here from the bound profiles        | injected **by the target** from its own profiles |
-| Open link            | `http://127.0.0.1:<port>`                    | whatever the target's endpoint publishes         |
-| after an apm restart | re-adopted if still healthy                  | reported as stopped, start it again              |
+|                      | local target                                 | remote target                                           |
+| -------------------- | -------------------------------------------- | ------------------------------------------------------- |
+| process              | detached `t3 serve`, survives an apm restart | detached `t3 serve` **on the target**, survives it too  |
+| base dir             | `<dataDir>/t3/<id>`                          | `~/.local/share/apm/t3/<id>` **on the target**          |
+| provider env         | injected here from the bound profiles        | injected **by the target** from its own profiles        |
+| Open link            | `http://127.0.0.1:<port>`                    | whatever the target's endpoint publishes                |
+| after an apm restart | re-adopted if still healthy                  | re-adopted if still healthy — stopped, with the reason, if it died |
+
+A remote instance is spawned in its own session on the target and recorded in
+a state file inside its base dir (`apm-service.json`: instance id, pid, port —
+never a credential). It keeps serving while apm is down; on the way back up
+`adopt()` re-reads that record, verifies the pid still is that process, and
+re-links the instance with its published endpoint. One that died in the
+meantime is reported as stopped with the reason — apm never relaunches it on
+its own. Stop and delete terminate the recorded process even when a different
+daemon (or agent) than the one that spawned it does the stopping; the target
+verifies the pid's kernel start time first, so a recycled pid is never killed.
 
 ## Prerequisites on the target
 
@@ -28,7 +38,7 @@ path.
    `<dataDir>/targets.json`, see [TARGETS.md](TARGETS.md)). Nothing is ever
    approved for you, and an unapproved target runs nothing
    (`target-not-approved`, HTTP 403).
-2. Its transport reports the `endpoint`, `pty`, `signal` and `profiles`
+2. Its transport reports the `endpoint`, `detached` and `profiles`
    capabilities. A target missing any of them is filtered out of the picker and
    refused by the API (`target-unsupported`, HTTP 400).
 3. **T3 Code is installed on the target** and `t3` is on the PATH of the user
@@ -38,6 +48,11 @@ path.
    and never offer this machine's profiles for a remote instance.
 5. `printenv` and `mkdir` exist on the target — apm resolves the target user's
    home and creates the instance-private base dir with them, as plain argv.
+   The target is a Linux machine (or WSL): the detached lifecycle verifies
+   processes through `/proc`, exactly like `apm pair` does. The target's `apm`
+   must also be recent enough to know the detached verbs; an older agent fails
+   a start or an adoption with a clear `target-unsupported` error naming the
+   fix (update apm on the target) instead of hosting anything.
 6. **Tailscale is installed and logged in on the target**, and the SSH user may
    run `tailscale serve` without a password. That usually means one of:
 
@@ -176,10 +191,12 @@ From the widest hammer to the narrowest:
 
 - **Revoke the target** on the dashboard's Targets page. The entry leaves
   `targets.json` and apm closes the connection right away: closing a transport
-  revokes the endpoints it published and ends the ptys it opened, so an
-  instance running there is torn down on the target rather than left behind,
-  nothing can be started there again, and work still in flight fails with
-  `target-closed`. (Setting `approved: false` by hand has the same effect on
+  revokes the endpoints it published (except a managed instance's — see below)
+  and ends the ptys it opened, nothing can be started there again, and work
+  still in flight fails with `target-closed`. A managed T3 instance is
+  deliberately detached, so revoking does **not** terminate it — stop the
+  instance first if you want the process gone, or clean it up on the target
+  (below). (Setting `approved: false` by hand has the same effect on
   selection — `target-not-approved` — but only from the next daemon start.)
 - **Remove the device from your tailnet** (or revoke its node key). The
   transport can no longer reach the target and the endpoint stops resolving.
@@ -197,10 +214,10 @@ From the widest hammer to the narrowest:
 
 ## Known limitations
 
-- A remote instance does not survive an apm restart. Stopping apm terminates it
-  and withdraws its serve entry, and `adopt()` reports remote instances as
-  stopped rather than linking an endpoint nobody is watching. Start it again
-  from the dashboard.
+- Re-adoption happens when the daemon starts. A target that is unreachable at
+  that moment cannot be inspected, so its instances are reported stopped with
+  the reason; once the target is back, press **Start** — it stops whatever the
+  record still names before launching, so nothing is doubled up.
 - The instance's working directory is its base dir on the target, as it is
   locally; per-instance project directories are not modelled yet.
 - apm cannot enumerate the target's busy TCP ports, so it picks a port that no
@@ -210,17 +227,24 @@ From the widest hammer to the narrowest:
 
 ## When a target keeps a process it should not have
 
-Nothing apm starts on a target is meant to outlive the daemon that started it,
-and three things enforce that:
+Nothing apm starts on a target through a pty (`apm run` sessions) is meant to
+outlive the connection that started it, and a managed T3 instance — the one
+deliberate exception — is meant to outlive it *only under its record*. Four
+things keep that honest:
 
 - the remote agent kills its whole process group on `SIGHUP`, on stdin EOF and
-  on its own exit, so a dropped SSH connection cannot leave a server behind
-  even if that server ignores hangups;
-- apm's shutdown terminates remote instances and revokes their serve entries
-  before it lets go of the connections;
-- a start steps over ports an existing serve entry already proxies to, and
-  withdraws entries in apm's own port ranges whose URL no longer answers, so
-  leftovers get reclaimed instead of accumulating.
+  on its own exit, so a dropped SSH connection cannot leave a pty server
+  behind even if that server ignores hangups;
+- a managed instance is the narrow exception: it is spawned in its own session
+  with a state file in its base dir, and only stop/delete (or a start that
+  replaces it) terminates it — after the target verified the recorded pid
+  still is that process;
+- a start stops whatever the instance's record still names before spawning,
+  steps over ports an existing serve entry already proxies to, and withdraws
+  entries in apm's own port ranges whose backend no longer answers, so
+  leftovers get reclaimed instead of accumulating;
+- re-adoption reuses the instance's surviving serve entry rather than stacking
+  a second listener onto the same backend.
 
 If a machine was left in a bad state by an older build, clean it by hand:
 
@@ -267,17 +291,25 @@ The live test this feature is gated on, in order:
     again. The second attempt must go healthy and stay healthy, and
     `tailscale serve status` on the target must not accumulate a stale entry
     from the abandoned attempt.
-11. **The orphan check.** With an instance running, restart apm on the hub —
-    once gracefully (`apm stop`) and once by killing it outright
-    (`pkill -9 -f 'apm'`). After each, on the target: no `t3 serve` process is
-    left (`pgrep -af 't3 serve'`), and `tailscale serve status` lists no entry
-    for the instance. Then press **Start** again on the hub; it must come up
-    healthy rather than failing with an occupied port.
-12. **Revoke** the target on the Targets page while an instance runs on it. It
-    must disappear from the T3 target picker at once, `targets.json` must no
-    longer list it, and on the target the same orphan check as step 11 must
-    hold: no `t3 serve` process and no serve entry left. Starting anything on
-    it afterwards must fail rather than reach the machine. Stop
-    Tailscale on the hub and reload the Targets page: it must say it cannot
-    read the tailnet instead of showing an empty one, and the registered
-    targets must still be listed.
+11. **The survival check.** With an instance running and paired, restart apm
+    on the hub — once gracefully (`apm stop`) and once by killing it outright
+    (`pkill -9 -f 'apm'`). While apm is down, the instance must keep answering
+    on its published URL from the second device. After each restart the card
+    must return to **running** with the same URL, without pressing Start
+    (`pgrep -af 't3 serve'` on the target shows the same pid throughout), and
+    `tailscale serve status` must list exactly one entry for it — no
+    duplicates piling up. Then kill `t3 serve` on the target while apm is
+    down and restart apm: the card must say **stopped** with a reason naming
+    the death, and pressing **Start** must bring it back cleanly.
+12. **Stop and delete across restarts.** Start an instance, restart apm, then
+    press **Stop**: the process on the target must end and the serve entry
+    disappear, even though this daemon never spawned it. **Revoke** the
+    target on the Targets page while another instance runs on it. It must
+    disappear from the T3 target picker at once and `targets.json` must no
+    longer list it; the detached instance deliberately stays up on the target
+    — clean it there (`apm pair` still finds it, `pkill -f 't3 serve'` +
+    `tailscale serve reset` remove it). Starting anything on the revoked
+    target afterwards must fail rather than reach the machine. Stop Tailscale
+    on the hub and reload the Targets page: it must say it cannot read the
+    tailnet instead of showing an empty one, and the registered targets must
+    still be listed.

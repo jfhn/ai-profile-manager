@@ -82,7 +82,7 @@ class AppStore {
     this.targets.filter(
       (target) =>
         target.approved &&
-        (['endpoint', 'pty', 'signal', 'profiles'] as const).every((capability) =>
+        (['endpoint', 'detached', 'profiles'] as const).every((capability) =>
           target.capabilities.includes(capability),
         ),
     ),
