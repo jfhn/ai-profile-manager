@@ -9,6 +9,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildRunSessionRequest,
   profilesContract,
+  sessionsTable,
   targetProfilesContract,
   targetsContract,
 } from './commands.js';
@@ -61,6 +62,50 @@ describe('buildRunSessionRequest', () => {
       cols: 80,
       rows: 24,
     });
+  });
+});
+
+describe('sessionsTable', () => {
+  it('shows the authoritative target id for local and remote sessions', () => {
+    const overview = singleProfileOverview('claude-work');
+    overview.sessions = [
+      session({ name: 'claude-work-1', targetId: 'local', attachedClients: 1 }),
+      session({
+        name: 'codex-remote-1',
+        targetId: 'tower',
+        profileId: 'remote-profile-id',
+        app: 'codex',
+        attachedClients: 0,
+      }),
+    ];
+
+    const table = sessionsTable(overview);
+
+    expect(table.headers).toEqual([
+      'NAME',
+      'TARGET',
+      'PROFILE',
+      'COMMAND',
+      'STATUS',
+      'ATTACHED',
+      'CREATED',
+    ]);
+    expect(table.rows[0]?.slice(0, 6)).toEqual([
+      'claude-work-1',
+      'local',
+      'work',
+      'claude',
+      'running',
+      '1',
+    ]);
+    expect(table.rows[1]?.slice(0, 6)).toEqual([
+      'codex-remote-1',
+      'tower',
+      'remote-profile-id',
+      'codex',
+      'running',
+      '0',
+    ]);
   });
 });
 
@@ -336,5 +381,28 @@ function usage(profileId: string): UsageSnapshot {
     error: null,
     planType: null,
     retryAfterSeconds: null,
+  };
+}
+
+function session(
+  overrides: Partial<OverviewResponse['sessions'][number]> = {},
+): OverviewResponse['sessions'][number] {
+  return {
+    id: 'session-id',
+    name: 'claude-work-1',
+    targetId: 'local',
+    profileId: 'claude-work',
+    app: 'claude',
+    args: [],
+    cwd: '/workspace',
+    status: 'running',
+    exitCode: null,
+    signal: null,
+    cols: 80,
+    rows: 24,
+    attachedClients: 0,
+    createdAt: '2026-01-01T00:00:00.000Z',
+    exitedAt: null,
+    ...overrides,
   };
 }

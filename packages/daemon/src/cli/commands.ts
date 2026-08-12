@@ -342,9 +342,18 @@ export async function sessionsCommand(_argv: string[]): Promise<void> {
     return;
   }
 
+  const table = sessionsTable(overview);
+  printTable(table.headers, table.rows);
+}
+
+export function sessionsTable(overview: Pick<OverviewResponse, 'profiles' | 'sessions'>): {
+  headers: string[];
+  rows: string[][];
+} {
   const labels = new Map(overview.profiles.map((profile) => [profile.id, profile.label]));
   const rows = overview.sessions.map((session) => [
     session.name,
+    session.targetId,
     labels.get(session.profileId) ?? session.profileId,
     [session.app, ...session.args].join(' '),
     session.status === 'exited'
@@ -353,7 +362,10 @@ export async function sessionsCommand(_argv: string[]): Promise<void> {
     String(session.attachedClients),
     new Date(session.createdAt).toLocaleString(),
   ]);
-  printTable(['NAME', 'PROFILE', 'COMMAND', 'STATUS', 'ATTACHED', 'CREATED'], rows);
+  return {
+    headers: ['NAME', 'TARGET', 'PROFILE', 'COMMAND', 'STATUS', 'ATTACHED', 'CREATED'],
+    rows,
+  };
 }
 
 export async function statusCommand(_argv: string[]): Promise<void> {
