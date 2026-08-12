@@ -1,16 +1,12 @@
 import type {
   AddTargetRequest,
   ConfirmWizardRequest,
-  CreateT3InstanceRequest,
-  EndpointScope,
   ExecutionTarget,
   Profile,
   ProviderId,
   ProviderIdentity,
   StartWizardRequest,
-  T3Instance,
   TargetCandidate,
-  TargetProfileSummary,
   WizardStateResponse,
 } from '@apm/shared';
 import type { WizardApi } from '../wizard.svelte';
@@ -24,9 +20,7 @@ import type { WizardApi } from '../wizard.svelte';
  * closely — in particular the login commands and the suggested-label rules,
  * both of which the UI makes decisions on.
  *
- * It also owns the execution targets and their T3 instances, because both are
- * target-scoped: a target reports its own profiles, and an instance's Open link
- * comes from that target's endpoint rather than from anything the UI builds.
+ * It also owns execution targets and their target-scoped profile summaries.
  */
 export class FakeDaemon implements WizardApi {
   profiles: Profile[] = [];
@@ -45,11 +39,6 @@ export class FakeDaemon implements WizardApi {
   /** Every approval the UI sent, so a test can read back what it approved. */
   addedTargets: AddTargetRequest[] = [];
   revokedTargets: string[] = [];
-  /** Profiles per target id — a profile id on one target means nothing on another. */
-  targetProfileLists: Record<string, TargetProfileSummary[]> = {};
-  t3Instances: T3Instance[] = [];
-  /** Every create request the UI sent, so a test can read the target back. */
-  createdT3: CreateT3InstanceRequest[] = [];
 
   /** Seed a profile that is already pending, as if an earlier wizard made it. */
   seedPending(provider: ProviderId): Profile {
@@ -130,7 +119,7 @@ export class FakeDaemon implements WizardApi {
     return this.profiles.find((it) => it.id === profileId);
   }
 
-  // ---- execution targets and T3 instances ----------------------------------
+  // ---- execution targets ---------------------------------------------------
 
   /** Register a target the way the daemon's registry would report it. */
   seedTarget(
@@ -140,49 +129,13 @@ export class FakeDaemon implements WizardApi {
       kind: target.id === 'local' ? 'local' : 'remote',
       transport: target.id === 'local' ? 'local' : 'fake',
       identity: { hostname: target.id, address: null, fingerprint: null },
-      capabilities: ['exec', 'pty', 'signal', 'endpoint', 'profiles', 'detached'],
+      capabilities: ['exec', 'pty', 'signal', 'profiles'],
       approved: true,
       status: 'online',
       ...target,
     };
     this.targets = [...this.targets, full];
     return full;
-  }
-
-  /** A stopped instance on a target, ready for the card or the list. */
-  seedT3Instance(instance: Partial<T3Instance> & Pick<T3Instance, 'label'>): T3Instance {
-    const full: T3Instance = {
-      id: crypto.randomUUID(),
-      targetId: 'local',
-      port: null,
-      baseDir: '/home/tester/.local/share/apm/t3/instance',
-      profiles: {},
-      status: 'stopped',
-      pid: null,
-      url: null,
-      endpoint: null,
-      statusReason: null,
-      createdAt: '2026-01-01T00:00:00.000Z',
-      ...instance,
-    };
-    this.t3Instances = [...this.t3Instances, full];
-    return full;
-  }
-
-  /** Mark a seeded instance running on the endpoint its target would report. */
-  runT3Instance(
-    instance: T3Instance,
-    endpoint: { scope: EndpointScope; port: number; url: string },
-  ): T3Instance {
-    const running: T3Instance = {
-      ...instance,
-      status: 'running',
-      port: endpoint.port,
-      url: endpoint.url,
-      endpoint: { scope: endpoint.scope, protocol: 'http', port: endpoint.port, url: endpoint.url },
-    };
-    this.t3Instances = this.t3Instances.map((it) => (it.id === running.id ? running : it));
-    return running;
   }
 
   /** A machine on the tailnet — display-only until somebody approves it. */
@@ -248,51 +201,6 @@ export class FakeDaemon implements WizardApi {
     this.candidates = this.candidates.map((candidate) =>
       candidate.address === address ? { ...candidate, registeredTargetId: targetId } : candidate,
     );
-  }
-
-  async targetProfiles(targetId: string): Promise<TargetProfileSummary[]> {
-    const profiles = this.targetProfileLists[targetId];
-    if (!profiles) throw new Error(`No target "${targetId}"`);
-    return profiles.map((profile) => ({ ...profile }));
-  }
-
-  async createT3(body: CreateT3InstanceRequest): Promise<T3Instance> {
-    this.createdT3.push(body);
-    return this.seedT3Instance({
-      label: body.label,
-      targetId: body.targetId ?? 'local',
-      profiles: body.profiles,
-    });
-  }
-
-  /**
-   * The daemon answers start/stop with the whole instance, and the URL it
-   * carries always comes from the target's endpoint — never from the client.
-   */
-  async startT3(instanceId: string): Promise<T3Instance> {
-    return this.findInstance(instanceId);
-  }
-
-  async stopT3(instanceId: string): Promise<T3Instance> {
-    const stopped: T3Instance = {
-      ...this.findInstance(instanceId),
-      status: 'stopped',
-      port: null,
-      url: null,
-      endpoint: null,
-    };
-    this.t3Instances = this.t3Instances.map((it) => (it.id === stopped.id ? stopped : it));
-    return stopped;
-  }
-
-  async deleteT3(instanceId: string): Promise<void> {
-    this.t3Instances = this.t3Instances.filter((it) => it.id !== instanceId);
-  }
-
-  private findInstance(instanceId: string): T3Instance {
-    const instance = this.t3Instances.find((it) => it.id === instanceId);
-    if (!instance) throw new Error(`Unknown T3 instance ${instanceId}`);
-    return instance;
   }
 
   private identity(): ProviderIdentity | null {

@@ -80,7 +80,6 @@ describe('terminal websocket', () => {
       sessions: host,
       targets,
       usage: {},
-      t3: {},
     } as unknown as AppContext;
 
     server = http.createServer((_req, res) => res.end('ok'));

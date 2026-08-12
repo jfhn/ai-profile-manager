@@ -14,8 +14,6 @@ import { registerCoreRoutes } from './core/routes.js';
 import { createSessionHost } from './sessions/host.js';
 import { attachTerminalWs } from './sessions/ws.js';
 import { registerSessionRoutes } from './sessions/routes.js';
-import { createT3Manager } from './t3/manager.js';
-import { registerT3Routes } from './t3/routes.js';
 import { createLocalTransport } from './targets/local.js';
 import { createTargetRegistry } from './targets/registry.js';
 import { createConfiguredTransports } from './targets/config.js';
@@ -43,11 +41,10 @@ export async function createContext(config: DaemonConfig): Promise<AppContext> {
   const usage = createUsageService(config, events, profiles);
   // One local transport for the whole daemon; configured remotes are resolved
   // only through the same approved registry.
-  const localTransport = createLocalTransport({ profiles, detachedDir: config.t3Dir });
+  const localTransport = createLocalTransport({ profiles });
   const targets = createTargetRegistry(localTransport, createConfiguredTransports(config));
   const sessions = createSessionHost(config, events, profiles, { targets });
-  const t3 = createT3Manager(config, events, profiles, { targets });
-  return { config, events, profiles, usage, sessions, t3, targets };
+  return { config, events, profiles, usage, sessions, targets };
 }
 
 export async function startDaemon(config: DaemonConfig): Promise<DaemonHandle> {
@@ -100,7 +97,6 @@ export async function startDaemon(config: DaemonConfig): Promise<DaemonHandle> {
     defaultProfileIds: ctx.profiles.defaults(),
     usage: ctx.usage.latest(),
     sessions: ctx.sessions.list(),
-    t3Instances: ctx.t3.list(),
   }));
 
   app.get('/api/events', (req, reply) => {
@@ -125,7 +121,6 @@ export async function startDaemon(config: DaemonConfig): Promise<DaemonHandle> {
   registerCoreRoutes(app, ctx);
   registerSessionRoutes(app, ctx);
   registerTargetRoutes(app, ctx);
-  registerT3Routes(app, ctx);
 
   // ---- static web app -----------------------------------------------------
   const webDist = findWebDist();
@@ -147,7 +142,6 @@ export async function startDaemon(config: DaemonConfig): Promise<DaemonHandle> {
   const terminalWs = attachTerminalWs(app.server, ctx);
 
   writeRunFile(config);
-  await ctx.t3.adopt();
   ctx.usage.start();
 
   const url = `http://${config.host}:${config.port}/?token=${config.token}`;
@@ -160,9 +154,6 @@ export async function startDaemon(config: DaemonConfig): Promise<DaemonHandle> {
     // app.close() waits forever while a terminal client remains attached.
     await terminalWs.close();
     await ctx.sessions.shutdown();
-    // Only lets go of handles: managed instances — local and remote alike —
-    // are detached on purpose and keep serving until adopt() re-links them.
-    await ctx.t3.shutdown();
     await ctx.targets.close();
     removeRunFile(config);
     await app.close();

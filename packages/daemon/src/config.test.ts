@@ -28,7 +28,6 @@ describe('resolveConfig', () => {
       config.usageDb,
       config.homesDir,
       config.cacheDir,
-      config.t3Dir,
       config.runDir,
       config.runFile,
       config.logsDir,

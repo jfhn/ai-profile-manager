@@ -1,6 +1,6 @@
 /**
  * One table mapping transport failures onto the HTTP error codes the API
- * already speaks, so every consumer (sessions today, CLI and T3 next) reports
+ * already speaks, so every consumer reports
  * the same thing for the same failure.
  */
 import { isTransportError, type TransportErrorCode } from '@apm/shared';
@@ -19,7 +19,6 @@ const API_ERRORS: Record<TransportErrorCode, { status: number; code: string }> =
   'command-not-found': { status: 400, code: 'app-not-found' },
   'spawn-failed': { status: 400, code: 'spawn-failed' },
   timeout: { status: 504, code: 'target-timeout' },
-  'endpoint-failed': { status: 502, code: 'endpoint-failed' },
 };
 
 /** ApiFailure for a transport error; anything else is rethrown untouched. */

@@ -16,7 +16,7 @@ Type definitions for every payload live in `packages/shared/src/api.ts`.
 | Method | Path                             | Description                                                         |
 | ------ | -------------------------------- | ------------------------------------------------------------------- |
 | GET    | `/api/status`                    | Daemon version, pid, data dir                                       |
-| GET    | `/api/overview`                  | Providers + profiles + defaults + usage + sessions + T3             |
+| GET    | `/api/overview`                  | Providers + profiles + defaults + usage + sessions                  |
 | GET    | `/api/events`                    | SSE stream (`ServerEvent` types)                                    |
 | GET    | `/api/profiles`                  | List profiles                                                       |
 | GET    | `/api/defaults`                  | Current provider defaults (`DefaultsResponse`)                      |
@@ -41,11 +41,6 @@ Type definitions for every payload live in `packages/shared/src/api.ts`.
 | POST   | `/api/targets`                   | Approve one machine as a target (`AddTargetRequest`)                |
 | DELETE | `/api/targets/:id`               | Revoke a target; closes its connection                              |
 | GET    | `/api/targets/:id/profiles`      | Profiles as that target reports them (`TargetProfilesResponse`)     |
-| GET    | `/api/t3`                        | List managed T3 instances (`T3ListResponse`)                        |
-| POST   | `/api/t3`                        | Create instance (`CreateT3InstanceRequest`)                         |
-| POST   | `/api/t3/:id/start`              | Start instance                                                      |
-| POST   | `/api/t3/:id/stop`               | Stop instance                                                       |
-| DELETE | `/api/t3/:id`                    | Remove instance (must be stopped)                                   |
 
 The wizard endpoints back both the dashboard modal and the headless CLI flow
 (`apm profile add <provider>` — see the README); the CLI adds no endpoints of
@@ -72,13 +67,6 @@ transport codes these endpoints use `tailscale-unavailable` (503, tailscale is
 missing or not answering), `not-a-tailnet-machine` (400), `target-exists` (409)
 and `target-config-invalid` (500, `targets.json` no longer parses).
 
-`POST /api/t3` takes an optional `targetId`; omitting it means the local
-machine, so an existing client is unaffected. A remote instance's `url` and
-`endpoint` come from that target's transport — see
-[TARGETS.md](TARGETS.md) and [T3-REMOTE.md](T3-REMOTE.md). Transport failures
-use the shared codes (`target-not-found`, `target-not-approved`,
-`target-unsupported`, `target-unreachable`, `endpoint-failed`, …).
-
 `CreateSessionRequest.lifecycle` is optional and defaults to `persistent`,
 which preserves the existing detach/reattach behavior. `connection-bound` is
 an opt-in for process-owning integrations: after at least one terminal
@@ -100,9 +88,8 @@ out. Closing the socket detaches without killing the PTY.
 
 ## SSE events
 
-`usage-updated` (with snapshot), `profiles-changed`, `sessions-changed`
-(with session list), `t3-changed` (with instance list). Clients refetch
-`/api/overview` on `profiles-changed`.
+`usage-updated` (with snapshot), `profiles-changed`, and `sessions-changed`
+(with session list). Clients refetch `/api/overview` on `profiles-changed`.
 
 ## Provider defaults
 

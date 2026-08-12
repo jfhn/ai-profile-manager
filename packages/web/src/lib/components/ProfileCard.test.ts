@@ -40,7 +40,6 @@ vi.mock('../api', () => ({
       defaultProfileIds: {},
       usage: {},
       sessions: [],
-      t3Instances: [],
     }),
     discovery: async () => ({ candidates: [] }),
   },

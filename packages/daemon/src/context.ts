@@ -1,14 +1,12 @@
 import type {
   CreateProfileRequest,
   CreateSessionRequest,
-  CreateT3InstanceRequest,
   DefaultProfileIds,
   DiscoveryCandidate,
   Profile,
   ProviderId,
   ProviderInfo,
   ServerEvent,
-  T3Instance,
   TerminalSession,
   UpdateProfileRequest,
   UsageSnapshot,
@@ -21,7 +19,6 @@ import type { TargetRegistry } from './targets/registry.js';
  * Service seams between daemon modules. Implementations live in:
  *   - src/core/     profiles, discovery, wizard, usage scheduling, events
  *   - src/sessions/ PTY session host + terminal WebSocket
- *   - src/t3/       managed T3 instances
  * Routes only ever talk to these interfaces.
  */
 
@@ -80,29 +77,12 @@ export interface SessionHost {
   recentDirs(): string[];
 }
 
-export interface T3Manager {
-  list(): T3Instance[];
-  create(req: CreateT3InstanceRequest): Promise<T3Instance>;
-  start(id: string): Promise<T3Instance>;
-  stop(id: string): Promise<T3Instance>;
-  remove(id: string): Promise<void>;
-  /** Re-adopt detached instances still running from a previous daemon. */
-  adopt(): Promise<void>;
-  /**
-   * Local instances are detached on purpose and keep running. Remote ones are
-   * terminated and their endpoints revoked: nothing on a target may outlive
-   * the daemon that was supervising it.
-   */
-  shutdown(): Promise<void>;
-}
-
 export interface AppContext {
   config: DaemonConfig;
   events: EventBus;
   profiles: ProfileService;
   usage: UsageService;
   sessions: SessionHost;
-  t3: T3Manager;
   /** Execution targets and their transports; the local one is the default. */
   targets: TargetRegistry;
 }

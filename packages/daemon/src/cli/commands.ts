@@ -37,7 +37,6 @@ import { ensureDirs, readLiveRunFile, resolveConfig, type RunFileData } from '..
 import { DetachEscapeParser } from './detach-escape.js';
 import {
   CliError,
-  parsePairArgv,
   parseProfileArgv,
   parseProfilesArgv,
   parseRunArgv,
@@ -46,7 +45,6 @@ import {
   type RunInvocation,
 } from './parse.js';
 import { ApiRequestError, runProfileAdd } from './profile-add.js';
-import { runPair } from './pair.js';
 
 const DAEMON_START_TIMEOUT_MS = 15_000;
 const DAEMON_STOP_TIMEOUT_MS = 10_000;
@@ -178,18 +176,6 @@ export function buildRunSessionRequest(
     cols: size.cols,
     rows: size.rows,
   };
-}
-
-export async function pairCommand(argv: string[]): Promise<void> {
-  try {
-    const invocation = parsePairArgv(argv);
-    await runPair(invocation, { t3Dir: resolveConfig().t3Dir });
-  } catch (error: unknown) {
-    // Pairing output may contain a large one-time token/link. Natural process
-    // shutdown drains stdout/stderr; process.exit() here can truncate it.
-    process.stderr.write(`apm: ${errorMessage(error)}\n`);
-    process.exitCode = 1;
-  }
 }
 
 export function profilesContract(overview: OverviewResponse): ProfilesCliResponse {

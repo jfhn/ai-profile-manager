@@ -10,7 +10,7 @@
  *
  * This module owns the whole /api/targets namespace, and the profile list is
  * the one both consumers share: `apm run --target` resolves a profile name
- * through it, and the web T3 picker fills its select from it.
+ * through it, and the web target view reads the same list.
  *
  * Nothing on any of these payloads is secret: an ExecutionTarget carries
  * identity and capabilities only, a TargetProfileSummary neither home nor

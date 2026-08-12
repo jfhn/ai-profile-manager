@@ -2,7 +2,6 @@ import type { DefaultProfileIds, Profile, ProfileStatus } from './profile.js';
 import type { AdapterCapabilities, ProviderId, ProviderIdentity } from './provider.js';
 import type { UsageSnapshot } from './usage.js';
 import type { TerminalSession } from './sessions.js';
-import type { T3Instance } from './t3.js';
 import type { ExecutionTarget, TargetCandidate, TargetId, TargetProfileSummary } from './target.js';
 
 /**
@@ -40,7 +39,6 @@ export interface OverviewResponse {
   /** Latest snapshot per profile id; absent when never collected. */
   usage: Record<string, UsageSnapshot>;
   sessions: TerminalSession[];
-  t3Instances: T3Instance[];
 }
 
 /** GET /api/defaults and PUT /api/defaults/:provider. */
@@ -141,11 +139,6 @@ export interface SessionsResponse {
   sessions: TerminalSession[];
 }
 
-/** GET /api/t3 */
-export interface T3ListResponse {
-  instances: T3Instance[];
-}
-
 /** POST /api/sessions */
 export interface CreateSessionRequest {
   /** Omitted means the daemon's local target. */
@@ -167,14 +160,6 @@ export interface CreateSessionRequest {
 /** GET /api/recent-dirs — recently used working directories for the picker. */
 export interface RecentDirsResponse {
   dirs: string[];
-}
-
-/** POST /api/t3 */
-export interface CreateT3InstanceRequest {
-  label: string;
-  profiles: Partial<Record<ProviderId, string>>;
-  /** Execution target to run the instance on; omitted means the local machine. */
-  targetId?: TargetId;
 }
 
 /** GET /api/targets — read-only view of the registry, for the target picker. */
@@ -218,5 +203,4 @@ export interface TargetProfilesResponse {
 export type ServerEvent =
   | { type: 'profiles-changed' }
   | { type: 'usage-updated'; profileId: string; snapshot: UsageSnapshot }
-  | { type: 'sessions-changed'; sessions: TerminalSession[] }
-  | { type: 't3-changed'; instances: T3Instance[] };
+  | { type: 'sessions-changed'; sessions: TerminalSession[] };
