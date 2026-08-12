@@ -260,7 +260,7 @@ describe('DELETE /api/targets/:id', () => {
     const transport = created[0];
     expect(transport).toBeDefined();
     // Something is already running over that connection.
-    const endpoint = await transport!.openEndpoint({ port: null });
+    await transport!.openPty({ argv: ['sh'], cols: 80, rows: 24 });
 
     const response = await app.inject({ method: 'DELETE', url: '/api/targets/dev-box' });
     expect(response.statusCode).toBe(204);
@@ -270,9 +270,9 @@ describe('DELETE /api/targets/:id', () => {
     // Gone from the registry, and selecting it now fails like an unknown target.
     expect(targets.get('dev-box')).toBeNull();
     expect(() => targets.transportFor('dev-box')).toThrowError(/No target "dev-box"/);
-    // In-flight work surfaces the transport's own closed/endpoint errors.
+    // In-flight work is closed and new work surfaces the transport's error.
     await expect(transport!.exec({ argv: ['true'] })).rejects.toMatchObject({ code: 'closed' });
-    expect((await endpoint.health()).state).toBe('closed');
+    expect(transport!.lastPty().exited).toBe(true);
   });
 
   it('refuses the local target and an id nobody knows', async () => {

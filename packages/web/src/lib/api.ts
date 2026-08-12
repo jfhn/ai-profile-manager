@@ -4,7 +4,6 @@ import type {
   ConfirmWizardRequest,
   CreateProfileRequest,
   CreateSessionRequest,
-  CreateT3InstanceRequest,
   DefaultsResponse,
   DiscoveryResponse,
   ExecutionTarget,
@@ -15,7 +14,6 @@ import type {
   SessionsResponse,
   StartWizardRequest,
   StatusResponse,
-  T3Instance,
   TargetCandidatesResponse,
   TargetProfilesResponse,
   TargetsResponse,
@@ -161,15 +159,6 @@ export const api = {
   targetProfiles: async (id: string) =>
     (await request<TargetProfilesResponse>(`/api/targets/${encodeURIComponent(id)}/profiles`))
       .profiles,
-
-  createT3: (body: CreateT3InstanceRequest) =>
-    request<T3Instance>('/api/t3', { method: 'POST', ...json(body) }),
-  startT3: (id: string) =>
-    request<T3Instance>(`/api/t3/${encodeURIComponent(id)}/start`, { method: 'POST' }),
-  stopT3: (id: string) =>
-    request<T3Instance>(`/api/t3/${encodeURIComponent(id)}/stop`, { method: 'POST' }),
-  deleteT3: (id: string) =>
-    request<void>(`/api/t3/${encodeURIComponent(id)}`, { method: 'DELETE' }),
 };
 
 export function eventsUrl(): string {

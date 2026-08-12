@@ -7,7 +7,6 @@
   import ToastHost from './lib/components/ToastHost.svelte';
   import Dashboard from './routes/Dashboard.svelte';
   import Sessions from './routes/Sessions.svelte';
-  import T3Instances from './routes/T3Instances.svelte';
   import Targets from './routes/Targets.svelte';
 
   if (token) void boot();
@@ -46,8 +45,6 @@
     <main>
       {#if router.path === '/sessions'}
         <Sessions />
-      {:else if router.path === '/t3'}
-        <T3Instances />
       {:else if router.path === '/targets'}
         <Targets />
       {:else}

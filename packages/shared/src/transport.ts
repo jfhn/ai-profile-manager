@@ -9,14 +9,9 @@ import type {
 /**
  * Transport contract: the one seam every execution target is driven through.
  *
- * Four jobs, deliberately kept separate:
+ * Two jobs, deliberately kept separate:
  *   - one-shot commands   (exec)
  *   - interactive ptys    (openPty)
- *   - service endpoints   (openEndpoint) for HTTP/WS apps such as T3
- *   - detached services   (spawnDetached / inspectDetached / stopDetached),
- *     the managed-T3 exception to "nothing outlives the connection": the
- *     process runs in its own session on the target, is recorded in a state
- *     file inside its base dir, and is re-linked by pid after a daemon restart
  *
  * Everything crossing the seam is a structured value. There is no "command
  * line" anywhere in this file: a command is argv plus an env map plus a cwd,
@@ -94,103 +89,6 @@ export interface PtyHandle {
   close(): Promise<void>;
 }
 
-/**
- * A managed service to spawn *detached* on the target — its own session and
- * process group, so it survives the transport connection and the daemon that
- * asked for it. This is deliberately the only way a transport starts anything
- * that outlives it, and it is scoped to managed T3 instances: the target
- * refuses a base dir that is not an immediate child of its managed T3
- * directory named after the instance.
- */
-export interface DetachedServiceSpec extends CommandSpec {
-  /** Opaque instance id; must equal the base dir's final path segment. */
-  instanceId: string;
-  /** Loopback port the service is expected to bind on the target. */
-  port: number;
-  /** Instance-private base dir on the target; the state record lives inside. */
-  baseDir: string;
-}
-
-/**
- * What the target records about a live detached service. Only opaque ids,
- * pids and ports — never credentials, never the process's output.
- */
-export interface DetachedServiceState {
-  instanceId: string;
-  pid: number;
-  port: number;
-  /** ISO timestamp of the spawn. */
-  startedAt: string;
-}
-
-export interface DetachedServiceInspection {
-  /** The recorded state, when the recorded pid is verifiably still that process. */
-  state: DetachedServiceState | null;
-  /** Why `state` is null when it is (process exited, nothing recorded, ...). */
-  reason: string | null;
-}
-
-export type EndpointProtocol = 'http' | 'https';
-
-/** How the endpoint's URL is reachable from the machine running the daemon. */
-export type EndpointScope =
-  /** The service runs here; the URL is its own loopback address. */
-  | 'loopback'
-  /** The transport forwards a local port to the target's port. */
-  | 'forwarded'
-  /** The transport publishes the target's own address (e.g. a tailnet name). */
-  | 'published';
-
-export interface EndpointRequest {
-  /** Port on the target; null asks the target to allocate a free one. */
-  port: number | null;
-  protocol?: EndpointProtocol;
-  /** Path probed by health checks; defaults to '/'. */
-  healthPath?: string;
-  /** Human label for diagnostics and logs. */
-  label?: string;
-  /**
-   * The published endpoint deliberately outlives this transport connection
-   * (a detached service is behind it), so closing the transport must not
-   * withdraw it. `EndpointHandle.close()` still does.
-   */
-  persistent?: boolean;
-}
-
-export interface ServiceEndpoint {
-  id: string;
-  targetId: TargetId;
-  /** The port the service listens on *on the target*. */
-  port: number;
-  protocol: EndpointProtocol;
-  /** URL usable from this machine (browser included); null until reachable. */
-  url: string | null;
-  scope: EndpointScope;
-}
-
-export type EndpointHealthState = 'starting' | 'healthy' | 'unhealthy' | 'closed';
-
-export interface EndpointHealth {
-  state: EndpointHealthState;
-  /** ISO timestamp of the check. */
-  checkedAt: string;
-  /** Why it is not healthy, when it is not. */
-  reason: string | null;
-}
-
-export interface EndpointHandle {
-  /** Snapshot; `url` is filled in as soon as the endpoint is reachable. */
-  readonly endpoint: ServiceEndpoint;
-  /** Probe now. */
-  health(): Promise<EndpointHealth>;
-  /** Poll until healthy or the timeout elapses; resolves with the last health. */
-  waitUntilHealthy(timeoutMs?: number): Promise<EndpointHealth>;
-  /** Fires when the transport tears the endpoint down (or close() is called). */
-  onClose(listener: (reason: string | null) => void): () => void;
-  /** Stop forwarding/publishing. Never stops the service itself. */
-  close(): Promise<void>;
-}
-
 export interface TargetTransport {
   readonly target: ExecutionTarget;
   supports(capability: TargetCapability): boolean;
@@ -199,27 +97,6 @@ export interface TargetTransport {
   /** Run argv to completion. A non-zero exit is a result, not an error. */
   exec(spec: CommandSpec, options?: ExecOptions): Promise<CommandResult>;
   openPty(spec: PtySpec): Promise<PtyHandle>;
-  openEndpoint(request: EndpointRequest): Promise<EndpointHandle>;
-  /**
-   * Spawn a managed service detached on the target and record it there. The
-   * process belongs to the *target* afterwards, not to this connection: it
-   * survives close(), agent death and a daemon restart, and is reached again
-   * only through inspectDetached/stopDetached.
-   */
-  spawnDetached(spec: DetachedServiceSpec): Promise<DetachedServiceState>;
-  /**
-   * Re-read the recorded state of a detached service. `state` is null unless
-   * the recorded pid verifiably still is that process — a recycled pid is
-   * reported as gone, never as the service.
-   */
-  inspectDetached(instanceId: string, baseDir: string): Promise<DetachedServiceInspection>;
-  /**
-   * Terminate the recorded detached service (SIGTERM, then SIGKILL, delivered
-   * to its process group) and drop the record. Idempotent: nothing recorded or
-   * an already-dead process is a clean no-op. Never kills a pid it cannot
-   * verify as the recorded process.
-   */
-  stopDetached(instanceId: string, baseDir: string): Promise<void>;
   /** Profiles as the target sees them — no homes, no credentials. */
   profiles(): Promise<TargetProfileSummary[]>;
   /**
@@ -248,8 +125,6 @@ export const TRANSPORT_ERROR_CODES = [
   'command-not-found',
   'spawn-failed',
   'timeout',
-  /** Forwarding/publishing the endpoint failed. */
-  'endpoint-failed',
 ] as const;
 export type TransportErrorCode = (typeof TRANSPORT_ERROR_CODES)[number];
 

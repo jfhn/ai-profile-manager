@@ -128,15 +128,6 @@ export const createSessionRequestSchema = z.object({
   rows: z.number().int().min(2).max(500).default(24),
 });
 
-export const createT3InstanceRequestSchema = z.object({
-  label,
-  profiles: z
-    .record(providerIdSchema, profileIdSchema)
-    .refine((v) => Object.keys(v).length > 0, { message: 'at least one profile required' }),
-  // Omitted means the local target, so an existing client keeps working.
-  targetId: targetIdSchema.optional(),
-});
-
 /**
  * A command as it crosses the transport seam: argv + env + cwd, so a request
  * can never smuggle in a shell string.

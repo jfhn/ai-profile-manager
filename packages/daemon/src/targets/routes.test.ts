@@ -60,7 +60,7 @@ describe('target routes', () => {
     const { targets } = response.json();
     expect(targets.map((target: { id: string }) => target.id)).toEqual(['local', 'dev-box']);
     expect(targets[1]).toMatchObject({ kind: 'remote', approved: true });
-    expect(targets[1].capabilities).toContain('endpoint');
+    expect(targets[1].capabilities).toContain('profiles');
   }, 20_000);
 
   it('answers a target’s own profile list, without homes or credentials', async () => {

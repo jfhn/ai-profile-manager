@@ -150,7 +150,7 @@ body {
   text-rendering: optimizeLegibility;
 }
 
-/* The t3 texture trick: a fixed fractal-noise film over everything. */
+/* A fixed fractal-noise film over everything. */
 body::after {
   content: '';
   position: fixed;

@@ -3,9 +3,8 @@
 Local-first companion app for managing AI provider profiles (Claude, Codex),
 viewing quota usage, and launching tools with the correct account. See
 [PLAN.md](PLAN.md) for goals and architecture, [docs/API.md](docs/API.md) for
-the daemon API, [docs/TARGETS.md](docs/TARGETS.md) for the execution-target and
-transport contract, and [docs/T3-REMOTE.md](docs/T3-REMOTE.md) for running a
-managed T3 instance on another machine.
+the daemon API, and [docs/TARGETS.md](docs/TARGETS.md) for the execution-target
+and transport contract.
 
 > **Status: early.** Built for my own setup and so far only exercised against
 > my accounts (one Claude, one Codex). Linux/WSL is the primary platform.
@@ -65,7 +64,7 @@ data dir and port, so a daemon you are already running stays untouched.
 
 - `packages/shared` — schemas and HTTP/WS API types, implementation-independent
 - `packages/collectors` — provider adapters (usage collection, identity, env)
-- `packages/daemon` — Fastify daemon: profiles, usage scheduler, PTY sessions, managed T3 instances; `apm` CLI
+- `packages/daemon` — Fastify daemon: profiles, usage scheduler, PTY sessions; `apm` CLI
 - `packages/web` — Svelte dashboard served by the daemon
 
 ## CLI
@@ -88,8 +87,6 @@ apm run --target devbox --cwd /srv/repo work claude --resume
                           # run in an explicit directory on approved target "devbox"
 apm run --target devbox --cwd /srv/repo --ephemeral work claude
                           # close the target process when this client disconnects
-apm pair                 # on a target, pair its one running managed T3 instance
-apm pair <instance-id>   # select exactly when several instances run there
 apm attach claude-work-1  # reattach; detach with Ctrl-] or Ctrl-5
 apm sessions | status | stop
 ```
@@ -181,9 +178,8 @@ missing-default semantics are documented in
 
 The usage collectors are a TypeScript port of my
 [noctalia-ai-usage-monitor](https://github.com/jfhn/noctalia-ai-usage-monitor)
-collector, updated with lessons from its successor (bounded session scans,
-honest per-account attribution). The web UI's look is modeled on
-[T3 Code](https://github.com/pingdotgg/t3code).
+collector, updated with lessons from its successor (bounded session scans and
+honest per-account attribution).
 
 ## License
 

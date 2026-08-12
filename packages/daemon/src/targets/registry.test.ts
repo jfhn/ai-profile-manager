@@ -119,11 +119,10 @@ describe('target registry', () => {
 
   it('closes remote connections and rejects work afterwards', async () => {
     const { registry, remote } = harness();
-    const endpoint = await remote.openEndpoint({ port: null });
+    await remote.openPty({ argv: ['sh'], cols: 80, rows: 24 });
     await registry.close();
 
-    expect(remote.lastEndpoint().closed).toBe(true);
-    expect((await endpoint.health()).state).toBe('closed');
+    expect(remote.lastPty().exited).toBe(true);
     await expect(remote.exec({ argv: ['true'] })).rejects.toMatchObject({ code: 'closed' });
     // The local transport keeps working: closing releases connections only.
     expect((await registry.profiles()).length).toBe(1);

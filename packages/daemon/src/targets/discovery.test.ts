@@ -3,8 +3,7 @@
  *
  * Everything this module decides — which machines exist, which of them is the
  * hub, which are already targets and what happens when tailscale cannot answer
- * — is exercised here without a tailnet, exactly as tailscale.test.ts drives
- * the endpoint.
+ * — is exercised here without a tailnet.
  */
 import { describe, expect, it } from 'vitest';
 import {

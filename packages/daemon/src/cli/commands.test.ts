@@ -148,7 +148,6 @@ describe('profilesContract', () => {
       defaultProfileIds: { claude: 'claude-work' },
       usage: { 'claude-work': usage('claude-work') },
       sessions: [],
-      t3Instances: [],
     };
 
     expect(profilesContract(overview)).toEqual({
@@ -261,7 +260,7 @@ describe('target integration contracts', () => {
             address: 'dev-box.example',
             fingerprint: null,
           },
-          capabilities: ['exec', 'pty', 'signal', 'profiles', 'detached'],
+          capabilities: ['exec', 'pty', 'signal', 'profiles'],
           approved: true,
           status: 'online',
         },
@@ -291,7 +290,7 @@ describe('target integration contracts', () => {
     const parsed = targetsCliProducerSchema.parse(response);
 
     expect(parsed.targets[0]?.capabilities).toEqual(TARGET_CAPABILITIES);
-    expect(parsed.targets[0]?.capabilities).toContain('detached');
+    expect(parsed.targets[0]?.capabilities).toContain('profiles');
     expect(() =>
       targetsCliProducerSchema.parse({
         ...response,
@@ -363,7 +362,6 @@ function singleProfileOverview(id: string): OverviewResponse {
     defaultProfileIds: { claude: id },
     usage: {},
     sessions: [],
-    t3Instances: [],
   };
 }
 

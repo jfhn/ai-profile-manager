@@ -76,9 +76,6 @@
       runningSessions > 0
         ? `${runningSessions} running ${runningSessions === 1 ? 'session' : 'sessions'}`
         : null,
-      app.t3Instances.some((instance) => instance.status === 'running')
-        ? `${app.t3Instances.filter((instance) => instance.status === 'running').length} T3 running`
-        : null,
     ]
       .filter(Boolean)
       .join(' · '),

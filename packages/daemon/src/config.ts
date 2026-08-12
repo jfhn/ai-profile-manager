@@ -16,8 +16,6 @@ export interface DaemonConfig {
   homesDir: string;
   /** Per-profile collector caches (OAuth usage cache etc.). */
   cacheDir: string;
-  /** T3 instance base dirs. */
-  t3Dir: string;
   /** Runtime rendezvous data (daemon.json with port + token). */
   runDir: string;
   runFile: string;
@@ -59,7 +57,6 @@ export function resolveConfig(
     usageDb: path.join(dataDir, 'usage.db'),
     homesDir: path.join(dataDir, 'homes'),
     cacheDir: path.join(dataDir, 'cache'),
-    t3Dir: path.join(dataDir, 't3'),
     runDir,
     runFile: path.join(runDir, 'daemon.json'),
     logsDir: path.join(dataDir, 'logs'),
@@ -76,7 +73,6 @@ export function ensureDirs(config: DaemonConfig): void {
     config.dataDir,
     config.homesDir,
     config.cacheDir,
-    config.t3Dir,
     config.runDir,
     config.logsDir,
   ]) {
