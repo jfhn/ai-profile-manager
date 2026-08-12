@@ -23,7 +23,7 @@ export const USAGE =
   `  apm run [--target <target>] [--cwd <path>] [--ephemeral] <profile> <app> [args...]\n` +
   `                                                      run an app bound to a profile\n` +
   `  apm pair [<instance-id>]                            pair with a running managed T3 instance\n` +
-  `  apm attach <session>                                attach (detach: Enter, then ~d)\n` +
+  `  apm attach <session>                                attach (detach: Ctrl-] or Ctrl-5)\n` +
   `  apm sessions | status | stop`;
 
 /** Everything `main` dispatches on; `__daemon` is the internal detached start. */

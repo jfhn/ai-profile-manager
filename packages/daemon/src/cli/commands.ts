@@ -50,6 +50,15 @@ import { runPair } from './pair.js';
 
 const DAEMON_START_TIMEOUT_MS = 15_000;
 const DAEMON_STOP_TIMEOUT_MS = 10_000;
+const ESCAPE_SEQUENCE_TIMEOUT_MS = 30;
+const LOCAL_TERMINAL_RESTORE =
+  '\u001b[<u' + // pop enhanced keyboard reporting
+  '\u001b[>4;0m' + // disable xterm modifyOtherKeys
+  '\u001b[?2004l' + // disable bracketed paste
+  '\u001b[?1004l' + // disable focus reporting
+  '\u001b[?2026l' + // end synchronized output
+  '\u001b[?25h' + // show cursor
+  '\u001b[0 q'; // reset cursor shape
 
 /** Local copy: importing main.ts here would be circular. */
 function fail(message: string): never {
@@ -400,7 +409,7 @@ export async function stopCommand(_argv: string[]): Promise<void> {
 
 /**
  * Bridge the local terminal to a session's WebSocket until the session exits
- * or the user detaches with Enter, then ~d (or legacy Ctrl-]). The terminal is
+ * or the user detaches with Ctrl-]/Ctrl-5 (or Enter, then ~d). The terminal is
  * always restored.
  */
 async function attachSession(run: RunFileData, session: TerminalSession): Promise<void> {
@@ -415,17 +424,29 @@ async function attachSession(run: RunFileData, session: TerminalSession): Promis
 
   let restored = false;
   let detaching = false;
+  let escapeSequenceTimer: ReturnType<typeof setTimeout> | undefined;
   let exitCode: number | null = null;
   let signal: string | null = null;
   let exited = false;
 
   const onStdin = (chunk: Buffer): void => {
     if (detaching) return;
+    if (escapeSequenceTimer) {
+      clearTimeout(escapeSequenceTimer);
+      escapeSequenceTimer = undefined;
+    }
     const result = detachEscape.write(chunk);
     sendInput(decoder.write(result.data));
     if (result.detach) {
       detaching = true;
       ws.close();
+      return;
+    }
+    if (detachEscape.hasPendingControlSequence) {
+      escapeSequenceTimer = setTimeout(() => {
+        escapeSequenceTimer = undefined;
+        if (!detaching) sendInput(decoder.write(detachEscape.flushPendingControlSequence()));
+      }, ESCAPE_SEQUENCE_TIMEOUT_MS);
     }
   };
 
@@ -448,10 +469,15 @@ async function attachSession(run: RunFileData, session: TerminalSession): Promis
   function restore(): void {
     if (restored) return;
     restored = true;
+    if (escapeSequenceTimer) {
+      clearTimeout(escapeSequenceTimer);
+      escapeSequenceTimer = undefined;
+    }
     process.off('SIGWINCH', onResize);
     stdin.off('data', onStdin);
     if (stdin.isTTY) stdin.setRawMode(wasRaw);
     stdin.pause();
+    if (process.stdout.isTTY) process.stdout.write(LOCAL_TERMINAL_RESTORE);
   }
 
   await new Promise<void>((resolve, reject) => {

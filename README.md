@@ -90,7 +90,7 @@ apm run --target devbox --cwd /srv/repo --ephemeral work claude
                           # close the target process when this client disconnects
 apm pair                 # on a target, pair its one running managed T3 instance
 apm pair <instance-id>   # select exactly when several instances run there
-apm attach claude-work-1  # reattach; detach with Enter, then ~d
+apm attach claude-work-1  # reattach; detach with Ctrl-] or Ctrl-5
 apm sessions | status | stop
 ```
 
@@ -158,11 +158,12 @@ PATH. The target machine must have the selected profile and tool configured.
 Setting `approved` to `false` keeps the declaration visible to the registry but
 prevents it from running anything; revoking on the Targets page removes the
 entry and closes the connection immediately. In an attached terminal, press
-Enter and then type `~d` to detach; the escape is recognized only at the start
-of input or immediately after Enter, and `~~` sends one literal leading tilde.
-The legacy `Ctrl-]` byte remains supported. A dropped terminal connection also
-only detaches; use `apm attach <session>` to reconnect while the remote process
-is still running or to see its recorded exit.
+`Ctrl-]` or `Ctrl-5` to detach. Both the legacy control byte and the enhanced
+CSI-u encoding used by modern TUIs are recognized. Enter followed by `~d`
+remains a fallback when the keyboard layout emits a literal tilde; `~~` sends
+one literal leading tilde. A dropped terminal connection also only detaches;
+use `apm attach <session>` to reconnect while the remote process is still
+running or to see its recorded exit.
 
 State lives in `~/.local/share/apm` (override with `APM_DATA_DIR`, which is
 resolved to an absolute path at startup): profiles in `profiles.json`, approved

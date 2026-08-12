@@ -19,6 +19,36 @@ describe('DetachEscapeParser', () => {
     expect(result.detached).toBe(true);
   });
 
+  it('detaches on enhanced Ctrl-] and Ctrl-5 sequences split across chunks', () => {
+    for (const sequence of [
+      '\u001b[93;5u',
+      '\u001b[93;5:1u',
+      '\u001b[53;5u',
+      '\u001b[27;5;93~',
+      '\u001b[27;5;53~',
+    ]) {
+      const result = parse([...Buffer.from(`before${sequence}`)]);
+      expect(result, sequence).toEqual({ data: 'before', detached: true });
+    }
+  });
+
+  it('passes release, shifted, alt, and unrelated CSI-u events through unchanged', () => {
+    const input = '\u001b[93;5:3u\u001b[93;6u\u001b[93;7u\u001b[100;5u';
+    const result = parse([input]);
+
+    expect(result.data).toBe(input);
+    expect(result.detached).toBe(false);
+  });
+
+  it('buffers a split CSI candidate and can flush a standalone Escape', () => {
+    const parser = new DetachEscapeParser();
+
+    expect(parser.write(Buffer.from('\u001b')).data).toEqual(Buffer.alloc(0));
+    expect(parser.hasPendingControlSequence).toBe(true);
+    expect(parser.flushPendingControlSequence()).toEqual(Buffer.from('\u001b'));
+    expect(parser.hasPendingControlSequence).toBe(false);
+  });
+
   it('passes ~d through when it is not at the beginning of a line', () => {
     const result = parse(['echo ~done\rnext~d']);
 
@@ -41,7 +71,7 @@ describe('DetachEscapeParser', () => {
   });
 
   it('never interprets detach escapes inside bracketed paste', () => {
-    const pasted = '\u001b[200~first\r~d\n\u001d\r~~last\u001b[201~';
+    const pasted = '\u001b[200~first\r~d\n\u001d\r\u001b[93;5u~~last\u001b[201~';
     const result = parse([
       pasted.slice(0, 2),
       pasted.slice(2, 7),
@@ -67,14 +97,21 @@ describe('DetachEscapeParser', () => {
   });
 });
 
-function parse(chunks: Array<string | Buffer>): { data: string; detached: boolean } {
+function parse(chunks: Array<string | Buffer | number>): { data: string; detached: boolean } {
   const parser = new DetachEscapeParser();
   const outputs: Buffer[] = [];
   let detached = false;
   for (const chunk of chunks) {
-    const result = parser.write(typeof chunk === 'string' ? Buffer.from(chunk) : chunk);
+    const result = parser.write(
+      typeof chunk === 'number'
+        ? Buffer.from([chunk])
+        : typeof chunk === 'string'
+          ? Buffer.from(chunk)
+          : chunk,
+    );
     outputs.push(result.data);
     detached ||= result.detach;
   }
+  if (!detached) outputs.push(parser.flushPendingControlSequence());
   return { data: Buffer.concat(outputs).toString(), detached };
 }
