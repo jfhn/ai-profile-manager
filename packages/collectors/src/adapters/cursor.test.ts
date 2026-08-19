@@ -381,6 +381,33 @@ describe('cursorAdapter', () => {
     expect(fs.readFileSync(authFile, 'utf8')).toBe(before);
   });
 
+  it('forgets refreshed tokens once auth.json is deleted', async () => {
+    const { home, cache } = setupHome();
+    const authFile = writeAuth(home, {
+      accessToken: 'stale-access',
+      refreshToken: 'refresh-secret',
+    });
+    await cursorAdapter.collectUsage({
+      home,
+      cacheDir: cache,
+      allowNetwork: true,
+      now,
+      fetchImpl: async (url, init) => {
+        if (String(url) === REFRESH_URL) {
+          return new Response(JSON.stringify({ access_token: 'rotated-access' }), { status: 200 });
+        }
+        const headers = init?.headers as Record<string, string>;
+        if (headers.Authorization === 'Bearer stale-access') {
+          return new Response('nope', { status: 401 });
+        }
+        return new Response(JSON.stringify(usagePayload()), { status: 200 });
+      },
+    });
+    expect(cursorAdapter.hasCredentials(home)).toBe(true);
+    fs.rmSync(authFile);
+    expect(cursorAdapter.hasCredentials(home)).toBe(false);
+  });
+
   it('does not mix IDE identity into a home that already has auth.json', () => {
     const { home } = setupHome();
     writeAuth(home, { accessToken: 'opaque-not-a-jwt', refreshToken: 'refresh-secret' });

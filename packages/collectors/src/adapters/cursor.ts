@@ -35,10 +35,22 @@ const REFRESH_URL = 'https://api2.cursor.sh/oauth/token';
  * rotated tokens valid for the CLI/IDE that owns the home. Undocumented.
  */
 const OAUTH_CLIENT_ID = 'KbZUR41cY7W6zRSdpSUJ7I7mLYBKOCmB';
+const IDE_ACCESS_TOKEN_KEY = 'cursorAuth/accessToken';
+const IDE_REFRESH_TOKEN_KEY = 'cursorAuth/refreshToken';
+const IDE_EMAIL_KEY = 'cursorAuth/cachedEmail';
+const IDE_PLAN_KEY = 'cursorAuth/stripeMembershipType';
 
 interface CursorTokens {
   accessToken: string;
   refreshToken: string | null;
+}
+
+/** Which store the tokens came from; a remembered pair is validated against it. */
+type TokenSource = 'auth-file' | 'ide-db';
+
+interface HomeTokens {
+  tokens: CursorTokens;
+  source: TokenSource;
 }
 
 interface RefreshOutcome {
@@ -57,7 +69,7 @@ export const cursorAdapter: ProviderAdapter = {
     notes:
       'Usage is the undocumented dashboard GetCurrentPeriodUsage RPC; login writes auth.json via AGENT_CLI_CREDENTIAL_STORE=file; the default ~/.cursor home may read the IDE session token from state.vscdb.',
   },
-  hasCredentials: (home) => Boolean(tokensForHome(home)?.accessToken),
+  hasCredentials: (home) => Boolean(tokensForHome(home)?.tokens.accessToken),
   detectIdentity: (home) => cursorIdentity(home),
   collectUsage: async (ctx) => collectCursorUsage(ctx),
   env: (home) => cursorChildEnv(home),
@@ -95,9 +107,6 @@ function cursorChildEnv(home: string): Record<string, string> {
 async function collectCursorUsage(ctx: CollectContext): Promise<CollectResult> {
   const nowMs = ctx.now ?? Date.now();
   try {
-    if (!tokensForHome(ctx.home, ctx.defaultHome)) {
-      return failed('Cursor credentials are missing; run cursor-agent login', 'auth');
-    }
     const usageFile = path.join(ctx.cacheDir, 'cursor-usage.json');
     const usageCache = await readUsageCache(usageFile, nowMs);
     const cached = usableUsagePayload(
@@ -107,14 +116,21 @@ async function collectCursorUsage(ctx: CollectContext): Promise<CollectResult> {
       'cache',
       nowMs,
     );
+    // A user-initiated refresh means "check again now": it skips the fresh
+    // cache and the error cooldown alike.
+    const forceFetch = ctx.force === true;
+    if (!forceFetch && cached && usageCache.ageMs <= USAGE_TTL_MS) return cached;
+
+    const credentials = tokensForHome(ctx.home, ctx.defaultHome);
+    if (!credentials) {
+      return failed('Cursor credentials are missing; run cursor-agent login', 'auth');
+    }
     if (!ctx.allowNetwork) {
       return (
         cached ??
         failed('Cursor usage endpoint is not fresh and network access is disabled', 'error')
       );
     }
-    const forceFetch = ctx.force === true;
-    if (!forceFetch && cached && usageCache.ageMs <= USAGE_TTL_MS) return cached;
     if (
       !forceFetch &&
       usageCache.errorAgeMs <= USAGE_COOLDOWN_MS &&
@@ -123,7 +139,7 @@ async function collectCursorUsage(ctx: CollectContext): Promise<CollectResult> {
       return cooldownFallback(usageCache, nowMs);
     }
 
-    const fetched = await fetchCursorUsage(ctx);
+    const fetched = await fetchCursorUsage(ctx, credentials);
     const live = usableUsagePayload(
       fetched.usage,
       new Date(nowMs).toISOString(),
@@ -168,19 +184,18 @@ async function collectCursorUsage(ctx: CollectContext): Promise<CollectResult> {
 
 async function fetchCursorUsage(
   ctx: CollectContext,
+  credentials: HomeTokens,
 ): Promise<{ usage: unknown | null; reason: string | null }> {
-  const credentials = tokensForHome(ctx.home, ctx.defaultHome);
-  if (!credentials) return { usage: null, reason: 'Cursor credentials are missing' };
-  const first = await usageRequest(ctx, credentials.accessToken);
+  const first = await usageRequest(ctx, credentials.tokens.accessToken);
   if (first.status !== 401) return { usage: first.usage, reason: first.reason };
-  if (!credentials.refreshToken) {
+  if (!credentials.tokens.refreshToken) {
     return { usage: null, reason: 'Cursor usage endpoint rejected credentials' };
   }
   const refreshed = await refreshOnce(refreshInFlight, ctx.home, () =>
-    requestTokenRefresh(ctx, credentials),
+    requestTokenRefresh(ctx, credentials.tokens),
   );
   if (!refreshed.tokens) return { usage: null, reason: refreshed.reason };
-  rememberTokens(ctx.home, refreshed.tokens);
+  rememberTokens(ctx.home, refreshed.tokens, credentials.source);
   const retry = await usageRequest(ctx, refreshed.tokens.accessToken);
   return retry.status === 401
     ? { usage: null, reason: 'Cursor usage endpoint rejected credentials' }
@@ -223,18 +238,7 @@ async function usageRequest(
   }
 }
 
-interface LiveTokenCache {
-  tokens: CursorTokens;
-  cachedAtMs: number;
-}
-
-/** Rotated tokens stay in memory only, keyed by resolved home. */
-const liveTokens = new Map<string, LiveTokenCache>();
 const refreshInFlight = new Map<string, Promise<RefreshOutcome>>();
-
-function rememberTokens(home: string, tokens: CursorTokens): void {
-  liveTokens.set(path.resolve(home), { tokens, cachedAtMs: Date.now() });
-}
 
 async function requestTokenRefresh(
   ctx: CollectContext,
@@ -299,37 +303,21 @@ function usableUsagePayload(
       : null,
     failureKind: null,
     error: null,
-    planType: planTypeFromUsage(data),
+    planType: isRecord(data) ? readString(data.membershipType) : null,
     retryAfterSeconds: null,
   };
 }
 
 export function cursorWindows(data: unknown, nowMs: number): UsageWindow[] {
-  if (!isRecord(data)) return [];
-  const plan = planUsageRecord(data);
-  if (!plan) return [];
-  const resetAt = normalizeTimestamp(
-    plan.billingCycleEnd ?? data.billingCycleEnd ?? plan.resetAt ?? data.resetAt,
-  );
+  if (!isRecord(data) || !isRecord(data.planUsage)) return [];
+  const plan = data.planUsage;
+  const resetAt = normalizeTimestamp(data.billingCycleEnd);
   const resetMs = Date.parse(resetAt ?? '');
   const futureReset = Number.isFinite(resetMs) && resetMs > nowMs ? resetAt : null;
   const cursorUsed = clampPercent(
-    firstNumber(plan, [
-      'cursorModelsPercentUsed',
-      'cursor_models_percent_used',
-      'cursorModelsUsedPercent',
-      'autoPercentUsed',
-    ]),
+    firstNumber(plan, ['cursorModelsPercentUsed', 'autoPercentUsed']),
   );
-  const otherUsed = clampPercent(
-    firstNumber(plan, [
-      'otherModelsPercentUsed',
-      'other_models_percent_used',
-      'otherModelsUsedPercent',
-      'apiPercentUsed',
-    ]),
-  );
-  if (cursorUsed === null && otherUsed === null) return [];
+  const otherUsed = clampPercent(firstNumber(plan, ['otherModelsPercentUsed', 'apiPercentUsed']));
   const windows: UsageWindow[] = [];
   if (cursorUsed !== null) {
     windows.push({
@@ -352,44 +340,46 @@ export function cursorWindows(data: unknown, nowMs: number): UsageWindow[] {
   return windows;
 }
 
-function planUsageRecord(data: Record<string, unknown>): Record<string, unknown> | null {
-  if (isRecord(data.planUsage)) return data.planUsage;
-  const individual = isRecord(data.individualUsage) ? data.individualUsage : null;
-  if (individual && isRecord(individual.plan)) return individual.plan;
-  if (
-    data.autoPercentUsed !== undefined ||
-    data.apiPercentUsed !== undefined ||
-    data.cursorModelsPercentUsed !== undefined
-  ) {
-    return data;
-  }
-  return null;
+interface LiveTokenCache {
+  tokens: CursorTokens;
+  source: TokenSource;
+  cachedAtMs: number;
 }
 
-function planTypeFromUsage(data: unknown): string | null {
-  if (!isRecord(data)) return null;
-  const plan = planUsageRecord(data);
-  return (
-    readString(data.membershipType) ??
-    readString(data.planName) ??
-    readString(plan?.planName) ??
-    readString(plan?.membershipType) ??
-    readString(isRecord(data.planInfo) ? data.planInfo.planName : null)
-  );
+/** Rotated tokens stay in memory only, keyed by resolved home. */
+const liveTokens = new Map<string, LiveTokenCache>();
+
+function rememberTokens(home: string, tokens: CursorTokens, source: TokenSource): void {
+  liveTokens.set(path.resolve(home), { tokens, source, cachedAtMs: Date.now() });
 }
 
-function tokensForHome(home: string, defaultHome?: string): CursorTokens | null {
+function tokensForHome(home: string, defaultHome?: string): HomeTokens | null {
   const key = path.resolve(home);
   const live = liveTokens.get(key);
   if (live) {
-    const authMtime = latestAuthMtime(home);
-    if (authMtime !== undefined && authMtime > live.cachedAtMs) {
-      liveTokens.delete(key);
-    } else {
-      return live.tokens;
+    if (rememberedTokensStillValid(live, home)) {
+      return { tokens: live.tokens, source: live.source };
     }
+    liveTokens.delete(key);
   }
-  return tokensFromAuthFiles(home) ?? ideTokensIfDefaultHome(home, defaultHome);
+  const fromFile = tokensFromAuthFiles(home);
+  if (fromFile) return { tokens: fromFile, source: 'auth-file' };
+  const fromIde = ideTokensIfDefaultHome(home, defaultHome);
+  return fromIde ? { tokens: fromIde, source: 'ide-db' } : null;
+}
+
+/**
+ * Remembered tokens live only as long as the store they were refreshed from is
+ * unchanged. A newer store means the CLI or IDE rotated on its own, and a
+ * vanished one means the profile logged out — in both cases the remembered pair
+ * would outlive the session it belongs to.
+ */
+function rememberedTokensStillValid(live: LiveTokenCache, home: string): boolean {
+  const mtimeMs =
+    live.source === 'auth-file'
+      ? latestAuthMtime(home)
+      : fs.statSync(ideStateDbPath(), { throwIfNoEntry: false })?.mtimeMs;
+  return mtimeMs !== undefined && mtimeMs <= live.cachedAtMs;
 }
 
 /** Paths the Cursor CLI file store actually uses inside a bound home. */
@@ -403,7 +393,7 @@ function authFiles(home: string): string[] {
 
 function tokensFromAuthFiles(home: string): CursorTokens | null {
   for (const file of authFiles(home)) {
-    const tokens = tokensFromAuthFile(file);
+    const tokens = tokensFromUnknown(readJsonSync(file));
     if (tokens) return tokens;
   }
   return null;
@@ -418,34 +408,19 @@ function latestAuthMtime(home: string): number | undefined {
   return latest;
 }
 
-function tokensFromAuthFile(file: string): CursorTokens | null {
-  return tokensFromUnknown(readJsonSync(file));
-}
-
 function tokensFromUnknown(value: unknown): CursorTokens | null {
   if (!isRecord(value)) return null;
-  const nested = [
-    value,
-    isRecord(value.tokens) ? value.tokens : null,
-    isRecord(value.auth) ? value.auth : null,
-  ];
-  for (const record of nested) {
-    if (!record) continue;
-    const accessToken =
-      readString(record.accessToken) ?? readString(record.access_token) ?? readString(record.token);
-    if (accessToken) {
-      return {
-        accessToken,
-        refreshToken: readString(record.refreshToken) ?? readString(record.refresh_token),
-      };
-    }
-  }
-  return null;
+  const accessToken = readString(value.accessToken);
+  if (!accessToken) return null;
+  return { accessToken, refreshToken: readString(value.refreshToken) };
 }
 
 function ideTokensIfDefaultHome(home: string, defaultHome?: string): CursorTokens | null {
   if (!isDefaultHome(home, defaultHome)) return null;
-  return tokensFromIdeState(ideStateDbPath());
+  const values = readIdeValues(ideStateDbPath(), [IDE_ACCESS_TOKEN_KEY, IDE_REFRESH_TOKEN_KEY]);
+  const accessToken = values.get(IDE_ACCESS_TOKEN_KEY);
+  if (!accessToken) return null;
+  return { accessToken, refreshToken: values.get(IDE_REFRESH_TOKEN_KEY) ?? null };
 }
 
 // The path itself must be the default home. A managed directory that merely
@@ -484,27 +459,27 @@ function ideStateDbPath(): string {
   );
 }
 
-function tokensFromIdeState(dbPath: string): CursorTokens | null {
-  const accessToken = readIdeValue(dbPath, 'cursorAuth/accessToken');
-  if (!accessToken) return null;
-  return {
-    accessToken,
-    refreshToken: readIdeValue(dbPath, 'cursorAuth/refreshToken'),
-  };
-}
-
-function readIdeValue(dbPath: string, key: string): string | null {
+/** Every wanted key in one read; a missing or unreadable database yields none. */
+function readIdeValues(dbPath: string, keys: readonly string[]): Map<string, string> {
+  const values = new Map<string, string>();
   let database: DatabaseSync | null = null;
   try {
     database = new DatabaseSync(dbPath, { readOnly: true });
-    const row: unknown = database.prepare('SELECT value FROM ItemTable WHERE key = ?').get(key);
-    if (!isRecord(row)) return null;
-    return sqliteText(row.value);
+    const rows = database
+      .prepare(`SELECT key, value FROM ItemTable WHERE key IN (${keys.map(() => '?').join(', ')})`)
+      .all(...keys);
+    for (const row of rows) {
+      if (!isRecord(row)) continue;
+      const key = readString(row.key);
+      const value = sqliteText(row.value);
+      if (key && value) values.set(key, value);
+    }
   } catch {
-    return null;
+    // No IDE session to read.
   } finally {
     database?.close();
   }
+  return values;
 }
 
 function sqliteText(value: unknown): string | null {
@@ -524,21 +499,22 @@ function cursorIdentity(home: string): ProviderIdentity | null {
     return mergeIdentity(jwtIdentityFromAuthFiles(home), identityFromCliConfig(home));
   }
   if (!isDefaultHome(home)) return null;
-  const db = ideStateDbPath();
-  const token = readIdeValue(db, 'cursorAuth/accessToken');
-  const fromIdeJwt = identityFromJwt(token);
-  const email = readIdeValue(db, 'cursorAuth/cachedEmail');
-  const plan = readIdeValue(db, 'cursorAuth/stripeMembershipType');
-  return mergeIdentity(fromIdeJwt, {
-    account: email,
+  const values = readIdeValues(ideStateDbPath(), [
+    IDE_ACCESS_TOKEN_KEY,
+    IDE_EMAIL_KEY,
+    IDE_PLAN_KEY,
+  ]);
+  return mergeIdentity(identityFromJwt(values.get(IDE_ACCESS_TOKEN_KEY) ?? null), {
+    account: values.get(IDE_EMAIL_KEY) ?? null,
     organization: null,
-    plan,
+    plan: values.get(IDE_PLAN_KEY) ?? null,
   });
 }
 
 function jwtIdentityFromAuthFiles(home: string): ProviderIdentity | null {
   for (const authFile of authFiles(home)) {
-    const identity = identityFromUnknown(readJsonSync(authFile));
+    const tokens = tokensFromUnknown(readJsonSync(authFile));
+    const identity = identityFromJwt(tokens?.accessToken ?? null);
     if (identity) return identity;
   }
   return null;
@@ -566,11 +542,6 @@ function mergeIdentity(
   };
   if (!identity.account && !identity.organization && !identity.plan) return null;
   return identity;
-}
-
-function identityFromUnknown(value: unknown): ProviderIdentity | null {
-  const tokens = tokensFromUnknown(value);
-  return identityFromJwt(tokens?.accessToken ?? null);
 }
 
 function identityFromJwt(token: string | null): ProviderIdentity | null {
