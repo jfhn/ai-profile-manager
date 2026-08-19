@@ -410,6 +410,34 @@ describe('profile service', () => {
     );
   });
 
+  it('merges a partial identity detection into the stored one', () => {
+    const config = tempConfig();
+    const home = makeHome(config.dataDir, 'identity-sweep', true);
+    fs.writeFileSync(
+      config.profilesFile,
+      JSON.stringify({
+        version: 2,
+        profiles: [
+          storedProfile({
+            id: 'claude-profile',
+            home,
+            identity: { account: 'old@example.test', organization: 'Acme', plan: 'pro' },
+          }),
+        ],
+        defaultProfileIds: { claude: 'claude-profile' },
+      }),
+    );
+
+    const service = createProfileService(config, createEventBus(), fakeAdapters());
+    service.refreshIdentities();
+
+    // The adapter detects no organization, which must not erase the stored one.
+    const expected = { account: 'alice@example.test', organization: 'Acme', plan: 'pro' };
+    expect(service.get('claude-profile')?.identity).toEqual(expected);
+    const persisted = JSON.parse(fs.readFileSync(config.profilesFile, 'utf8'));
+    expect(persisted.profiles[0].identity).toEqual(expected);
+  });
+
   it('runs the prepare-login wizard without handling credentials', async () => {
     const config = tempConfig();
     const service = createProfileService(config, createEventBus(), fakeAdapters());

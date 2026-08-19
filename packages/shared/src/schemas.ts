@@ -177,6 +177,15 @@ export const profileStoreFileV1Schema = z.object({
   profiles: persistedProfilesSchema,
 });
 
+/**
+ * The providers the version-2 wire contract promises (docs/INTEGRATIONS.md).
+ * The annotation pins this tuple to PROVIDER_IDS, so adding a provider stops
+ * the build right here: version 2 is closed, and a fourth provider needs a new
+ * contract version rather than a silently widened enum.
+ */
+const V2_PROVIDERS: typeof PROVIDER_IDS = ['claude', 'codex', 'cursor'];
+const v2ProviderIdSchema = z.enum(V2_PROVIDERS);
+
 export const defaultProfileIdsSchema = z
   .object({
     claude: profileIdSchema.optional(),
@@ -203,7 +212,7 @@ export const profilesCliResponseSchema = z
         z
           .object({
             id: profileIdSchema,
-            provider: providerIdSchema,
+            provider: v2ProviderIdSchema,
             label: nonBlankString,
             home: z.string().min(1).refine(isPortableAbsolutePath, {
               message: 'profile homes must be absolute paths',
@@ -221,7 +230,7 @@ export const profilesCliResponseSchema = z
 const targetProfileSummarySchema = z
   .object({
     id: profileIdSchema,
-    provider: providerIdSchema,
+    provider: v2ProviderIdSchema,
     label: nonBlankString,
     status: z.enum(['pending', 'active', 'error']),
     enabled: z.boolean(),

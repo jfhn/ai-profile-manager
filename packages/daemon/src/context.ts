@@ -28,6 +28,11 @@ export interface EventBus {
 }
 
 export interface ProfileService {
+  /**
+   * Re-read the detected identity of every active profile. Touches disk per
+   * profile, so the daemon runs it once after it is already serving.
+   */
+  refreshIdentities(): void;
   list(): Profile[];
   get(id: string): Profile | null;
   defaults(): DefaultProfileIds;

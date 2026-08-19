@@ -49,13 +49,6 @@ export function createProfileService(
     for (const provider of PROVIDER_IDS) {
       if (ensureDefault(provider)) changed = true;
     }
-    profiles = profiles.map((profile) => {
-      if (profile.status !== 'active') return profile;
-      const detected = safelyDetectIdentity(adapterFor(profile.provider), profile.home);
-      if (!detected || identitiesEqual(detected, profile.identity)) return profile;
-      changed = true;
-      return { ...profile, identity: detected };
-    });
     if (changed) persist();
   }
 
@@ -157,6 +150,22 @@ export function createProfileService(
   }
 
   return {
+    refreshIdentities() {
+      let changed = false;
+      profiles = profiles.map((profile) => {
+        if (profile.status !== 'active') return profile;
+        const detected = safelyDetectIdentity(adapterFor(profile.provider), profile.home);
+        if (!detected) return profile;
+        const merged = mergeIdentity(detected, profile.identity);
+        if (identitiesEqual(merged, profile.identity)) return profile;
+        changed = true;
+        return { ...profile, identity: merged };
+      });
+      if (!changed) return;
+      persist();
+      events.emit({ type: 'profiles-changed' });
+    },
+
     list() {
       return [...profiles].sort(
         (left, right) =>
@@ -564,6 +573,22 @@ function safelyDetectIdentity(adapter: ProviderAdapter, home: string): ProviderI
   } catch {
     return null;
   }
+}
+
+/**
+ * A detection is authoritative about the fields it finds, never about the ones
+ * it misses: a removed cli-config.json only means the organization is not
+ * visible right now. A null field therefore keeps whatever the store knew.
+ */
+function mergeIdentity(
+  detected: ProviderIdentity,
+  stored: ProviderIdentity | null,
+): ProviderIdentity {
+  return {
+    account: detected.account ?? stored?.account ?? null,
+    organization: detected.organization ?? stored?.organization ?? null,
+    plan: detected.plan ?? stored?.plan ?? null,
+  };
 }
 
 function identitiesEqual(left: ProviderIdentity | null, right: ProviderIdentity | null): boolean {

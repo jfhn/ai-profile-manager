@@ -143,6 +143,7 @@ export async function startDaemon(config: DaemonConfig): Promise<DaemonHandle> {
 
   writeRunFile(config);
   ctx.usage.start();
+  setImmediate(() => ctx.profiles.refreshIdentities());
 
   const url = `http://${config.host}:${config.port}/?token=${config.token}`;
   let closed = false;

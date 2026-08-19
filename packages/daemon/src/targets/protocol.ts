@@ -62,19 +62,31 @@ export type AgentResponse =
   | ({ type: 'exit' } & ExitStatus)
   | { type: 'error'; code: TransportErrorCode; message: string };
 
+const targetProfileSchema = z.object({
+  id: profileIdSchema,
+  provider: providerIdSchema,
+  label: z.string(),
+  status: z.enum(['pending', 'active', 'error']),
+  enabled: z.boolean(),
+});
+
+/**
+ * A newer remote apm may list profiles of a provider this build does not know.
+ * Parsing per element drops only those entries; an all-or-nothing array would
+ * fail the whole response and make every profile on that target unreachable.
+ */
+const targetProfilesSchema = z.array(z.unknown()).transform((entries) =>
+  entries.flatMap((entry) => {
+    const parsed = targetProfileSchema.safeParse(entry);
+    return parsed.success ? [parsed.data] : [];
+  }),
+);
+
 export const agentResponseSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('ready'), handleId: z.string().optional() }),
   z.object({
     type: z.literal('profiles'),
-    profiles: z.array(
-      z.object({
-        id: profileIdSchema,
-        provider: providerIdSchema,
-        label: z.string(),
-        status: z.enum(['pending', 'active', 'error']),
-        enabled: z.boolean(),
-      }),
-    ),
+    profiles: targetProfilesSchema,
   }),
   z.object({
     type: z.literal('result'),
