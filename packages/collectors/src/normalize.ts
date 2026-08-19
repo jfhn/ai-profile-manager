@@ -58,17 +58,22 @@ export function clampPercent(value: number | null): number | null {
 }
 
 export function safeReason(value: unknown): string {
-  return (readString(value) ?? 'Unavailable')
-    .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, '[redacted credential]')
-    .replace(/WorkosCursorSessionToken=([^;\s]+)/gi, 'WorkosCursorSessionToken=[redacted]')
-    .replace(/auth=([^;\s]+)/gi, 'auth=[redacted]')
-    .replace(
-      /(access_?token|refresh_?token|authCookie|Authorization|Cookie)["':=\s]+[^,\s}]+/gi,
-      'credential=[redacted]',
-    )
-    .replace(/\s+/g, ' ')
-    .trim()
-    .slice(0, 180);
+  return (
+    (readString(value) ?? 'Unavailable')
+      .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, '[redacted credential]')
+      .replace(/WorkosCursorSessionToken=([^;\s]+)/gi, 'WorkosCursorSessionToken=[redacted]')
+      .replace(/auth=([^;\s]+)/gi, 'auth=[redacted]')
+      .replace(
+        /(access_?token|refresh_?token|authCookie|Authorization|Cookie)["':=\s]+[^,\s}]+/gi,
+        'credential=[redacted]',
+      )
+      // A JWT carries the session on its own, so an unlabelled one in an error
+      // message is as sensitive as a labelled one.
+      .replace(/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g, '[redacted]')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 180)
+  );
 }
 
 export function normalizeTimestamp(value: unknown): string | null {

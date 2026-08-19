@@ -68,6 +68,12 @@ function writeStateDb(tokens: {
   return dbPath;
 }
 
+function writeIdeValue(dbPath: string, key: string, value: string): void {
+  const db = new DatabaseSync(dbPath);
+  db.prepare('INSERT OR REPLACE INTO ItemTable (key, value) VALUES (?, ?)').run(key, value);
+  db.close();
+}
+
 function usagePayload(): unknown {
   return {
     membershipType: 'ultra',
@@ -408,6 +414,92 @@ describe('cursorAdapter', () => {
     expect(cursorAdapter.hasCredentials(home)).toBe(false);
   });
 
+  it('drops refreshed tokens when the auth file that seeded them is deleted, leftover sibling or not', async () => {
+    const { home, cache } = setupHome();
+    const authFile = writeAuth(home, {
+      accessToken: 'stale-access',
+      refreshToken: 'refresh-secret',
+    });
+    fs.mkdirSync(path.join(home, 'cursor'));
+    fs.writeFileSync(
+      path.join(home, 'cursor', 'auth.json'),
+      JSON.stringify({ accessToken: 'leftover-access' }),
+    );
+    await cursorAdapter.collectUsage({
+      home,
+      cacheDir: cache,
+      allowNetwork: true,
+      now,
+      fetchImpl: async (url, init) => {
+        if (String(url) === REFRESH_URL) {
+          return new Response(JSON.stringify({ access_token: 'rotated-access' }), { status: 200 });
+        }
+        const headers = init?.headers as Record<string, string>;
+        if (headers.Authorization === 'Bearer stale-access') {
+          return new Response('nope', { status: 401 });
+        }
+        return new Response(JSON.stringify(usagePayload()), { status: 200 });
+      },
+    });
+
+    fs.rmSync(authFile);
+    const used: string[] = [];
+    await cursorAdapter.collectUsage({
+      home,
+      cacheDir: cache,
+      allowNetwork: true,
+      force: true,
+      now: now + 1,
+      fetchImpl: async (_url, init) => {
+        used.push((init?.headers as Record<string, string>).Authorization);
+        return new Response(JSON.stringify(usagePayload()), { status: 200 });
+      },
+    });
+    expect(used).toEqual(['Bearer leftover-access']);
+  });
+
+  it('keeps refreshed IDE tokens across unrelated state.vscdb writes', async () => {
+    const { home, cache } = setupHome();
+    const dbPath = writeStateDb({ accessToken: 'stale-access', refreshToken: 'refresh-secret' });
+    await cursorAdapter.collectUsage({
+      home,
+      cacheDir: cache,
+      allowNetwork: true,
+      now,
+      fetchImpl: async (url, init) => {
+        if (String(url) === REFRESH_URL) {
+          return new Response(JSON.stringify({ access_token: 'rotated-access' }), { status: 200 });
+        }
+        const headers = init?.headers as Record<string, string>;
+        if (headers.Authorization === 'Bearer stale-access') {
+          return new Response('nope', { status: 401 });
+        }
+        return new Response(JSON.stringify(usagePayload()), { status: 200 });
+      },
+    });
+
+    writeIdeValue(dbPath, 'someOtherSetting', 'changed');
+    const used: string[] = [];
+    const collect = async () =>
+      cursorAdapter.collectUsage({
+        home,
+        cacheDir: cache,
+        allowNetwork: true,
+        force: true,
+        now: now + 1,
+        fetchImpl: async (_url, init) => {
+          used.push((init?.headers as Record<string, string>).Authorization);
+          return new Response(JSON.stringify(usagePayload()), { status: 200 });
+        },
+      });
+    await collect();
+
+    // A new IDE login does replace them.
+    writeIdeValue(dbPath, 'cursorAuth/accessToken', 'ide-relogin');
+    await collect();
+    expect(used).toEqual(['Bearer rotated-access', 'Bearer ide-relogin']);
+  });
+
   it('does not mix IDE identity into a home that already has auth.json', () => {
     const { home } = setupHome();
     writeAuth(home, { accessToken: 'opaque-not-a-jwt', refreshToken: 'refresh-secret' });
@@ -525,6 +617,52 @@ describe('cursorAdapter', () => {
       },
     });
     expect(result.error).toBe('WorkosCursorSessionToken=[redacted]; auth=[redacted]');
+  });
+
+  it('treats a network error carrying a token as transient and still serves the cache', async () => {
+    const { home, cache } = setupHome();
+    writeAuth(home, { accessToken: SECRET });
+    fs.mkdirSync(cache, { recursive: true });
+    fs.writeFileSync(
+      path.join(cache, 'cursor-usage.json'),
+      JSON.stringify({
+        updatedAt: new Date(now - 10 * 60_000).toISOString(),
+        usage: usagePayload(),
+      }),
+    );
+    const result = await cursorAdapter.collectUsage({
+      home,
+      cacheDir: cache,
+      allowNetwork: true,
+      now,
+      fetchImpl: async () => {
+        throw new Error(`connect ECONNREFUSED api2.cursor.sh (Bearer ${SECRET})`);
+      },
+    });
+    expect(result.failureKind).toBe('error');
+    expect(result.cacheStatus).toBe('stale-cache');
+    expect(result.windows[0]?.id).toBe('cursor_models');
+    expect(JSON.stringify(result)).not.toContain(SECRET);
+  });
+
+  it('does not serve fresh cache once the credentials are gone', async () => {
+    const { home, cache } = setupHome();
+    fs.mkdirSync(cache, { recursive: true });
+    fs.writeFileSync(
+      path.join(cache, 'cursor-usage.json'),
+      JSON.stringify({ updatedAt: new Date(now - 60_000).toISOString(), usage: usagePayload() }),
+    );
+    const result = await cursorAdapter.collectUsage({
+      home,
+      cacheDir: cache,
+      allowNetwork: true,
+      now,
+      fetchImpl: async () => {
+        throw new Error('network should not run');
+      },
+    });
+    expect(result.failureKind).toBe('auth');
+    expect(result.windows).toEqual([]);
   });
 
   it('serves cache when network is disabled', async () => {

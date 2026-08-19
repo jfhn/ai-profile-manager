@@ -45,12 +45,18 @@ interface CursorTokens {
   refreshToken: string | null;
 }
 
-/** Which store the tokens came from; a remembered pair is validated against it. */
-type TokenSource = 'auth-file' | 'ide-db';
+/**
+ * Where the tokens were read from, with the evidence a remembered pair is
+ * re-checked against: the exact auth file plus its mtime at read time, or the
+ * access token the IDE database held when it seeded the pair.
+ */
+type TokenOrigin =
+  | { store: 'auth-file'; file: string; mtimeMs: number }
+  | { store: 'ide-db'; seedAccessToken: string };
 
 interface HomeTokens {
   tokens: CursorTokens;
-  source: TokenSource;
+  origin: TokenOrigin;
 }
 
 interface RefreshOutcome {
@@ -119,7 +125,14 @@ async function collectCursorUsage(ctx: CollectContext): Promise<CollectResult> {
     // A user-initiated refresh means "check again now": it skips the fresh
     // cache and the error cooldown alike.
     const forceFetch = ctx.force === true;
-    if (!forceFetch && cached && usageCache.ageMs <= USAGE_TTL_MS) return cached;
+    if (
+      !forceFetch &&
+      cached &&
+      usageCache.ageMs <= USAGE_TTL_MS &&
+      credentialsPresent(ctx.home, ctx.defaultHome)
+    ) {
+      return cached;
+    }
 
     const credentials = tokensForHome(ctx.home, ctx.defaultHome);
     if (!credentials) {
@@ -154,9 +167,13 @@ async function collectCursorUsage(ctx: CollectContext): Promise<CollectResult> {
       });
       return live;
     }
-    const reason = fetched.reason ?? 'Cursor usage endpoint returned no recognizable usage windows';
+    // Classify before redacting: the replacement text says "credential", which
+    // would turn every network error into a revoked-login verdict.
+    const rawReason =
+      fetched.reason ?? 'Cursor usage endpoint returned no recognizable usage windows';
+    const kind = failureKind(rawReason);
+    const reason = safeReason(rawReason);
     await writeUsageError(usageFile, usageCache, reason, nowMs);
-    const kind = failureKind(reason);
     const cachedFallback =
       kind === 'auth'
         ? null
@@ -173,12 +190,12 @@ async function collectCursorUsage(ctx: CollectContext): Promise<CollectResult> {
         stale: true,
         staleReason: reason,
         failureKind: kind,
-        error: safeReason(reason),
+        error: reason,
       };
     }
     return failed(reason, kind ?? 'error');
   } catch (error) {
-    return failed(safeReason(error instanceof Error ? error.message : error), 'error');
+    return failed(error instanceof Error ? error.message : String(error), 'error');
   }
 }
 
@@ -195,7 +212,7 @@ async function fetchCursorUsage(
     requestTokenRefresh(ctx, credentials.tokens),
   );
   if (!refreshed.tokens) return { usage: null, reason: refreshed.reason };
-  rememberTokens(ctx.home, refreshed.tokens, credentials.source);
+  rememberTokens(ctx.home, refreshed.tokens, credentials.origin);
   const retry = await usageRequest(ctx, refreshed.tokens.accessToken);
   return retry.status === 401
     ? { usage: null, reason: 'Cursor usage endpoint rejected credentials' }
@@ -230,12 +247,13 @@ async function usageRequest(
     case 'timeout':
       return { status: null, usage: null, reason: 'Cursor usage endpoint timed out' };
     case 'failed':
-      return {
-        status: null,
-        usage: null,
-        reason: safeReason(outcome.error instanceof Error ? outcome.error.message : outcome.error),
-      };
+      return { status: null, usage: null, reason: errorText(outcome.error) };
   }
+}
+
+/** Raw, so failure classification is not confused by redaction text. */
+function errorText(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 const refreshInFlight = new Map<string, Promise<RefreshOutcome>>();
@@ -273,10 +291,7 @@ async function requestTokenRefresh(
     case 'timeout':
       return { tokens: null, reason: 'Cursor token refresh timed out' };
     case 'failed':
-      return {
-        tokens: null,
-        reason: safeReason(outcome.error instanceof Error ? outcome.error.message : outcome.error),
-      };
+      return { tokens: null, reason: errorText(outcome.error) };
   }
 }
 
@@ -340,46 +355,45 @@ export function cursorWindows(data: unknown, nowMs: number): UsageWindow[] {
   return windows;
 }
 
-interface LiveTokenCache {
-  tokens: CursorTokens;
-  source: TokenSource;
-  cachedAtMs: number;
-}
-
 /** Rotated tokens stay in memory only, keyed by resolved home. */
-const liveTokens = new Map<string, LiveTokenCache>();
+const liveTokens = new Map<string, HomeTokens>();
 
-function rememberTokens(home: string, tokens: CursorTokens, source: TokenSource): void {
-  liveTokens.set(path.resolve(home), { tokens, source, cachedAtMs: Date.now() });
+function rememberTokens(home: string, tokens: CursorTokens, origin: TokenOrigin): void {
+  liveTokens.set(path.resolve(home), { tokens, origin });
 }
 
 function tokensForHome(home: string, defaultHome?: string): HomeTokens | null {
   const key = path.resolve(home);
   const live = liveTokens.get(key);
   if (live) {
-    if (rememberedTokensStillValid(live, home)) {
-      return { tokens: live.tokens, source: live.source };
-    }
+    if (rememberedTokensStillValid(live.origin)) return live;
     liveTokens.delete(key);
   }
-  const fromFile = tokensFromAuthFiles(home);
-  if (fromFile) return { tokens: fromFile, source: 'auth-file' };
-  const fromIde = ideTokensIfDefaultHome(home, defaultHome);
-  return fromIde ? { tokens: fromIde, source: 'ide-db' } : null;
+  return authFileTokens(home) ?? ideTokensIfDefaultHome(home, defaultHome);
 }
 
 /**
- * Remembered tokens live only as long as the store they were refreshed from is
- * unchanged. A newer store means the CLI or IDE rotated on its own, and a
- * vanished one means the profile logged out — in both cases the remembered pair
- * would outlive the session it belongs to.
+ * Remembered tokens live only as long as the exact store that seeded them is
+ * unchanged. For the CLI, a vanished file means logout and a newer mtime means
+ * the CLI rotated on its own — checking the sibling auth files instead would
+ * let a stale leftover keep a logged-out session alive. The IDE rewrites
+ * state.vscdb constantly for unrelated reasons, so only a changed access token
+ * counts there; the mtime alone would drop a valid pair and replay a
+ * single-use refresh token.
  */
-function rememberedTokensStillValid(live: LiveTokenCache, home: string): boolean {
-  const mtimeMs =
-    live.source === 'auth-file'
-      ? latestAuthMtime(home)
-      : fs.statSync(ideStateDbPath(), { throwIfNoEntry: false })?.mtimeMs;
-  return mtimeMs !== undefined && mtimeMs <= live.cachedAtMs;
+function rememberedTokensStillValid(origin: TokenOrigin): boolean {
+  if (origin.store === 'auth-file') {
+    const mtimeMs = fs.statSync(origin.file, { throwIfNoEntry: false })?.mtimeMs;
+    return mtimeMs !== undefined && mtimeMs <= origin.mtimeMs;
+  }
+  const values = readIdeValues(ideStateDbPath(), [IDE_ACCESS_TOKEN_KEY]);
+  return values.get(IDE_ACCESS_TOKEN_KEY) === origin.seedAccessToken;
+}
+
+/** Stat only: enough to notice a logout without reading files or opening sqlite. */
+function credentialsPresent(home: string, defaultHome?: string): boolean {
+  if (authFiles(home).some((file) => fs.existsSync(file))) return true;
+  return isDefaultHome(home, defaultHome) && fs.existsSync(ideStateDbPath());
 }
 
 /** Paths the Cursor CLI file store actually uses inside a bound home. */
@@ -391,21 +405,14 @@ function authFiles(home: string): string[] {
   ];
 }
 
-function tokensFromAuthFiles(home: string): CursorTokens | null {
+function authFileTokens(home: string): HomeTokens | null {
   for (const file of authFiles(home)) {
+    const mtimeMs = fs.statSync(file, { throwIfNoEntry: false })?.mtimeMs;
+    if (mtimeMs === undefined) continue;
     const tokens = tokensFromUnknown(readJsonSync(file));
-    if (tokens) return tokens;
+    if (tokens) return { tokens, origin: { store: 'auth-file', file, mtimeMs } };
   }
   return null;
-}
-
-function latestAuthMtime(home: string): number | undefined {
-  let latest: number | undefined;
-  for (const file of authFiles(home)) {
-    const mtime = fs.statSync(file, { throwIfNoEntry: false })?.mtimeMs;
-    if (mtime !== undefined && (latest === undefined || mtime > latest)) latest = mtime;
-  }
-  return latest;
 }
 
 function tokensFromUnknown(value: unknown): CursorTokens | null {
@@ -415,12 +422,15 @@ function tokensFromUnknown(value: unknown): CursorTokens | null {
   return { accessToken, refreshToken: readString(value.refreshToken) };
 }
 
-function ideTokensIfDefaultHome(home: string, defaultHome?: string): CursorTokens | null {
+function ideTokensIfDefaultHome(home: string, defaultHome?: string): HomeTokens | null {
   if (!isDefaultHome(home, defaultHome)) return null;
   const values = readIdeValues(ideStateDbPath(), [IDE_ACCESS_TOKEN_KEY, IDE_REFRESH_TOKEN_KEY]);
   const accessToken = values.get(IDE_ACCESS_TOKEN_KEY);
   if (!accessToken) return null;
-  return { accessToken, refreshToken: values.get(IDE_REFRESH_TOKEN_KEY) ?? null };
+  return {
+    tokens: { accessToken, refreshToken: values.get(IDE_REFRESH_TOKEN_KEY) ?? null },
+    origin: { store: 'ide-db', seedAccessToken: accessToken },
+  };
 }
 
 // The path itself must be the default home. A managed directory that merely
@@ -599,16 +609,18 @@ function cooldownFallback(cache: UsageCache, nowMs: number): CollectResult {
   };
 }
 
+/** Redacts on the way in, so no caller can put a raw fetch error on a snapshot. */
 function failed(reason: string, kind: NonNullable<CollectResult['failureKind']>): CollectResult {
+  const safe = safeReason(reason);
   return {
     windows: [],
     source: 'Cursor usage endpoint',
     cacheStatus: 'error',
     dataUpdatedAt: null,
     stale: true,
-    staleReason: reason,
+    staleReason: safe,
     failureKind: kind,
-    error: safeReason(reason),
+    error: safe,
     planType: null,
     retryAfterSeconds: null,
   };
