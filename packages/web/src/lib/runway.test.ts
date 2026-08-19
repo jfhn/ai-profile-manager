@@ -5,6 +5,7 @@ import {
   buildVerdict,
   burnPace,
   compareByUrgency,
+  formatPercent,
   groupByProvider,
   profileView,
   readCollapsed,
@@ -109,6 +110,16 @@ describe('windowView', () => {
     const view = windowView(makeWindow({ remainingPercent: null, usedPercent: 90 }), NOW);
     expect(view.remaining).toBe(10);
     expect(view.tone).toBe('destructive');
+  });
+});
+
+describe('formatPercent', () => {
+  it('keeps whole percents whole and caps fractions at two decimal places', () => {
+    expect(formatPercent(100)).toBe('100');
+    expect(formatPercent(50)).toBe('50');
+    expect(formatPercent(99.5445)).toBe('99.54');
+    expect(formatPercent(0.4555)).toBe('0.46');
+    expect(formatPercent(0)).toBe('0');
   });
 });
 

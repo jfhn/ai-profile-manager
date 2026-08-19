@@ -62,15 +62,37 @@ export const cursorAdapter: ProviderAdapter = {
   hasCredentials: (home) => Boolean(tokensForHome(home)?.accessToken),
   detectIdentity: (home) => cursorIdentity(home),
   collectUsage: async (ctx) => collectCursorUsage(ctx),
-  env: (home) => ({
-    CURSOR_CONFIG_DIR: home,
-    AGENT_CLI_CREDENTIAL_STORE: 'file',
-  }),
-  loginCommand: (home) =>
-    `CURSOR_CONFIG_DIR=${home} AGENT_CLI_CREDENTIAL_STORE=file cursor-agent login`,
+  env: (home) => cursorChildEnv(home),
+  loginCommand: (home) => {
+    const assignments = Object.entries(cursorChildEnv(home))
+      .map(([key, value]) => `${key}=${value}`)
+      .join(' ');
+    return `${assignments} cursor-agent login`;
+  },
   loginArgv: () => ['cursor-agent', 'login'],
   defaultHome: () => path.join(os.homedir(), '.cursor'),
 };
+
+/**
+ * `CURSOR_CONFIG_DIR` isolates `cli-config.json`. The file credential store
+ * ignores it and writes `$XDG_CONFIG_HOME/cursor/auth.json` on Linux
+ * (`%APPDATA%/Cursor/auth.json` on Windows). Point those roots at the profile
+ * home so login tokens land inside it.
+ */
+function cursorChildEnv(home: string): Record<string, string> {
+  if (process.platform === 'win32') {
+    return {
+      CURSOR_CONFIG_DIR: home,
+      AGENT_CLI_CREDENTIAL_STORE: 'file',
+      APPDATA: home,
+    };
+  }
+  return {
+    CURSOR_CONFIG_DIR: home,
+    AGENT_CLI_CREDENTIAL_STORE: 'file',
+    XDG_CONFIG_HOME: home,
+  };
+}
 
 async function collectCursorUsage(ctx: CollectContext): Promise<CollectResult> {
   const nowMs = ctx.now ?? Date.now();
@@ -395,16 +417,40 @@ function tokensForHome(home: string, defaultHome?: string): CursorTokens | null 
   const key = path.resolve(home);
   const live = liveTokens.get(key);
   if (live) {
-    const authMtime = fs.statSync(path.join(home, 'auth.json'), { throwIfNoEntry: false })?.mtimeMs;
+    const authMtime = latestAuthMtime(home);
     if (authMtime !== undefined && authMtime > live.cachedAtMs) {
       liveTokens.delete(key);
     } else {
       return live.tokens;
     }
   }
-  return (
-    tokensFromAuthFile(path.join(home, 'auth.json')) ?? ideTokensIfDefaultHome(home, defaultHome)
-  );
+  return tokensFromAuthFiles(home) ?? ideTokensIfDefaultHome(home, defaultHome);
+}
+
+/** Paths the Cursor CLI file store actually uses inside a bound home. */
+function authFiles(home: string): string[] {
+  return [
+    path.join(home, 'auth.json'),
+    path.join(home, 'cursor', 'auth.json'),
+    path.join(home, 'Cursor', 'auth.json'),
+  ];
+}
+
+function tokensFromAuthFiles(home: string): CursorTokens | null {
+  for (const file of authFiles(home)) {
+    const tokens = tokensFromAuthFile(file);
+    if (tokens) return tokens;
+  }
+  return null;
+}
+
+function latestAuthMtime(home: string): number | undefined {
+  let latest: number | undefined;
+  for (const file of authFiles(home)) {
+    const mtime = fs.statSync(file, { throwIfNoEntry: false })?.mtimeMs;
+    if (mtime !== undefined && (latest === undefined || mtime > latest)) latest = mtime;
+  }
+  return latest;
 }
 
 function tokensFromAuthFile(file: string): CursorTokens | null {
@@ -520,20 +566,55 @@ function sqliteText(value: unknown): string | null {
 }
 
 function cursorIdentity(home: string): ProviderIdentity | null {
-  const authFile = path.join(home, 'auth.json');
-  if (fs.existsSync(authFile)) return identityFromUnknown(readJsonSync(authFile));
+  const hasAuth = authFiles(home).some((file) => fs.existsSync(file));
+  if (hasAuth) {
+    // CLI file-store session: jwt email if present, else cli-config written
+    // by the same login. Do not fill gaps from the IDE database.
+    return mergeIdentity(jwtIdentityFromAuthFiles(home), identityFromCliConfig(home));
+  }
   if (!isDefaultHome(home)) return null;
   const db = ideStateDbPath();
   const token = readIdeValue(db, 'cursorAuth/accessToken');
-  const fromJwt = identityFromJwt(token);
+  const fromIdeJwt = identityFromJwt(token);
   const email = readIdeValue(db, 'cursorAuth/cachedEmail');
   const plan = readIdeValue(db, 'cursorAuth/stripeMembershipType');
-  if (!fromJwt && !email && !plan) return null;
-  return {
-    account: fromJwt?.account ?? email,
-    organization: fromJwt?.organization ?? null,
-    plan: fromJwt?.plan ?? plan,
+  return mergeIdentity(fromIdeJwt, {
+    account: email,
+    organization: null,
+    plan,
+  });
+}
+
+function jwtIdentityFromAuthFiles(home: string): ProviderIdentity | null {
+  for (const authFile of authFiles(home)) {
+    const identity = identityFromUnknown(readJsonSync(authFile));
+    if (identity) return identity;
+  }
+  return null;
+}
+
+function identityFromCliConfig(home: string): ProviderIdentity | null {
+  const data = readJsonSync(path.join(home, 'cli-config.json'));
+  if (!isRecord(data) || !isRecord(data.authInfo)) return null;
+  const info = data.authInfo;
+  return mergeIdentity(null, {
+    account: readString(info.email),
+    organization: readString(info.teamName),
+    plan: readString(info.plan) ?? readString(info.membershipType),
+  });
+}
+
+function mergeIdentity(
+  primary: ProviderIdentity | null,
+  fallback: ProviderIdentity | null,
+): ProviderIdentity | null {
+  const identity = {
+    account: primary?.account ?? fallback?.account ?? null,
+    organization: primary?.organization ?? fallback?.organization ?? null,
+    plan: primary?.plan ?? fallback?.plan ?? null,
   };
+  if (!identity.account && !identity.organization && !identity.plan) return null;
+  return identity;
 }
 
 function identityFromUnknown(value: unknown): ProviderIdentity | null {
@@ -544,7 +625,7 @@ function identityFromUnknown(value: unknown): ProviderIdentity | null {
 function identityFromJwt(token: string | null): ProviderIdentity | null {
   const claims = jwtClaims(token);
   if (!claims) return null;
-  const account = readString(claims.email) ?? readString(claims.sub);
+  const account = readString(claims.email);
   const plan = readString(claims.plan) ?? readString(claims.membershipType);
   if (!account && !plan) return null;
   return { account, organization: readString(claims.organization), plan };
@@ -572,9 +653,9 @@ async function credentialsChangedSince(
 ): Promise<boolean> {
   const errorMs = Date.parse(errorAt ?? '');
   if (!Number.isFinite(errorMs)) return false;
-  // Only auth.json. state.vscdb is rewritten constantly while the IDE is open,
-  // so its mtime would disable the error cooldown on every scheduler tick.
-  const files = [path.join(home, 'auth.json')];
+  // Only CLI auth files. state.vscdb is rewritten constantly while the IDE is
+  // open, so its mtime would disable the error cooldown on every scheduler tick.
+  const files = authFiles(home);
   for (const file of files) {
     const stat = await statOrNull(file);
     const mtimeMs = Number(stat?.mtimeMs ?? NaN);

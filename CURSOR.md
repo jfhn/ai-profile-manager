@@ -13,7 +13,7 @@ isolation and not Cursor-as-a-consumer of Claude/Codex profiles.
 | Product                      | Full Claude/Codex clone, as far as Cursor actually allows                                                                                         |
 | Usage windows                | Monthly `cursor_models` and `other_models` only                                                                                                   |
 | Integrations                 | Breaking OK — bump `apm profiles --json` (and target-scoped profiles) to schemaVersion 2 with `cursor` in the enum                                |
-| Homes                        | `CURSOR_CONFIG_DIR` + `AGENT_CLI_CREDENTIAL_STORE=file` so `auth.json` lands in the home                                                          |
+| Homes                        | `CURSOR_CONFIG_DIR` + `AGENT_CLI_CREDENTIAL_STORE=file` + `XDG_CONFIG_HOME` (Linux) / `APPDATA` (Windows) so `auth.json` lands in the home |
 | Default home                 | `~/.cursor`                                                                                                                                       |
 | IDE fallback                 | Only for that external default home, if `auth.json` is missing: read the IDE session token from `state.vscdb`. Never a profile home, never purged |
 | Login / default app          | `cursor-agent login` / `cursor-agent`. `agent` is the same provider app                                                                           |
@@ -56,20 +56,28 @@ capabilities: {
 env(home): {
   CURSOR_CONFIG_DIR: home
   AGENT_CLI_CREDENTIAL_STORE: 'file'
+  XDG_CONFIG_HOME: home   // Linux: file store writes $XDG_CONFIG_HOME/cursor/auth.json
+  // APPDATA: home        // Windows
 }
 loginArgv(): ['cursor-agent', 'login']
-loginCommand(home): `CURSOR_CONFIG_DIR=${home} AGENT_CLI_CREDENTIAL_STORE=file cursor-agent login`
+loginCommand(home): env assignments + `cursor-agent login`
 defaultHome(): ~/.cursor
 ```
 
 `hasCredentials` / `detectIdentity` are local-files only. They look at
-`auth.json` under `home`. If that file is missing **and** `home` is the
+`auth.json` under `home`, or `home/cursor/auth.json` (Linux file store when
+`XDG_CONFIG_HOME` is the home). If that file is missing **and** `home` is the
 adapter’s `defaultHome()`, they may read the IDE token from `state.vscdb`
 (see below). Compare with `fs.realpathSync` (missing-path fallback to
 `path.resolve`) so a symlinked `~/.cursor` still matches the stored
 external home. Managed homes never take that path.
 
-Identity from local JWT claims when present (email / sub). No network in
+Identity from the same place as the credentials. A home with CLI
+`auth.json` uses JWT `email` if present, otherwise `cli-config.json`
+`authInfo.email` / `teamName` from that login. Do not use JWT `sub`
+(`auth0|user_…`) as the dashboard account. The default home without
+`auth.json` uses the IDE `cachedEmail`, not `~/.cursor/cli-config.json`
+(that file can be a different CLI account). No network in
 `detectIdentity`. Plan label can wait for a usage fetch (`planType` on
 the snapshot, `identity.plan` when the adapter can see it locally).
 
@@ -77,7 +85,8 @@ the snapshot, `identity.plan` when the adapter can see it locally).
 
 Order, first hit wins:
 
-1. `auth.json` in the profile home (CLI file store). Parse conservatively:
+1. `auth.json` in the profile home, or `cursor/auth.json` / `Cursor/auth.json`
+   under it (CLI file store). Parse conservatively:
    accept a bearer/JWT string from known keys (`accessToken`, `token`,
    nested auth objects). Never log the value.
 2. Default home only: Linux
@@ -130,8 +139,9 @@ Map two windows, both `resetAt` = `billingCycleEnd`:
 
 If neither pair of fields exists, return an error snapshot, not a guess.
 Clamp percents to 0..100. `remainingPercent` = 100 − used when used is
-known. `planType` from membership/plan name (e.g. `ultra`). Source string
-names the endpoint, not “IDE UI”.
+known. Pool percents are often fractional; the dashboard shows at most
+two decimal places. `planType` from membership/plan name (e.g. `ultra`).
+Source string names the endpoint, not “IDE UI”.
 
 Runway: add both ids to `WINDOW_DURATION_MS` / labels / order as monthly
 (existing 30-day `monthly` length). Burn pace is approximate; do not
@@ -176,8 +186,8 @@ else (e.g. `▸`). Fake-daemon `loginCommand` must include the Cursor form.
 
 `packages/collectors/src/adapters/cursor.test.ts`:
 
-- `auth.json` present → credentials, env, login argv
-- missing `auth.json` on a non-default home → no credentials, no sqlite
+- `auth.json` (or `cursor/auth.json`) present → credentials, env, login argv
+- missing those files on a non-default home → no credentials, no sqlite
 - default home + fixture `state.vscdb` → credentials and identity; collect
   uses that token
 - default home via symlink → fallback still runs; a non-default home that
@@ -207,7 +217,9 @@ README, PLAN.md implemented scope, `docs/API.md` discovery line,
 (`CURSOR_CONFIG_DIR` next to the existing two). Headless onboarding:
 `apm profile add cursor`; extra args after `--` go to `cursor-agent login`.
 Note that `AGENT_CLI_CREDENTIAL_STORE=file` writes an owner-only
-unencrypted `auth.json` (Cursor’s own file-store tradeoff). IDE fallback
+unencrypted `auth.json`. `CURSOR_CONFIG_DIR` alone is not enough: on Linux the
+CLI writes `$XDG_CONFIG_HOME/cursor/auth.json`, so apm also sets
+`XDG_CONFIG_HOME` to the profile home. IDE fallback
 is default-home only.
 
 ## Files (expected)

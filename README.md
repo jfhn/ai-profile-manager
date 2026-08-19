@@ -102,7 +102,7 @@ terminal. On an SSH-only machine no dashboard is required. It starts (or
 reuses) the daemon without opening a browser, creates a fresh managed home,
 runs the provider's own login command in your terminal bound to that home
 (`CLAUDE_CONFIG_DIR` / `CODEX_HOME` / `CURSOR_CONFIG_DIR`, plus
-`AGENT_CLI_CREDENTIAL_STORE=file` for Cursor), waits for credentials to appear,
+`AGENT_CLI_CREDENTIAL_STORE=file` and `XDG_CONFIG_HOME` for Cursor), waits for credentials to appear,
 and activates the profile with `--label <label>` or a label suggested from the
 detected account.
 
@@ -123,8 +123,10 @@ copies credentials:
   (must be enabled in ChatGPT security/workspace settings) or fully
   non-interactively via `-- --with-api-key` (pipe the key on stdin). Note
   that API-key logins carry no account identity, so pass `--label`.
-- **Cursor** login is `cursor-agent login`. The file store writes an
-  owner-only unencrypted `auth.json`. That is Cursor's own tradeoff. There
+- **Cursor** login is `cursor-agent login`. `CURSOR_CONFIG_DIR` isolates
+  `cli-config.json`; the file store writes `$XDG_CONFIG_HOME/cursor/auth.json`,
+  so apm sets `XDG_CONFIG_HOME` to the profile home as well. That `auth.json`
+  is owner-only and unencrypted (Cursor's own tradeoff). There
   are no `CURSOR_API_KEY` profiles. An API key writes nothing into the home.
   Extra args after `--` go to `cursor-agent login`.
 - Token/env-var auth (`CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_API_KEY`) writes

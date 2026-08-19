@@ -213,7 +213,7 @@ describe('loginCommand', () => {
     expect(loginCommand({ provider: 'claude', home: '/h' })).toBe('CLAUDE_CONFIG_DIR=/h claude');
     expect(loginCommand({ provider: 'codex', home: '/h' })).toBe('CODEX_HOME=/h codex login');
     expect(loginCommand({ provider: 'cursor', home: '/h' })).toBe(
-      'CURSOR_CONFIG_DIR=/h AGENT_CLI_CREDENTIAL_STORE=file cursor-agent login',
+      'CURSOR_CONFIG_DIR=/h AGENT_CLI_CREDENTIAL_STORE=file XDG_CONFIG_HOME=/h cursor-agent login',
     );
   });
 

@@ -49,6 +49,13 @@ export function createProfileService(
     for (const provider of PROVIDER_IDS) {
       if (ensureDefault(provider)) changed = true;
     }
+    profiles = profiles.map((profile) => {
+      if (profile.status !== 'active') return profile;
+      const detected = safelyDetectIdentity(adapterFor(profile.provider), profile.home);
+      if (!detected || identitiesEqual(detected, profile.identity)) return profile;
+      changed = true;
+      return { ...profile, identity: detected };
+    });
     if (changed) persist();
   }
 
@@ -557,6 +564,14 @@ function safelyDetectIdentity(adapter: ProviderAdapter, home: string): ProviderI
   } catch {
     return null;
   }
+}
+
+function identitiesEqual(left: ProviderIdentity | null, right: ProviderIdentity | null): boolean {
+  return (
+    left?.account === right?.account &&
+    left?.organization === right?.organization &&
+    left?.plan === right?.plan
+  );
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

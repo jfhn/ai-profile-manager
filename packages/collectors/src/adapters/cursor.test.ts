@@ -38,6 +38,11 @@ function writeAuth(home: string, value: unknown): string {
   return file;
 }
 
+function jwtWith(payload: Record<string, unknown>): string {
+  const body = Buffer.from(JSON.stringify(payload)).toString('base64url');
+  return `eyJhbGciOiJub25lIn0.${body}.sig`;
+}
+
 function writeStateDb(tokens: {
   accessToken: string;
   refreshToken?: string;
@@ -80,10 +85,12 @@ describe('cursorAdapter', () => {
     expect(cursorAdapter.env(home)).toEqual({
       CURSOR_CONFIG_DIR: home,
       AGENT_CLI_CREDENTIAL_STORE: 'file',
+      XDG_CONFIG_HOME: home,
     });
     expect(cursorAdapter.loginArgv()).toEqual(['cursor-agent', 'login']);
     expect(cursorAdapter.loginCommand(home)).toContain('cursor-agent login');
     expect(cursorAdapter.loginCommand(home)).toContain(`CURSOR_CONFIG_DIR=${home}`);
+    expect(cursorAdapter.loginCommand(home)).toContain(`XDG_CONFIG_HOME=${home}`);
   });
 
   it('treats auth.json as credentials and reads identity from a JWT', () => {
@@ -96,6 +103,15 @@ describe('cursorAdapter', () => {
       organization: null,
       plan: null,
     });
+  });
+
+  it('treats the Linux file-store path cursor/auth.json as credentials', () => {
+    const { home } = setupHome();
+    const nested = path.join(home, 'cursor');
+    fs.mkdirSync(nested);
+    fs.writeFileSync(path.join(nested, 'auth.json'), JSON.stringify({ accessToken: SECRET }));
+    expect(cursorAdapter.hasCredentials(home)).toBe(true);
+    expect(cursorAdapter.detectIdentity(home)?.account).toBe('tester@example.test');
   });
 
   it('ignores the IDE database for a non-default home', () => {
@@ -282,6 +298,23 @@ describe('cursorAdapter', () => {
     ]);
   });
 
+  it('keeps fractional pool percents from the usage payload', () => {
+    const windows = cursorWindows(
+      {
+        billingCycleEnd: '2026-09-01T00:00:00.000Z',
+        planUsage: { autoPercentUsed: 0.4555, apiPercentUsed: 0 },
+      },
+      now,
+    );
+    expect(windows[0]).toEqual(
+      expect.objectContaining({ id: 'cursor_models', usedPercent: 0.4555 }),
+    );
+    expect(windows[0]?.remainingPercent).toBeCloseTo(99.5445, 4);
+    expect(windows[1]).toEqual(
+      expect.objectContaining({ id: 'other_models', usedPercent: 0, remainingPercent: 100 }),
+    );
+  });
+
   it('returns an error snapshot when the payload has no pool percents', async () => {
     const { home, cache } = setupHome();
     writeAuth(home, { accessToken: 'access-secret' });
@@ -353,6 +386,43 @@ describe('cursorAdapter', () => {
     writeAuth(home, { accessToken: 'opaque-not-a-jwt', refreshToken: 'refresh-secret' });
     writeStateDb({ accessToken: SECRET, email: 'ide@example.test', plan: 'ultra' });
     expect(cursorAdapter.detectIdentity(home)).toBeNull();
+  });
+
+  it('does not use the JWT subject as the account name', () => {
+    const { home } = setupHome();
+    writeAuth(home, { accessToken: jwtWith({ sub: 'auth0|user_noemail' }) });
+    expect(cursorAdapter.detectIdentity(home)).toBeNull();
+  });
+
+  it('reads email and team from cli-config when the JWT has no email', () => {
+    const { home } = setupHome();
+    writeAuth(home, { accessToken: jwtWith({ sub: 'auth0|user_noemail' }) });
+    fs.writeFileSync(
+      path.join(home, 'cli-config.json'),
+      JSON.stringify({
+        authInfo: { email: 'cli@example.test', teamName: 'Acme' },
+      }),
+    );
+    writeStateDb({ accessToken: SECRET, email: 'ide@example.test', plan: 'ultra' });
+    expect(cursorAdapter.detectIdentity(home)).toEqual({
+      account: 'cli@example.test',
+      organization: 'Acme',
+      plan: null,
+    });
+  });
+
+  it('uses the IDE cached email for the default home, not a leftover cli-config account', () => {
+    const { home } = setupHome();
+    fs.writeFileSync(
+      path.join(home, 'cli-config.json'),
+      JSON.stringify({ authInfo: { email: 'cli@example.test', teamName: 'Wrong Team' } }),
+    );
+    writeStateDb({ accessToken: 'opaque-not-a-jwt', email: 'ide@example.test', plan: 'ultra' });
+    expect(cursorAdapter.detectIdentity(home)).toEqual({
+      account: 'ide@example.test',
+      organization: null,
+      plan: 'ultra',
+    });
   });
 
   it('does not write the IDE database after an in-memory refresh', async () => {

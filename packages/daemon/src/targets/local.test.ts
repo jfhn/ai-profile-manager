@@ -54,6 +54,7 @@ function profiles(): Pick<ProfileService, 'list' | 'envFor'> {
         return {
           CURSOR_CONFIG_DIR: CURSOR_PROFILE.home,
           AGENT_CLI_CREDENTIAL_STORE: 'file',
+          XDG_CONFIG_HOME: CURSOR_PROFILE.home,
         };
       }
       return {};

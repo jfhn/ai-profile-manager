@@ -139,6 +139,7 @@ describe('runProfileAdd', () => {
     expect(logins[0]?.env).toEqual({
       CURSOR_CONFIG_DIR: '/data/homes/pending-1',
       AGENT_CLI_CREDENTIAL_STORE: 'file',
+      XDG_CONFIG_HOME: '/data/homes/pending-1',
     });
     expect(logs.join('\n')).toContain('apm run alice cursor-agent');
   });

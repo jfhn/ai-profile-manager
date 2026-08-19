@@ -65,6 +65,11 @@ export function remainingOf(window: UsageWindow): number | null {
   return null;
 }
 
+/** Whole percents stay whole; otherwise at most two decimal places. */
+export function formatPercent(value: number): string {
+  return Number(value.toFixed(2)).toString();
+}
+
 export interface WindowView {
   id: string;
   label: string;

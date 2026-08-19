@@ -1,4 +1,4 @@
-import type { Profile } from '@apm/shared';
+import type { Profile, UsageSnapshot } from '@apm/shared';
 import { fireEvent, render, screen, waitFor } from '@testing-library/svelte';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { profileView } from '../runway';
@@ -199,6 +199,44 @@ describe('ProfileCard: the default star', () => {
     renderCard(pending);
     expect(screen.queryByRole('button', { name: 'Set default' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Default' })).toBeNull();
+  });
+});
+
+describe('ProfileCard: remaining percents', () => {
+  it('shows up to two decimal places and keeps whole percents whole', () => {
+    const active: Profile = { ...pending, status: 'active', label: 'work', provider: 'cursor' };
+    const snapshot: UsageSnapshot = {
+      profileId: active.id,
+      windows: [
+        {
+          id: 'cursor_models',
+          label: 'Cursor Models',
+          usedPercent: 0.4555,
+          remainingPercent: 99.5445,
+          resetAt: '2026-09-01T00:00:00.000Z',
+        },
+        {
+          id: 'other_models',
+          label: 'Other Models',
+          usedPercent: 0,
+          remainingPercent: 100,
+          resetAt: '2026-09-01T00:00:00.000Z',
+        },
+      ],
+      fetchedAt: '2026-01-10T12:00:00.000Z',
+      source: 'Cursor usage endpoint cache',
+      cacheStatus: 'live',
+      dataUpdatedAt: null,
+      stale: false,
+      staleReason: null,
+      failureKind: null,
+      error: null,
+      planType: 'ultra',
+      retryAfterSeconds: null,
+    };
+    render(ProfileCard, { view: profileView(active, snapshot, Date.now()) });
+    expect(screen.getByText('99.54% left')).toBeDefined();
+    expect(screen.getByText('100% left')).toBeDefined();
   });
 });
 
