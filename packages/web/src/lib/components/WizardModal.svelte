@@ -19,7 +19,7 @@
 
   let { onclose, resumeProfileId }: Props = $props();
 
-  const PROVIDER_COPY: Partial<Record<ProviderId, { title: string; description: string }>> = {
+  const PROVIDER_COPY: Record<ProviderId, { title: string; description: string }> = {
     claude: {
       title: 'Claude Code',
       description: 'Anthropic subscription account, logged in through the claude CLI.',
@@ -39,17 +39,8 @@
 
   const providers = $derived(
     app.providers.length > 0
-      ? app.providers.map((info) => ({
-          id: info.id,
-          title: PROVIDER_COPY[info.id]?.title ?? info.label,
-          description:
-            PROVIDER_COPY[info.id]?.description ?? `Logged in through the ${info.label} CLI.`,
-        }))
-      : FALLBACK_PROVIDER_IDS.map((id) => ({
-          id,
-          title: PROVIDER_COPY[id]?.title ?? id,
-          description: PROVIDER_COPY[id]?.description ?? `Logged in through the ${id} CLI.`,
-        })),
+      ? app.providers.map((info) => ({ id: info.id, ...PROVIDER_COPY[info.id] }))
+      : FALLBACK_PROVIDER_IDS.map((id) => ({ id, ...PROVIDER_COPY[id] })),
   );
 
   const flow = new WizardFlow({

@@ -54,17 +54,19 @@
   }
 
   .claude {
-    background: color-mix(in oklab, var(--claude) 16%, transparent);
-    color: color-mix(in oklab, var(--claude) 80%, var(--tint-contrast));
+    background: color-mix(in oklab, var(--provider-claude) 16%, transparent);
+    color: color-mix(in oklab, var(--provider-claude) 80%, var(--tint-contrast));
   }
 
+  /* Off-brand on purpose: the Codex green is the success green, so a tinted
+   * Codex badge reads as a status badge next to the real ones. */
   .codex {
     background: var(--fill-10);
     color: var(--badge-fg);
   }
 
   .cursor {
-    background: color-mix(in oklab, var(--cursor) 16%, transparent);
-    color: color-mix(in oklab, var(--cursor) 80%, var(--tint-contrast));
+    background: color-mix(in oklab, var(--provider-cursor) 16%, transparent);
+    color: color-mix(in oklab, var(--provider-cursor) 80%, var(--tint-contrast));
   }
 </style>

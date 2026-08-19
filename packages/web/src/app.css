@@ -11,9 +11,12 @@
   --primary-fg: #ffffff;
   --success: #10b981;
   --warning: #f59e0b;
-  --claude: #d97757;
-  --codex: #10a37f;
-  --cursor: #5468ff;
+  /* Per-provider accent, one line per provider id. Components read it as
+   * var(--provider-<id>) with a neutral fallback, so a provider without a line
+   * here renders neutral instead of breaking the color-mix that uses it. */
+  --provider-claude: #d97757;
+  --provider-codex: #10a37f;
+  --provider-cursor: #5468ff;
   --ring: color-mix(in oklab, var(--primary) 50%, transparent);
   --mark-gradient: linear-gradient(135deg, var(--primary), #a855f7);
   --mark-gradient-error: linear-gradient(135deg, var(--destructive), #b45309);

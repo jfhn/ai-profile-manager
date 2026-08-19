@@ -149,7 +149,8 @@
 </script>
 
 <article
-  class="card {profile.provider}"
+  class="card"
+  style="--pcolor: var(--provider-{profile.provider}, var(--primary))"
   class:disabled={!profile.enabled}
   class:is-default={isDefault}
 >
@@ -370,18 +371,6 @@
 
   .card:hover {
     border-color: var(--border-hover);
-  }
-
-  .card.claude {
-    --pcolor: var(--claude);
-  }
-
-  .card.codex {
-    --pcolor: var(--codex);
-  }
-
-  .card.cursor {
-    --pcolor: var(--cursor);
   }
 
   /* The default card gets a subtle provider-tinted ring so it reads at a glance. */

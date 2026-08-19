@@ -14,7 +14,12 @@
   const initial = $derived(INITIALS[provider]);
 </script>
 
-<span class="mark {provider}" title={label} aria-hidden="true">{initial}</span>
+<span
+  class="mark"
+  style="--pcolor: var(--provider-{provider}, var(--dot-muted))"
+  title={label}
+  aria-hidden="true">{initial}</span
+>
 
 <style>
   .mark {
@@ -28,18 +33,6 @@
     font-weight: 700;
     line-height: 1;
     color: #ffffff;
-    background: var(--dot-muted);
-  }
-
-  .claude {
-    background: var(--claude);
-  }
-
-  .codex {
-    background: var(--codex);
-  }
-
-  .cursor {
-    background: var(--cursor);
+    background: var(--pcolor);
   }
 </style>

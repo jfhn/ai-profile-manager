@@ -180,7 +180,7 @@ sourced from `adapter.loginArgv()[0]` (`claude`, `codex`,
 remains a known app for provider `cursor` so a typed `agent` still
 matches.
 
-Visual tokens: `--cursor` in `app.css`, Badge tone, ProfileCard,
+Visual tokens: `--provider-cursor` in `app.css`, Badge tone, ProfileCard,
 ProviderMark. Mark must not collide with Codex’s `C` — use something
 else (e.g. `▸`). Fake-daemon `loginCommand` must include the Cursor form.
 
