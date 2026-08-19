@@ -7,6 +7,18 @@
 export const PROVIDER_IDS = ['claude', 'codex', 'cursor'] as const;
 export type ProviderId = (typeof PROVIDER_IDS)[number];
 
+/**
+ * Apps whose provider is known. `apm run` scopes the profile lookup to that
+ * provider, and the session host refuses to spawn one under a profile of a
+ * different provider. Anything absent here is an arbitrary command and binds
+ * to whatever profile was named.
+ */
+export const APP_PROVIDERS: Readonly<Record<string, ProviderId>> = {
+  claude: 'claude',
+  codex: 'codex',
+  'cursor-agent': 'cursor',
+};
+
 export function isProviderId(value: unknown): value is ProviderId {
   return typeof value === 'string' && (PROVIDER_IDS as readonly string[]).includes(value);
 }

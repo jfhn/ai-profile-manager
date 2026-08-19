@@ -7,7 +7,7 @@
  * app verbatim; a literal `--` directly after <profile> or after <app> is an
  * optional escape hatch.
  */
-import { isProviderId, PROVIDER_IDS, type ProviderId } from '@apm/shared';
+import { APP_PROVIDERS, isProviderId, PROVIDER_IDS, type ProviderId } from '@apm/shared';
 
 /** An error meant for the user, printed as `apm: <message>`. */
 export class CliError extends Error {}
@@ -125,14 +125,6 @@ export function parseTargetsArgv(argv: string[]): TargetsInvocation {
 
 const RUN_USAGE =
   'usage: apm run [--target <target>] [--cwd <path>] [--ephemeral] <profile> <app> [args...]';
-
-/** Known provider apps — these scope the profile lookup to one provider. */
-export const APP_PROVIDERS: Record<string, ProviderId> = {
-  claude: 'claude',
-  codex: 'codex',
-  'cursor-agent': 'cursor',
-  agent: 'cursor',
-};
 
 export function parseRunArgv(argv: string[]): RunInvocation {
   const rest = [...argv];

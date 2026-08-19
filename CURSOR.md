@@ -13,7 +13,7 @@ isolation and not Cursor-as-a-consumer of Claude/Codex profiles.
 | Product                      | Full Claude/Codex clone, as far as Cursor actually allows                                                                                         |
 | Usage windows                | Monthly `cursor_models` and `other_models` only                                                                                                   |
 | Integrations                 | Breaking OK — bump `apm profiles --json` (and target-scoped profiles) to schemaVersion 2 with `cursor` in the enum                                |
-| Homes                        | `CURSOR_CONFIG_DIR` + `AGENT_CLI_CREDENTIAL_STORE=file` + `XDG_CONFIG_HOME` (Linux) / `APPDATA` (Windows) so `auth.json` lands in the home |
+| Homes                        | `CURSOR_CONFIG_DIR` + `AGENT_CLI_CREDENTIAL_STORE=file` + `XDG_CONFIG_HOME` (Linux) / `APPDATA` (Windows) so `auth.json` lands in the home        |
 | Default home                 | `~/.cursor`                                                                                                                                       |
 | IDE fallback                 | Only for that external default home, if `auth.json` is missing: read the IDE session token from `state.vscdb`. Never a profile home, never purged |
 | Login / default app          | `cursor-agent login` / `cursor-agent`. `agent` is the same provider app                                                                           |
@@ -159,8 +159,10 @@ extend `UsageWindow` with billing-cycle start.
 - `docs/INTEGRATIONS.md`: v2 closed enum is `claude` \| `codex` \|
   `cursor`; consumers must reject other values and other schema versions.
 - `apm profile add <claude\|codex\|cursor>`.
-- `APP_PROVIDERS` / session `KNOWN_APPS`: `cursor-agent` and `agent` both
-  map to `cursor`. A mismatched profile still refuses to spawn.
+- `APP_PROVIDERS` (shared, used by `apm run` and the session host):
+  `cursor-agent` maps to `cursor`. A mismatched profile refuses to spawn.
+  The bare name `agent` stays unclaimed — it is too generic to pin to a
+  provider.
 
 ## UI
 

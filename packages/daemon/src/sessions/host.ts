@@ -15,11 +15,10 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { LOCAL_TARGET_ID } from '@apm/shared';
+import { APP_PROVIDERS, LOCAL_TARGET_ID } from '@apm/shared';
 import type {
   CreateSessionRequest,
   ExitStatus,
-  ProviderId,
   PtyHandle,
   TargetTransport,
   TerminalSession,
@@ -33,14 +32,6 @@ import { createTargetRegistry, type TargetRegistry } from '../targets/registry.j
 /** Scrollback kept per session; oldest whole chunks are dropped past this. */
 export const DEFAULT_SCROLLBACK_BYTES = 1024 * 1024;
 const RECENT_DIRS_LIMIT = 20;
-
-/** Apps whose provider is known — the profile must match, or we refuse to spawn. */
-const KNOWN_APPS: Record<string, ProviderId> = {
-  claude: 'claude',
-  codex: 'codex',
-  'cursor-agent': 'cursor',
-  agent: 'cursor',
-};
 
 /** Live view of one session, used by the terminal WebSocket. */
 export interface SessionListener {
@@ -190,7 +181,7 @@ export function createSessionHost(
       }
 
       const app = req.app;
-      const requiredProvider = KNOWN_APPS[app];
+      const requiredProvider = APP_PROVIDERS[app];
       if (requiredProvider && profile.provider !== requiredProvider) {
         throw new ApiFailure(
           409,

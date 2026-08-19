@@ -220,11 +220,11 @@ describe('resolveProfile', () => {
     expect(resolveProfile(profiles, 'work', 'claude').id).toBe('claude-work');
     expect(resolveProfile(profiles, 'work', 'codex').id).toBe('codex-work');
     expect(resolveProfile(profiles, 'work', 'cursor-agent').id).toBe('cursor-work');
-    expect(resolveProfile(profiles, 'work', 'agent').id).toBe('cursor-work');
   });
 
   it('matches across providers for arbitrary apps when unambiguous', () => {
     expect(resolveProfile(profiles, 'personal', 'bash').id).toBe('claude-personal');
+    expect(resolveProfile(profiles, 'personal', 'agent').id).toBe('claude-personal');
   });
 
   it('refuses to guess when a label exists for several providers', () => {
