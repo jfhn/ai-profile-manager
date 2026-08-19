@@ -152,7 +152,7 @@ export function createProfileService(
   return {
     refreshIdentities() {
       let changed = false;
-      profiles = profiles.map((profile) => {
+      const updated = profiles.map((profile) => {
         if (profile.status !== 'active') return profile;
         const detected = safelyDetectIdentity(adapterFor(profile.provider), profile.home);
         if (!detected) return profile;
@@ -162,7 +162,16 @@ export function createProfileService(
         return { ...profile, identity: merged };
       });
       if (!changed) return;
-      persist();
+      // Roll back on persist failure so the next sweep retries instead of
+      // serving an identity that never reached disk.
+      const previous = profiles;
+      profiles = updated;
+      try {
+        persist();
+      } catch (error) {
+        profiles = previous;
+        throw error;
+      }
       events.emit({ type: 'profiles-changed' });
     },
 
