@@ -143,7 +143,16 @@ export async function startDaemon(config: DaemonConfig): Promise<DaemonHandle> {
 
   writeRunFile(config);
   ctx.usage.start();
-  setImmediate(() => ctx.profiles.refreshIdentities());
+  // The sweep runs after the daemon is already listening, so a failing persist
+  // or event listener must not become an uncaught exception.
+  setImmediate(() => {
+    try {
+      ctx.profiles.refreshIdentities();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(`apm: identity refresh failed: ${message}`);
+    }
+  });
 
   const url = `http://${config.host}:${config.port}/?token=${config.token}`;
   let closed = false;

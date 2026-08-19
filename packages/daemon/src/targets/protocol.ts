@@ -70,17 +70,29 @@ const targetProfileSchema = z.object({
   enabled: z.boolean(),
 });
 
+const knownProviderEntrySchema = z.object({ provider: providerIdSchema });
+
 /**
  * A newer remote apm may list profiles of a provider this build does not know.
- * Parsing per element drops only those entries; an all-or-nothing array would
- * fail the whole response and make every profile on that target unreachable.
+ * Only those entries are dropped, so the rest of the target stays reachable.
+ * An entry of a known provider that does not parse is real corruption and
+ * fails the whole response, as it did before.
  */
-const targetProfilesSchema = z.array(z.unknown()).transform((entries) =>
-  entries.flatMap((entry) => {
+const targetProfilesSchema = z.array(z.unknown()).transform((entries, ctx) => {
+  const profiles: TargetProfileSummary[] = [];
+  for (const entry of entries) {
     const parsed = targetProfileSchema.safeParse(entry);
-    return parsed.success ? [parsed.data] : [];
-  }),
-);
+    if (parsed.success) {
+      profiles.push(parsed.data);
+      continue;
+    }
+    if (knownProviderEntrySchema.safeParse(entry).success) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Malformed profile entry' });
+      return z.NEVER;
+    }
+  }
+  return profiles;
+});
 
 export const agentResponseSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('ready'), handleId: z.string().optional() }),

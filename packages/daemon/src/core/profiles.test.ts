@@ -421,7 +421,7 @@ describe('profile service', () => {
           storedProfile({
             id: 'claude-profile',
             home,
-            identity: { account: 'old@example.test', organization: 'Acme', plan: 'pro' },
+            identity: { account: 'alice@example.test', organization: 'Acme', plan: null },
           }),
         ],
         defaultProfileIds: { claude: 'claude-profile' },
@@ -436,6 +436,34 @@ describe('profile service', () => {
     expect(service.get('claude-profile')?.identity).toEqual(expected);
     const persisted = JSON.parse(fs.readFileSync(config.profilesFile, 'utf8'));
     expect(persisted.profiles[0].identity).toEqual(expected);
+  });
+
+  it('replaces the stored identity when the detected account is a different login', () => {
+    const config = tempConfig();
+    const home = makeHome(config.dataDir, 'identity-switch', true);
+    fs.writeFileSync(
+      config.profilesFile,
+      JSON.stringify({
+        version: 2,
+        profiles: [
+          storedProfile({
+            id: 'claude-profile',
+            home,
+            identity: { account: 'old@example.test', organization: 'Acme', plan: 'team' },
+          }),
+        ],
+        defaultProfileIds: { claude: 'claude-profile' },
+      }),
+    );
+
+    const service = createProfileService(config, createEventBus(), fakeAdapters());
+    service.refreshIdentities();
+
+    expect(service.get('claude-profile')?.identity).toEqual({
+      account: 'alice@example.test',
+      organization: null,
+      plan: 'pro',
+    });
   });
 
   it('runs the prepare-login wizard without handling credentials', async () => {

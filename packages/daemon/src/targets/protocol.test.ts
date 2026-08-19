@@ -68,6 +68,18 @@ describe('target agent protocol', () => {
     expect(parsed).toEqual({ type: 'profiles', profiles: [response.profiles[0]] });
   });
 
+  it('rejects the whole profile list when an entry of a known provider is malformed', () => {
+    const response = {
+      type: 'profiles',
+      profiles: [
+        { id: 'claude-remote', provider: 'claude', label: 'work', status: 'active', enabled: true },
+        { id: 'codex-remote', provider: 'codex', label: 'work', status: 'sleeping', enabled: true },
+      ],
+    };
+
+    expect(agentResponseSchema.safeParse(response).success).toBe(false);
+  });
+
   it('rejects a blank profile id instead of forwarding it to the target', () => {
     const spec = {
       argv: ['claude'],

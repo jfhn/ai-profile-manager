@@ -579,11 +579,14 @@ function safelyDetectIdentity(adapter: ProviderAdapter, home: string): ProviderI
  * A detection is authoritative about the fields it finds, never about the ones
  * it misses: a removed cli-config.json only means the organization is not
  * visible right now. A null field therefore keeps whatever the store knew.
+ * A different account is a different login though, so its identity replaces
+ * the stored one instead of inheriting the previous organization and plan.
  */
 function mergeIdentity(
   detected: ProviderIdentity,
   stored: ProviderIdentity | null,
 ): ProviderIdentity {
+  if (detected.account && stored?.account && detected.account !== stored.account) return detected;
   return {
     account: detected.account ?? stored?.account ?? null,
     organization: detected.organization ?? stored?.organization ?? null,
