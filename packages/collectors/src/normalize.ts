@@ -8,6 +8,21 @@ export function readString(value: unknown): string | null {
   return typeof value === 'string' && value.trim() ? value.trim() : null;
 }
 
+export function jwtClaims(token: string | null): Record<string, unknown> | null {
+  if (!token) return null;
+  try {
+    const part = token.split('.')[1];
+    if (!part) return null;
+    const decoded = Buffer.from(part.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString(
+      'utf8',
+    );
+    const claims: unknown = JSON.parse(decoded);
+    return isRecord(claims) ? claims : null;
+  } catch {
+    return null;
+  }
+}
+
 export function toNumber(value: unknown): number | null {
   if (value === null || value === undefined || value === '') {
     return null;
@@ -48,7 +63,7 @@ export function safeReason(value: unknown): string {
     .replace(/WorkosCursorSessionToken=([^;\s]+)/gi, 'WorkosCursorSessionToken=[redacted]')
     .replace(/auth=([^;\s]+)/gi, 'auth=[redacted]')
     .replace(
-      /(accessToken|refreshToken|authCookie|Authorization|Cookie)["':=\s]+[^,\s}]+/gi,
+      /(access_?token|refresh_?token|authCookie|Authorization|Cookie)["':=\s]+[^,\s}]+/gi,
       'credential=[redacted]',
     )
     .replace(/\s+/g, ' ')

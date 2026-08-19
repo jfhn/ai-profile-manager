@@ -481,7 +481,7 @@ describe('cursorAdapter', () => {
         throw new Error(`GET ${USAGE_URL}?access_token=${SECRET} Authorization: Bearer ${SECRET}`);
       },
     });
-    expect(result.error).toBe('Cursor usage endpoint request failed');
+    expect(result.error).toContain('[redacted]');
     expect(JSON.stringify(result)).not.toContain(SECRET);
   });
 
@@ -497,8 +497,7 @@ describe('cursorAdapter', () => {
         throw new Error(`WorkosCursorSessionToken=${SECRET}; auth=${SECRET}`);
       },
     });
-    expect(result.error).toBe('Cursor usage endpoint request failed');
-    expect(result.error).not.toContain(SECRET);
+    expect(result.error).toBe('WorkosCursorSessionToken=[redacted]; auth=[redacted]');
   });
 
   it('serves cache when network is disabled', async () => {

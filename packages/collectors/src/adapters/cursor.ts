@@ -1,26 +1,33 @@
 import fs from 'node:fs';
-import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import type { CollectResult, ProviderIdentity, UsageWindow } from '@apm/shared';
 import type { CollectContext, ProviderAdapter } from '../adapter.js';
-import { readJsonBounded, statOrNull } from '../bounded.js';
+import { readJsonSync, statOrNull } from '../bounded.js';
+import { fetchJson, refreshOnce } from '../oauth.js';
 import {
   clampPercent,
   failureKind,
+  firstNumber,
+  hasFutureReset,
   isRecord,
+  jwtClaims,
   normalizeTimestamp,
   readString,
   safeReason,
-  toNumber,
 } from '../normalize.js';
+import {
+  readUsageCache,
+  writeUsageCache,
+  writeUsageError,
+  type UsageCache,
+} from '../usage-cache.js';
 
 const USAGE_TTL_MS = 5 * 60 * 1000;
 const USAGE_COOLDOWN_MS = 5 * 60 * 1000;
 const CREDENTIAL_SKEW_MS = 60 * 1000;
 const STALE_MS = 24 * 60 * 60 * 1000;
-const REQUEST_TIMEOUT_MS = 8_000;
 const USAGE_URL = 'https://api2.cursor.sh/aiserver.v1.DashboardService/GetCurrentPeriodUsage';
 const REFRESH_URL = 'https://api2.cursor.sh/oauth/token';
 /**
@@ -37,15 +44,6 @@ interface CursorTokens {
 interface RefreshOutcome {
   tokens: CursorTokens | null;
   reason: string | null;
-}
-
-interface UsageCache {
-  usage: unknown | null;
-  updatedAt: string | null;
-  ageMs: number;
-  errorAt: string | null;
-  errorAgeMs: number;
-  errorReason: string | null;
 }
 
 export const cursorAdapter: ProviderAdapter = {
@@ -163,8 +161,8 @@ async function collectCursorUsage(ctx: CollectContext): Promise<CollectResult> {
       };
     }
     return failed(reason, kind ?? 'error');
-  } catch {
-    return failed('Cursor usage collection failed', 'error');
+  } catch (error) {
+    return failed(safeReason(error instanceof Error ? error.message : error), 'error');
   }
 }
 
@@ -178,7 +176,9 @@ async function fetchCursorUsage(
   if (!credentials.refreshToken) {
     return { usage: null, reason: 'Cursor usage endpoint rejected credentials' };
   }
-  const refreshed = await refreshCursorTokens(ctx, credentials);
+  const refreshed = await refreshOnce(refreshInFlight, ctx.home, () =>
+    requestTokenRefresh(ctx, credentials),
+  );
   if (!refreshed.tokens) return { usage: null, reason: refreshed.reason };
   rememberTokens(ctx.home, refreshed.tokens);
   const retry = await usageRequest(ctx, refreshed.tokens.accessToken);
@@ -191,41 +191,35 @@ async function usageRequest(
   ctx: CollectContext,
   accessToken: string,
 ): Promise<{ status: number | null; usage: unknown | null; reason: string | null }> {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
-  try {
-    const response = await (ctx.fetchImpl ?? fetch)(USAGE_URL, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Connect-Protocol-Version': '1',
-        Authorization: `Bearer ${accessToken}`,
-      },
-      body: '{}',
-      signal: controller.signal,
-    });
-    if (!response.ok) {
+  const outcome = await fetchJson(ctx.fetchImpl, USAGE_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Connect-Protocol-Version': '1',
+      Authorization: `Bearer ${accessToken}`,
+    },
+    body: '{}',
+  });
+  switch (outcome.kind) {
+    case 'ok':
+      return { status: outcome.status, usage: outcome.body, reason: null };
+    case 'http-error':
       return {
-        status: response.status,
+        status: outcome.status,
         usage: null,
         reason:
-          response.status === 401 || response.status === 403
+          outcome.status === 401 || outcome.status === 403
             ? 'Cursor usage endpoint rejected credentials'
-            : `Cursor usage endpoint returned HTTP ${response.status}`,
+            : `Cursor usage endpoint returned HTTP ${outcome.status}`,
       };
-    }
-    return { status: response.status, usage: await response.json(), reason: null };
-  } catch (error) {
-    return {
-      status: null,
-      usage: null,
-      reason:
-        error instanceof Error && error.name === 'AbortError'
-          ? 'Cursor usage endpoint timed out'
-          : 'Cursor usage endpoint request failed',
-    };
-  } finally {
-    clearTimeout(timeout);
+    case 'timeout':
+      return { status: null, usage: null, reason: 'Cursor usage endpoint timed out' };
+    case 'failed':
+      return {
+        status: null,
+        usage: null,
+        reason: safeReason(outcome.error instanceof Error ? outcome.error.message : outcome.error),
+      };
   }
 }
 
@@ -234,8 +228,7 @@ interface LiveTokenCache {
   cachedAtMs: number;
 }
 
-/** Rotated tokens stay in memory only. Concurrent refreshes for one home must
- * never race a single-use refresh token. */
+/** Rotated tokens stay in memory only, keyed by resolved home. */
 const liveTokens = new Map<string, LiveTokenCache>();
 const refreshInFlight = new Map<string, Promise<RefreshOutcome>>();
 
@@ -243,65 +236,43 @@ function rememberTokens(home: string, tokens: CursorTokens): void {
   liveTokens.set(path.resolve(home), { tokens, cachedAtMs: Date.now() });
 }
 
-function refreshCursorTokens(
-  ctx: CollectContext,
-  credentials: CursorTokens,
-): Promise<RefreshOutcome> {
-  const key = path.resolve(ctx.home);
-  const pending = refreshInFlight.get(key);
-  if (pending) return pending;
-  const run = requestTokenRefresh(ctx, credentials).finally(() => refreshInFlight.delete(key));
-  refreshInFlight.set(key, run);
-  return run;
-}
-
 async function requestTokenRefresh(
   ctx: CollectContext,
   credentials: CursorTokens,
 ): Promise<RefreshOutcome> {
-  if (!credentials.refreshToken) {
-    return { tokens: null, reason: 'Cursor usage endpoint rejected credentials' };
-  }
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
-  try {
-    const response = await (ctx.fetchImpl ?? fetch)(REFRESH_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        grant_type: 'refresh_token',
-        client_id: OAUTH_CLIENT_ID,
-        refresh_token: credentials.refreshToken,
-      }),
-      signal: controller.signal,
-    });
-    if (!response.ok) {
-      return { tokens: null, reason: 'Cursor token refresh was rejected' };
+  const rejected: RefreshOutcome = { tokens: null, reason: 'Cursor token refresh was rejected' };
+  const outcome = await fetchJson(ctx.fetchImpl, REFRESH_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      grant_type: 'refresh_token',
+      client_id: OAUTH_CLIENT_ID,
+      refresh_token: credentials.refreshToken,
+    }),
+  });
+  switch (outcome.kind) {
+    case 'ok': {
+      const record = isRecord(outcome.body) ? outcome.body : null;
+      if (record?.shouldLogout === true) return rejected;
+      const accessToken = readString(record?.access_token);
+      if (!accessToken) return rejected;
+      return {
+        tokens: {
+          accessToken,
+          refreshToken: readString(record?.refresh_token) ?? credentials.refreshToken,
+        },
+        reason: null,
+      };
     }
-    const payload: unknown = await response.json();
-    const record = isRecord(payload) ? payload : null;
-    if (record?.shouldLogout === true) {
-      return { tokens: null, reason: 'Cursor token refresh was rejected' };
-    }
-    const accessToken = readString(record?.access_token);
-    if (!accessToken) return { tokens: null, reason: 'Cursor token refresh was rejected' };
-    return {
-      tokens: {
-        accessToken,
-        refreshToken: readString(record?.refresh_token) ?? credentials.refreshToken,
-      },
-      reason: null,
-    };
-  } catch (error) {
-    return {
-      tokens: null,
-      reason:
-        error instanceof Error && error.name === 'AbortError'
-          ? 'Cursor token refresh timed out'
-          : 'Cursor token refresh failed',
-    };
-  } finally {
-    clearTimeout(timeout);
+    case 'http-error':
+      return rejected;
+    case 'timeout':
+      return { tokens: null, reason: 'Cursor token refresh timed out' };
+    case 'failed':
+      return {
+        tokens: null,
+        reason: safeReason(outcome.error instanceof Error ? outcome.error.message : outcome.error),
+      };
   }
 }
 
@@ -316,9 +287,7 @@ function usableUsagePayload(
   if (!windows.length) return null;
   const updatedMs = Date.parse(updatedAt ?? '');
   const stale =
-    Number.isFinite(updatedMs) &&
-    nowMs - updatedMs > STALE_MS &&
-    !windows.some((window) => window.resetAt);
+    Number.isFinite(updatedMs) && nowMs - updatedMs > STALE_MS && !hasFutureReset(windows, nowMs);
   return {
     windows,
     source,
@@ -344,18 +313,22 @@ export function cursorWindows(data: unknown, nowMs: number): UsageWindow[] {
   );
   const resetMs = Date.parse(resetAt ?? '');
   const futureReset = Number.isFinite(resetMs) && resetMs > nowMs ? resetAt : null;
-  const cursorUsed = firstPercent(plan, [
-    'cursorModelsPercentUsed',
-    'cursor_models_percent_used',
-    'cursorModelsUsedPercent',
-    'autoPercentUsed',
-  ]);
-  const otherUsed = firstPercent(plan, [
-    'otherModelsPercentUsed',
-    'other_models_percent_used',
-    'otherModelsUsedPercent',
-    'apiPercentUsed',
-  ]);
+  const cursorUsed = clampPercent(
+    firstNumber(plan, [
+      'cursorModelsPercentUsed',
+      'cursor_models_percent_used',
+      'cursorModelsUsedPercent',
+      'autoPercentUsed',
+    ]),
+  );
+  const otherUsed = clampPercent(
+    firstNumber(plan, [
+      'otherModelsPercentUsed',
+      'other_models_percent_used',
+      'otherModelsUsedPercent',
+      'apiPercentUsed',
+    ]),
+  );
   if (cursorUsed === null && otherUsed === null) return [];
   const windows: UsageWindow[] = [];
   if (cursorUsed !== null) {
@@ -389,14 +362,6 @@ function planUsageRecord(data: Record<string, unknown>): Record<string, unknown>
     data.cursorModelsPercentUsed !== undefined
   ) {
     return data;
-  }
-  return null;
-}
-
-function firstPercent(record: Record<string, unknown>, keys: readonly string[]): number | null {
-  for (const key of keys) {
-    const value = clampPercent(toNumber(record[key]));
-    if (value !== null) return value;
   }
   return null;
 }
@@ -483,24 +448,10 @@ function ideTokensIfDefaultHome(home: string, defaultHome?: string): CursorToken
   return tokensFromIdeState(ideStateDbPath());
 }
 
+// The path itself must be the default home. A managed directory that merely
+// symlinks at ~/.cursor must not inherit the IDE session.
 function isDefaultHome(home: string, defaultHome?: string): boolean {
-  const expected = defaultHome ?? cursorAdapter.defaultHome();
-  // The path itself must be the default home. A managed directory that merely
-  // symlinks at ~/.cursor must not inherit the IDE session.
-  if (path.resolve(home) !== path.resolve(expected)) return false;
-  return sameRealPath(home, expected);
-}
-
-function sameRealPath(left: string, right: string): boolean {
-  return canonicalize(left) === canonicalize(right);
-}
-
-function canonicalize(file: string): string {
-  try {
-    return fs.realpathSync(file);
-  } catch {
-    return path.resolve(file);
-  }
+  return path.resolve(home) === path.resolve(defaultHome ?? cursorAdapter.defaultHome());
 }
 
 function ideStateDbPath(): string {
@@ -631,21 +582,6 @@ function identityFromJwt(token: string | null): ProviderIdentity | null {
   return { account, organization: readString(claims.organization), plan };
 }
 
-function jwtClaims(token: string | null): Record<string, unknown> | null {
-  if (!token) return null;
-  try {
-    const part = token.split('.')[1];
-    if (!part) return null;
-    const decoded = Buffer.from(part.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString(
-      'utf8',
-    );
-    const claims: unknown = JSON.parse(decoded);
-    return isRecord(claims) ? claims : null;
-  } catch {
-    return null;
-  }
-}
-
 async function credentialsChangedSince(
   home: string,
   errorAt: string | null,
@@ -692,55 +628,6 @@ function cooldownFallback(cache: UsageCache, nowMs: number): CollectResult {
   };
 }
 
-async function readUsageCache(file: string, nowMs: number): Promise<UsageCache> {
-  const data = await readJsonBounded(file);
-  const record = isRecord(data) ? data : null;
-  const updatedAt = normalizeTimestamp(record?.updatedAt);
-  const errorAt = normalizeTimestamp(record?.lastErrorAt);
-  const updatedMs = Date.parse(updatedAt ?? '');
-  const errorMs = Date.parse(errorAt ?? '');
-  return {
-    usage: record?.usage ?? null,
-    updatedAt,
-    ageMs: Number.isFinite(updatedMs) ? nowMs - updatedMs : Infinity,
-    errorAt,
-    errorAgeMs: Number.isFinite(errorMs) ? nowMs - errorMs : Infinity,
-    errorReason: readString(record?.lastErrorReason),
-  };
-}
-
-async function writeUsageCache(
-  file: string,
-  data: { updatedAt: string; usage: unknown },
-): Promise<void> {
-  try {
-    await fsp.mkdir(path.dirname(file), { recursive: true });
-    await fsp.writeFile(file, `${JSON.stringify(data, null, 2)}\n`, { mode: 0o600 });
-    await fsp.chmod(file, 0o600);
-  } catch {
-    // Cache writes are best-effort.
-  }
-}
-
-async function writeUsageError(
-  file: string,
-  cache: UsageCache,
-  reason: string,
-  nowMs: number,
-): Promise<void> {
-  try {
-    await fsp.mkdir(path.dirname(file), { recursive: true });
-    await fsp.writeFile(
-      file,
-      `${JSON.stringify({ updatedAt: cache.updatedAt, usage: cache.usage, lastErrorAt: new Date(nowMs).toISOString(), lastErrorReason: safeReason(reason) }, null, 2)}\n`,
-      { mode: 0o600 },
-    );
-    await fsp.chmod(file, 0o600);
-  } catch {
-    // Cache writes are best-effort.
-  }
-}
-
 function failed(reason: string, kind: NonNullable<CollectResult['failureKind']>): CollectResult {
   return {
     windows: [],
@@ -754,12 +641,4 @@ function failed(reason: string, kind: NonNullable<CollectResult['failureKind']>)
     planType: null,
     retryAfterSeconds: null,
   };
-}
-
-function readJsonSync(file: string): unknown | null {
-  try {
-    return JSON.parse(fs.readFileSync(file, 'utf8')) as unknown;
-  } catch {
-    return null;
-  }
 }
