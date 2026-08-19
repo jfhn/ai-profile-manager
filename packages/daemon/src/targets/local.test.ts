@@ -36,12 +36,26 @@ const CODEX_PROFILE: Profile = {
   home: '/tmp/apm-codex-home',
 };
 
+const CURSOR_PROFILE: Profile = {
+  ...PROFILE,
+  id: 'profile-cursor',
+  provider: 'cursor',
+  label: 'cursor work',
+  home: '/tmp/apm-cursor-home',
+};
+
 function profiles(): Pick<ProfileService, 'list' | 'envFor'> {
   return {
-    list: () => [PROFILE, CODEX_PROFILE],
+    list: () => [PROFILE, CODEX_PROFILE, CURSOR_PROFILE],
     envFor: (id) => {
       if (id === PROFILE.id) return { CLAUDE_CONFIG_DIR: PROFILE.home };
       if (id === CODEX_PROFILE.id) return { CODEX_HOME: CODEX_PROFILE.home };
+      if (id === CURSOR_PROFILE.id) {
+        return {
+          CURSOR_CONFIG_DIR: CURSOR_PROFILE.home,
+          AGENT_CLI_CREDENTIAL_STORE: 'file',
+        };
+      }
       return {};
     },
   };
@@ -107,6 +121,22 @@ describe('local transport', () => {
       cwd: dir,
     });
     expect(codexOnly.stdout).toBe(`:${CODEX_PROFILE.home}`);
+  });
+
+  it('drops inherited CURSOR_API_KEY when a Cursor profile is bound', async () => {
+    const previous = process.env.CURSOR_API_KEY;
+    process.env.CURSOR_API_KEY = 'inherited-secret';
+    try {
+      const result = await transport.exec({
+        argv: ['sh', '-c', 'printf %s "${CURSOR_API_KEY+set}:$CURSOR_CONFIG_DIR"'],
+        profileIds: [CURSOR_PROFILE.id],
+        cwd: dir,
+      });
+      expect(result.stdout).toBe(`:${CURSOR_PROFILE.home}`);
+    } finally {
+      if (previous === undefined) delete process.env.CURSOR_API_KEY;
+      else process.env.CURSOR_API_KEY = previous;
+    }
   });
 
   it('runs in the requested cwd and defaults to the home directory', async () => {

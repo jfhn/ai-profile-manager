@@ -135,7 +135,7 @@
     {#if views.length === 0}
       <EmptyState
         title="No profiles yet"
-        description="A profile binds one provider account to its own config home, so Claude and Codex sessions never share credentials. Add one to see quota, reset times and freshness at a glance."
+        description="A profile binds one provider account to its own config home, so Claude, Codex and Cursor sessions never share credentials. Add one to see quota, reset times and freshness at a glance."
         icon="sparkle"
         dashed
       >

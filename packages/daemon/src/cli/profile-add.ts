@@ -82,7 +82,8 @@ export async function runProfileAdd(
 
   const identity = profile.identity?.account;
   deps.log(`profile "${profile.label}" added${identity ? ` (${identity})` : ''}`);
-  deps.log(`run it with: apm run ${profile.label} ${profile.provider}`);
+  const defaultApp = adapter.loginArgv()[0] ?? profile.provider;
+  deps.log(`run it with: apm run ${profile.label} ${defaultApp}`);
 }
 
 /**

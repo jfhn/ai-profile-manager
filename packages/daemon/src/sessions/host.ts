@@ -38,6 +38,8 @@ const RECENT_DIRS_LIMIT = 20;
 const KNOWN_APPS: Record<string, ProviderId> = {
   claude: 'claude',
   codex: 'codex',
+  'cursor-agent': 'cursor',
+  agent: 'cursor',
 };
 
 /** Live view of one session, used by the terminal WebSocket. */

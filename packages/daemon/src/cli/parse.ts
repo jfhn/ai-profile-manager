@@ -16,7 +16,7 @@ export const USAGE =
   `usage: apm [start|profile|profiles|targets|run|attach|sessions|status|url|stop]\n` +
   `  apm [start] [--port N] [--no-open] [--foreground]   start or reuse the daemon, open the UI\n` +
   `  apm url                                             print the authenticated URL, open nothing\n` +
-  `  apm profile add <claude|codex> [--label <label>] [--new] [-- login-args...]\n` +
+  `  apm profile add <claude|codex|cursor> [--label <label>] [--new] [-- login-args...]\n` +
   `                                                      log in to a fresh managed profile\n` +
   `  apm profiles [--json] [--refresh]                   list profiles and provider defaults\n` +
   `  apm targets [--json] [--profiles <target>]          list targets or one target's profiles\n` +
@@ -130,6 +130,8 @@ const RUN_USAGE =
 export const APP_PROVIDERS: Record<string, ProviderId> = {
   claude: 'claude',
   codex: 'codex',
+  'cursor-agent': 'cursor',
+  agent: 'cursor',
 };
 
 export function parseRunArgv(argv: string[]): RunInvocation {
@@ -211,7 +213,7 @@ export interface ProfileAddInvocation {
 }
 
 const PROFILE_USAGE =
-  'usage: apm profile add <claude|codex> [--label <label>] [--new] [-- login-args...]';
+  'usage: apm profile add <claude|codex|cursor> [--label <label>] [--new] [-- login-args...]';
 
 export function parseProfileArgv(argv: string[]): ProfileAddInvocation {
   const rest = [...argv];

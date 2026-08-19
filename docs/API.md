@@ -13,34 +13,34 @@ Type definitions for every payload live in `packages/shared/src/api.ts`.
 
 ## REST
 
-| Method | Path                             | Description                                                         |
-| ------ | -------------------------------- | ------------------------------------------------------------------- |
-| GET    | `/api/status`                    | Daemon version, pid, data dir                                       |
-| GET    | `/api/overview`                  | Providers + profiles + defaults + usage + sessions                  |
-| GET    | `/api/events`                    | SSE stream (`ServerEvent` types)                                    |
-| GET    | `/api/profiles`                  | List profiles                                                       |
-| GET    | `/api/defaults`                  | Current provider defaults (`DefaultsResponse`)                      |
-| PUT    | `/api/defaults/:provider`        | Set/recompute a default (`{profileId: string \| null}`)             |
-| POST   | `/api/profiles`                  | Adopt an existing home as a profile (`CreateProfileRequest`)        |
-| PATCH  | `/api/profiles/:id`              | Rename / enable / disable                                           |
-| DELETE | `/api/profiles/:id?purge=`       | Remove profile; `purge=true` also deletes managed homes             |
-| POST   | `/api/profiles/:id/refresh`      | Refresh usage for one profile now                                   |
-| POST   | `/api/usage/refresh`             | Refresh all enabled profiles now                                    |
-| GET    | `/api/usage`                     | Latest snapshot per profile                                         |
-| GET    | `/api/discovery`                 | Unadopted provider homes (incl. global `~/.claude`, `~/.codex`)     |
-| POST   | `/api/wizard`                    | Start prepare-login flow (`StartWizardRequest`)                     |
-| GET    | `/api/wizard/:profileId`         | Wizard state: login command, credentials found, identity            |
-| POST   | `/api/wizard/:profileId/confirm` | Name + activate the pending profile                                 |
-| GET    | `/api/sessions`                  | List terminal sessions (`SessionsResponse`)                         |
-| POST   | `/api/sessions`                  | Spawn a persistent or connection-bound PTY (`CreateSessionRequest`) |
-| POST   | `/api/sessions/:id/resize`       | Resize (`{cols, rows}`)                                             |
-| DELETE | `/api/sessions/:id`              | Kill (running) or dispose (exited)                                  |
-| GET    | `/api/recent-dirs`               | Recent working directories for the cwd picker                       |
-| GET    | `/api/targets`                   | Execution targets + capabilities (`TargetsResponse`)                |
-| GET    | `/api/targets/candidates`        | Tailnet machines, display-only (`TargetCandidatesResponse`)         |
-| POST   | `/api/targets`                   | Approve one machine as a target (`AddTargetRequest`)                |
-| DELETE | `/api/targets/:id`               | Revoke a target; closes its connection                              |
-| GET    | `/api/targets/:id/profiles`      | Profiles as that target reports them (`TargetProfilesResponse`)     |
+| Method | Path                             | Description                                                                  |
+| ------ | -------------------------------- | ---------------------------------------------------------------------------- |
+| GET    | `/api/status`                    | Daemon version, pid, data dir                                                |
+| GET    | `/api/overview`                  | Providers + profiles + defaults + usage + sessions                           |
+| GET    | `/api/events`                    | SSE stream (`ServerEvent` types)                                             |
+| GET    | `/api/profiles`                  | List profiles                                                                |
+| GET    | `/api/defaults`                  | Current provider defaults (`DefaultsResponse`)                               |
+| PUT    | `/api/defaults/:provider`        | Set/recompute a default (`{profileId: string \| null}`)                      |
+| POST   | `/api/profiles`                  | Adopt an existing home as a profile (`CreateProfileRequest`)                 |
+| PATCH  | `/api/profiles/:id`              | Rename / enable / disable                                                    |
+| DELETE | `/api/profiles/:id?purge=`       | Remove profile; `purge=true` also deletes managed homes                      |
+| POST   | `/api/profiles/:id/refresh`      | Refresh usage for one profile now                                            |
+| POST   | `/api/usage/refresh`             | Refresh all enabled profiles now                                             |
+| GET    | `/api/usage`                     | Latest snapshot per profile                                                  |
+| GET    | `/api/discovery`                 | Unadopted provider homes (incl. global `~/.claude`, `~/.codex`, `~/.cursor`) |
+| POST   | `/api/wizard`                    | Start prepare-login flow (`StartWizardRequest`)                              |
+| GET    | `/api/wizard/:profileId`         | Wizard state: login command, credentials found, identity                     |
+| POST   | `/api/wizard/:profileId/confirm` | Name + activate the pending profile                                          |
+| GET    | `/api/sessions`                  | List terminal sessions (`SessionsResponse`)                                  |
+| POST   | `/api/sessions`                  | Spawn a persistent or connection-bound PTY (`CreateSessionRequest`)          |
+| POST   | `/api/sessions/:id/resize`       | Resize (`{cols, rows}`)                                                      |
+| DELETE | `/api/sessions/:id`              | Kill (running) or dispose (exited)                                           |
+| GET    | `/api/recent-dirs`               | Recent working directories for the cwd picker                                |
+| GET    | `/api/targets`                   | Execution targets + capabilities (`TargetsResponse`)                         |
+| GET    | `/api/targets/candidates`        | Tailnet machines, display-only (`TargetCandidatesResponse`)                  |
+| POST   | `/api/targets`                   | Approve one machine as a target (`AddTargetRequest`)                         |
+| DELETE | `/api/targets/:id`               | Revoke a target; closes its connection                                       |
+| GET    | `/api/targets/:id/profiles`      | Profiles as that target reports them (`TargetProfilesResponse`)              |
 
 The wizard endpoints back both the dashboard modal and the headless CLI flow
 (`apm profile add <provider>` — see the README); the CLI adds no endpoints of
@@ -93,10 +93,14 @@ out. Closing the socket detaches without killing the PTY.
 
 ## Provider defaults
 
-`defaultProfileIds` is a partial map keyed by `claude` and `codex`. The daemon
-keeps exactly one default per provider while that provider has at least one
-active, enabled profile; a missing key means no such profile exists. When the
-selected profile is disabled or deleted (or the key is cleared with `null`),
+`GET /api/overview` lists providers as `ProviderInfo`: `id`, `label`,
+`capabilities`, and `defaultApp` (argv[0] for a normal session: `claude`,
+`codex`, `cursor-agent`).
+
+`defaultProfileIds` is a partial map keyed by `claude`, `codex`, and `cursor`.
+The daemon keeps exactly one default per provider while that provider has at
+least one active, enabled profile; a missing key means no such profile exists.
+When the selected profile is disabled or deleted (or the key is cleared with `null`),
 the daemon promotes the eligible profile with the alphabetically first label,
 so clients never pick a default on the user's behalf.
 `PUT /api/defaults/:provider` accepts an active, enabled profile of that same

@@ -19,6 +19,15 @@ afterEach(() => {
 });
 
 describe('profile service', () => {
+  it('lists providers with defaultApp from loginArgv', () => {
+    const service = createProfileService(tempConfig(), createEventBus(), fakeAdapters());
+    expect(service.providers()).toEqual([
+      expect.objectContaining({ id: 'claude', label: 'Claude', defaultApp: 'claude' }),
+      expect.objectContaining({ id: 'codex', label: 'Codex', defaultApp: 'codex' }),
+      expect.objectContaining({ id: 'cursor', label: 'Cursor', defaultApp: 'cursor-agent' }),
+    ]);
+  });
+
   it('persists adoption, renames, uniqueness, and managed purges', async () => {
     const config = tempConfig();
     const service = createProfileService(config, createEventBus(), fakeAdapters());
@@ -475,13 +484,16 @@ function fakeAdapters(): AdapterRegistry {
   return {
     claude: fakeAdapter('claude'),
     codex: fakeAdapter('codex'),
+    cursor: fakeAdapter('cursor'),
   };
 }
 
 function fakeAdapter(provider: ProviderId): ProviderAdapter {
+  const names = { claude: 'Claude', codex: 'Codex', cursor: 'Cursor' } as const;
+  const defaultApp = provider === 'cursor' ? 'cursor-agent' : provider;
   return {
     provider,
-    displayName: provider === 'claude' ? 'Claude' : 'Codex',
+    displayName: names[provider],
     capabilities: { usage: true, usageSources: ['local-files'], identity: true, windows: [] },
     hasCredentials: (home) => fs.existsSync(path.join(home, 'credentials')),
     detectIdentity: (home): ProviderIdentity | null =>
@@ -490,8 +502,8 @@ function fakeAdapter(provider: ProviderId): ProviderAdapter {
         : null,
     collectUsage: async (): Promise<CollectResult> => emptyResult(),
     env: (home) => ({ [`${provider.toUpperCase()}_HOME`]: home }),
-    loginCommand: (home) => `${provider.toUpperCase()}_HOME=${home} ${provider} login`,
-    loginArgv: () => [provider, 'login'],
+    loginCommand: (home) => `${provider.toUpperCase()}_HOME=${home} ${defaultApp} login`,
+    loginArgv: () => [defaultApp, 'login'],
     defaultHome: () => path.join(os.tmpdir(), `missing-${provider}`),
   };
 }

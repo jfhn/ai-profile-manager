@@ -31,6 +31,7 @@ describe('usage service', () => {
     const adapters: AdapterRegistry = {
       claude: fakeAdapter('claude', failingCollect),
       codex: fakeAdapter('codex', successfulCollect),
+      cursor: fakeAdapter('cursor', failingCollect),
     };
     const profiles = createProfileService(config, createEventBus(), adapters);
     const claudeHome = makeCredentialHome(directory, 'claude-home');
@@ -82,6 +83,7 @@ describe('usage service', () => {
     const adapters: AdapterRegistry = {
       claude: fakeAdapter('claude', collect),
       codex: fakeAdapter('codex', collect),
+      cursor: fakeAdapter('cursor', collect),
     };
     const profiles = createProfileService(config, createEventBus(), adapters);
     const active = await profiles.create({
@@ -114,6 +116,7 @@ describe('usage service', () => {
     const adapters: AdapterRegistry = {
       claude: fakeAdapter('claude', collect),
       codex: fakeAdapter('codex', collect),
+      cursor: fakeAdapter('cursor', collect),
     };
     const profiles = createProfileService(config, createEventBus(), adapters);
     const profile = await profiles.create({

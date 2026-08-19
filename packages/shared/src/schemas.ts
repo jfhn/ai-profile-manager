@@ -181,6 +181,7 @@ export const defaultProfileIdsSchema = z
   .object({
     claude: profileIdSchema.optional(),
     codex: profileIdSchema.optional(),
+    cursor: profileIdSchema.optional(),
   })
   .strict();
 
@@ -192,10 +193,10 @@ export const profileStoreFileV2Schema = z.object({
 
 export const profileStoreFileSchema = z.union([profileStoreFileV1Schema, profileStoreFileV2Schema]);
 
-/** Runtime form of the stable `apm profiles --json` version-1 contract. */
+/** Runtime form of the stable `apm profiles --json` version-2 contract. */
 export const profilesCliResponseSchema = z
   .object({
-    schemaVersion: z.literal(1),
+    schemaVersion: z.literal(2),
     defaultProfileIds: defaultProfileIdsSchema,
     profiles: z
       .array(
@@ -265,7 +266,7 @@ export const targetsCliProducerSchema = z
 /** Runtime form of the stable target-scoped profile contract. */
 export const targetProfilesCliResponseSchema = z
   .object({
-    schemaVersion: z.literal(1),
+    schemaVersion: z.literal(2),
     targetId: targetIdSchema,
     profiles: z.array(targetProfileSummarySchema).superRefine(assertUniqueProfileIds),
   })

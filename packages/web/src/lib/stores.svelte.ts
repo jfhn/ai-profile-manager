@@ -15,6 +15,7 @@ import { api, errorMessage, eventsUrl, token } from './api';
 export const PROVIDER_LABELS: Record<ProviderId, string> = {
   claude: 'Claude',
   codex: 'Codex',
+  cursor: 'Cursor',
 };
 
 /**

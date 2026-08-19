@@ -29,6 +29,8 @@ export interface ProviderInfo {
   id: ProviderId;
   label: string;
   capabilities: AdapterCapabilities;
+  /** argv[0] for a normal session of this provider (`claude`, `codex`, `cursor-agent`). */
+  defaultApp: string;
 }
 
 /** GET /api/overview — everything the dashboard needs in one round trip. */
@@ -53,7 +55,7 @@ export interface UpdateDefaultProfileRequest {
 
 /** Stable stdout contract returned by `apm profiles --json`. */
 export interface ProfilesCliResponse {
-  schemaVersion: 1;
+  schemaVersion: 2;
   defaultProfileIds: DefaultProfileIds;
   profiles: Array<{
     id: string;
@@ -80,7 +82,7 @@ export interface TargetsCliResponse {
 
 /** Stable stdout contract returned by `apm targets --profiles <target> --json`. */
 export interface TargetProfilesCliResponse {
-  schemaVersion: 1;
+  schemaVersion: 2;
   targetId: TargetId;
   profiles: TargetProfileSummary[];
 }
@@ -89,7 +91,7 @@ export interface TargetProfilesCliResponse {
 export interface DiscoveryCandidate {
   provider: ProviderId;
   home: string;
-  /** True for the global default home (~/.claude, ~/.codex). */
+  /** True for the global default home (~/.claude, ~/.codex, ~/.cursor). */
   isDefault: boolean;
   hasCredentials: boolean;
   identity: ProviderIdentity | null;

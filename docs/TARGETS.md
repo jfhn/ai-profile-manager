@@ -70,7 +70,8 @@ Credentials never cross the transport boundary.
 
 `profiles()` returns only id, provider, label, status and enabled state. A
 command names profile ids. The selected target resolves those ids and injects
-its own `CLAUDE_CONFIG_DIR` or `CODEX_HOME` values locally.
+its own `CLAUDE_CONFIG_DIR`, `CODEX_HOME` or `CURSOR_CONFIG_DIR` values
+locally, with `AGENT_CLI_CREDENTIAL_STORE=file` for Cursor.
 
 Profile resolution is target-scoped. A profile id from one machine has no
 meaning on another. `GET /api/targets/:id/profiles` and

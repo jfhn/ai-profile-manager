@@ -78,7 +78,7 @@
     {#if sessions.length === 0}
       <EmptyState
         title="No sessions yet"
-        description="Start claude, codex or any command with a profile's environment. Sessions outlive this tab — closing it only detaches."
+        description="Start claude, codex, cursor-agent or any command with a profile's environment. Sessions outlive this tab — closing it only detaches."
         icon="terminal"
         dashed
       >

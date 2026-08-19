@@ -202,6 +202,7 @@ export function createProfileService(
           id: adapter.provider,
           label: adapter.displayName,
           capabilities: adapter.capabilities,
+          defaultApp: adapter.loginArgv()[0] ?? adapter.provider,
         }))
         .sort((left, right) => left.id.localeCompare(right.id));
     },

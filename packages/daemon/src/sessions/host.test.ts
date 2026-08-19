@@ -406,6 +406,12 @@ describe('session host', () => {
       code: 'provider-mismatch',
     });
     await expect(
+      host.create({ profileId: 'profile-1', app: 'cursor-agent' }),
+    ).rejects.toMatchObject({
+      statusCode: 409,
+      code: 'provider-mismatch',
+    });
+    await expect(
       host.create({ profileId: 'profile-1', app: 'sh', cwd: path.join(dataDir, 'missing') }),
     ).rejects.toMatchObject({ statusCode: 400, code: 'bad-cwd' });
     await expect(

@@ -7,7 +7,7 @@ const refresh = vi.fn(
   async (_profileId?: string, _options?: RefreshOptions): Promise<void> => undefined,
 );
 const defaults = vi.fn(() => ({ claude: 'claude-work' }));
-const setDefault = vi.fn((provider: 'claude' | 'codex', profileId: string | null) =>
+const setDefault = vi.fn((provider: 'claude' | 'codex' | 'cursor', profileId: string | null) =>
   profileId === null ? {} : { [provider]: profileId },
 );
 let app: FastifyInstance;

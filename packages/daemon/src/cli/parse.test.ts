@@ -161,6 +161,15 @@ describe('parseProfileArgv', () => {
     });
   });
 
+  it('parses a cursor add invocation', () => {
+    expect(parseProfileArgv(['add', 'cursor'])).toEqual({
+      action: 'add',
+      provider: 'cursor',
+      fresh: false,
+      loginArgs: [],
+    });
+  });
+
   it('takes a label and a fresh-home flag', () => {
     expect(parseProfileArgv(['add', 'codex', '--label', 'work', '--new'])).toEqual({
       action: 'add',
@@ -185,7 +194,7 @@ describe('parseProfileArgv', () => {
     expect(() => parseProfileArgv(['remove', 'claude'])).toThrow(/unknown profile subcommand/);
     expect(() => parseProfileArgv(['add'])).toThrow(/requires a provider/);
     expect(() => parseProfileArgv(['add', 'gemini'])).toThrow(
-      'unknown provider: gemini (expected claude or codex)',
+      'unknown provider: gemini (expected claude or codex or cursor)',
     );
   });
 
@@ -203,12 +212,15 @@ describe('resolveProfile', () => {
   const profiles = [
     makeProfile(),
     makeProfile({ id: 'codex-work', provider: 'codex' }),
+    makeProfile({ id: 'cursor-work', provider: 'cursor', label: 'work' }),
     makeProfile({ id: 'claude-personal', label: 'personal' }),
   ];
 
   it('scopes known provider apps to their provider', () => {
     expect(resolveProfile(profiles, 'work', 'claude').id).toBe('claude-work');
     expect(resolveProfile(profiles, 'work', 'codex').id).toBe('codex-work');
+    expect(resolveProfile(profiles, 'work', 'cursor-agent').id).toBe('cursor-work');
+    expect(resolveProfile(profiles, 'work', 'agent').id).toBe('cursor-work');
   });
 
   it('matches across providers for arbitrary apps when unambiguous', () => {
@@ -217,7 +229,7 @@ describe('resolveProfile', () => {
 
   it('refuses to guess when a label exists for several providers', () => {
     expect(() => resolveProfile(profiles, 'work', 'bash')).toThrow(/ambiguous/);
-    expect(() => resolveProfile(profiles, 'work', 'bash')).toThrow(/claude, codex/);
+    expect(() => resolveProfile(profiles, 'work', 'bash')).toThrow(/claude, codex, cursor/);
   });
 
   it('accepts a profile id and is case-insensitive on labels', () => {

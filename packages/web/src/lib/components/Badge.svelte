@@ -2,7 +2,8 @@
   import type { Snippet } from 'svelte';
 
   interface Props {
-    tone?: 'neutral' | 'success' | 'warning' | 'destructive' | 'primary' | 'claude' | 'codex';
+    tone?:
+      'neutral' | 'success' | 'warning' | 'destructive' | 'primary' | 'claude' | 'codex' | 'cursor';
     title?: string;
     children: Snippet;
   }
@@ -60,5 +61,10 @@
   .codex {
     background: var(--fill-10);
     color: var(--badge-fg);
+  }
+
+  .cursor {
+    background: color-mix(in oklab, var(--cursor) 16%, transparent);
+    color: color-mix(in oklab, var(--cursor) 80%, var(--tint-contrast));
   }
 </style>

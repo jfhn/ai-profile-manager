@@ -19,18 +19,38 @@
 
   let { onclose, resumeProfileId }: Props = $props();
 
-  const PROVIDERS: Array<{ id: ProviderId; title: string; description: string }> = [
-    {
-      id: 'claude',
+  const PROVIDER_COPY: Partial<Record<ProviderId, { title: string; description: string }>> = {
+    claude: {
       title: 'Claude Code',
       description: 'Anthropic subscription account, logged in through the claude CLI.',
     },
-    {
-      id: 'codex',
+    codex: {
       title: 'Codex',
       description: 'OpenAI account used by the codex CLI, with its own CODEX_HOME.',
     },
-  ];
+    cursor: {
+      title: 'Cursor',
+      description:
+        'Logged in through cursor-agent, with CURSOR_CONFIG_DIR and a file credential store.',
+    },
+  };
+
+  const FALLBACK_PROVIDER_IDS: ProviderId[] = ['claude', 'codex', 'cursor'];
+
+  const providers = $derived(
+    app.providers.length > 0
+      ? app.providers.map((info) => ({
+          id: info.id,
+          title: PROVIDER_COPY[info.id]?.title ?? info.label,
+          description:
+            PROVIDER_COPY[info.id]?.description ?? `Logged in through the ${info.label} CLI.`,
+        }))
+      : FALLBACK_PROVIDER_IDS.map((id) => ({
+          id,
+          title: PROVIDER_COPY[id]?.title ?? id,
+          description: PROVIDER_COPY[id]?.description ?? `Logged in through the ${id} CLI.`,
+        })),
+  );
 
   const flow = new WizardFlow({
     api,
@@ -118,7 +138,7 @@
     </div>
   {:else if flow.step === 'provider'}
     <div class="providers">
-      {#each PROVIDERS as provider (provider.id)}
+      {#each providers as provider (provider.id)}
         <button
           class="provider"
           type="button"
@@ -182,7 +202,7 @@
           maxlength="64"
           autocomplete="off"
         />
-        <p class="hint">Unique per provider — "work" can exist for both Claude and Codex.</p>
+        <p class="hint">Unique per provider — "work" can exist for Claude, Codex, and Cursor.</p>
       </div>
       <button type="submit" hidden aria-hidden="true"></button>
     </form>
@@ -275,7 +295,7 @@
 
   .providers {
     display: grid;
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
     gap: 10px;
   }
 

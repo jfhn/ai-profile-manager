@@ -8,10 +8,10 @@
 
   let { provider }: Props = $props();
 
-  const INITIALS: Record<string, string> = { claude: 'A', codex: 'C' };
+  const INITIALS: Record<ProviderId, string> = { claude: 'A', codex: 'C', cursor: '▸' };
 
   const label = $derived(app.providerLabel(provider));
-  const initial = $derived(INITIALS[provider] ?? label.charAt(0).toUpperCase());
+  const initial = $derived(INITIALS[provider]);
 </script>
 
 <span class="mark {provider}" title={label} aria-hidden="true">{initial}</span>
@@ -37,5 +37,9 @@
 
   .codex {
     background: var(--codex);
+  }
+
+  .cursor {
+    background: var(--cursor);
   }
 </style>

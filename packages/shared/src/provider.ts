@@ -4,7 +4,7 @@
  * (packages/collectors); everything here is provider-agnostic shape.
  */
 
-export const PROVIDER_IDS = ['claude', 'codex'] as const;
+export const PROVIDER_IDS = ['claude', 'codex', 'cursor'] as const;
 export type ProviderId = (typeof PROVIDER_IDS)[number];
 
 export function isProviderId(value: unknown): value is ProviderId {

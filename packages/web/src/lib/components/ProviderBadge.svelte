@@ -11,4 +11,4 @@
   const label = $derived(app.providerLabel(provider));
 </script>
 
-<Badge tone={provider === 'claude' ? 'claude' : 'codex'}>{label}</Badge>
+<Badge tone={provider}>{label}</Badge>

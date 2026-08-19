@@ -129,6 +129,18 @@ describe('runProfileAdd', () => {
     const profile = [...daemon.profiles.values()][0];
     expect(profile).toMatchObject({ status: 'active', label: 'alice' });
     expect(logs.join('\n')).toContain('profile "alice" added (alice@example.test)');
+    expect(logs.join('\n')).toContain('apm run alice claude');
+  });
+
+  it('hints cursor-agent rather than the Electron app', async () => {
+    const { deps, logs, logins } = makeHarness();
+    await runProfileAdd(deps, { action: 'add', provider: 'cursor', fresh: false, loginArgs: [] });
+    expect(logins[0]?.argv).toEqual(['cursor-agent', 'login']);
+    expect(logins[0]?.env).toEqual({
+      CURSOR_CONFIG_DIR: '/data/homes/pending-1',
+      AGENT_CLI_CREDENTIAL_STORE: 'file',
+    });
+    expect(logs.join('\n')).toContain('apm run alice cursor-agent');
   });
 
   it('appends provider login arguments and uses the codex argv', async () => {

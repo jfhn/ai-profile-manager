@@ -30,6 +30,7 @@ import {
   type TargetTransport,
 } from '@apm/shared';
 import type { ProfileService } from '../context.js';
+import { childProcessEnv } from '../process-env.js';
 
 const DEFAULT_TERM = 'xterm-256color';
 
@@ -72,7 +73,7 @@ export function createLocalTransport(deps: LocalTransportDeps): TargetTransport 
     for (const profileId of spec.profileIds ?? []) {
       Object.assign(profileEnv, deps.profiles.envFor(profileId));
     }
-    const env = { ...process.env, ...profileEnv, ...spec.env };
+    const env = childProcessEnv(profileEnv, spec.env);
 
     const cwd = spec.cwd ?? os.homedir();
     if (!isDirectory(cwd)) {

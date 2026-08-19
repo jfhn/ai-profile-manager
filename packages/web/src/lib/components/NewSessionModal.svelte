@@ -13,11 +13,26 @@
 
   let { onclose, oncreated }: Props = $props();
 
-  type AppChoice = 'claude' | 'codex' | 'custom';
+  const FALLBACK_PROVIDER_IDS: ProviderId[] = ['claude', 'codex', 'cursor'];
+  const FALLBACK_DEFAULT_APPS: Record<ProviderId, string> = {
+    claude: 'claude',
+    codex: 'codex',
+    cursor: 'cursor-agent',
+  };
+
+  function defaultAppFor(provider: ProviderId): string {
+    return (
+      app.providers.find((info) => info.id === provider)?.defaultApp ??
+      FALLBACK_DEFAULT_APPS[provider]
+    );
+  }
 
   const profiles = $derived(app.launchable);
+  const providerIds = $derived(
+    app.providers.length > 0 ? app.providers.map((info) => info.id) : FALLBACK_PROVIDER_IDS,
+  );
   const grouped = $derived(
-    (['claude', 'codex'] as ProviderId[])
+    providerIds
       .map((provider) => ({
         provider,
         label: app.providerLabel(provider),
@@ -26,13 +41,18 @@
       .filter((group) => group.items.length > 0),
   );
 
-  const APP_CHOICES: AppChoice[] = ['claude', 'codex', 'custom'];
+  const APP_CHOICES = $derived([
+    ...(app.providers.length > 0
+      ? app.providers.map((info) => info.defaultApp)
+      : FALLBACK_PROVIDER_IDS.map((id) => FALLBACK_DEFAULT_APPS[id])),
+    'custom',
+  ]);
 
   // The modal only opens once profiles are loaded, so the default is stable.
   const initial = app.launchable[0];
 
   let profileId = $state(initial?.id ?? '');
-  let appChoice = $state<AppChoice>(initial?.provider ?? 'claude');
+  let appChoice = $state(initial ? defaultAppFor(initial.provider) : 'claude');
   let customApp = $state('');
   let cwd = $state('');
   let dirs = $state<string[]>([]);
@@ -53,7 +73,7 @@
   function selectProfile(id: string): void {
     profileId = id;
     const profile = app.profile(id);
-    if (profile && appChoice !== 'custom') appChoice = profile.provider;
+    if (profile && appChoice !== 'custom') appChoice = defaultAppFor(profile.provider);
   }
 
   const resolvedApp = $derived(appChoice === 'custom' ? customApp.trim() : appChoice);

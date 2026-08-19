@@ -2,7 +2,7 @@ import type { AdapterCapabilities, CollectResult, ProviderId, ProviderIdentity }
 
 /** Everything an adapter may use for one collection run. */
 export interface CollectContext {
-  /** Absolute path of the profile's provider home (CLAUDE_CONFIG_DIR / CODEX_HOME). */
+  /** Absolute path of the profile's provider home (CLAUDE_CONFIG_DIR / CODEX_HOME / CURSOR_CONFIG_DIR). */
   home: string;
   /**
    * Profile-private cache dir (created by the caller). Adapters store OAuth

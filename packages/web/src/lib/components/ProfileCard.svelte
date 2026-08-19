@@ -380,6 +380,10 @@
     --pcolor: var(--codex);
   }
 
+  .card.cursor {
+    --pcolor: var(--cursor);
+  }
+
   /* The default card gets a subtle provider-tinted ring so it reads at a glance. */
   .card.is-default {
     border-color: color-mix(in oklab, var(--pcolor) 45%, transparent);
