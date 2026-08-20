@@ -16,6 +16,7 @@ export type ProviderId = (typeof PROVIDER_IDS)[number];
 export const APP_PROVIDERS: Readonly<Record<string, ProviderId>> = {
   claude: 'claude',
   codex: 'codex',
+  cursor: 'cursor',
   'cursor-agent': 'cursor',
 };
 

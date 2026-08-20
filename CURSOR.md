@@ -17,7 +17,7 @@ isolation and not Cursor-as-a-consumer of Claude/Codex profiles.
 | Env reach                    | The two cursor-named vars are session-wide; `XDG_CONFIG_HOME` / `APPDATA` reach `cursor-agent` only, directly or through a PATH shim              |
 | Default home                 | `~/.cursor`. An adopted default home binds nothing: cursor-agent's own defaults are that setup                                                    |
 | IDE fallback                 | Only for that external default home, if `auth.json` is missing: read the IDE session token from `state.vscdb`. Never a profile home, never purged |
-| Login / default app          | `cursor-agent login` / `cursor-agent`. `agent` is the same provider app                                                                           |
+| Login / default app          | `cursor-agent login` / `cursor-agent`. The app name `cursor` also resolves to this provider                                                       |
 | API-key profiles             | No (`CURSOR_API_KEY` writes nothing into the home)                                                                                                |
 | Electron / `--user-data-dir` | Out of scope                                                                                                                                      |
 

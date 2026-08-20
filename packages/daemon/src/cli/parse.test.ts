@@ -220,6 +220,7 @@ describe('resolveProfile', () => {
     expect(resolveProfile(profiles, 'work', 'claude').id).toBe('claude-work');
     expect(resolveProfile(profiles, 'work', 'codex').id).toBe('codex-work');
     expect(resolveProfile(profiles, 'work', 'cursor-agent').id).toBe('cursor-work');
+    expect(resolveProfile(profiles, 'work', 'cursor').id).toBe('cursor-work');
   });
 
   it('matches across providers for arbitrary apps when unambiguous', () => {
