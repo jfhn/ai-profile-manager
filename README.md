@@ -85,8 +85,9 @@ apm targets --json        # versioned machine contract for integrations
 apm targets --profiles devbox --json
                           # target-scoped profiles, without local home paths
 apm run work claude       # run claude bound to profile "work"
-apm run work cursor-agent # Cursor; `agent` is the same provider app
-apm run work bash         # any command; children inherit the profile env
+apm run work cursor       # Cursor; spawns cursor-agent, never the IDE
+apm run work bash         # any command; provider CLIs inside it stay bound
+apm run cursor:work bash  # provider-qualified label when "work" is ambiguous
 apm run --target devbox --cwd /srv/repo work claude --resume
                           # run in an explicit directory on approved target "devbox"
 apm run --target devbox --cwd /srv/repo --ephemeral work claude
@@ -94,6 +95,25 @@ apm run --target devbox --cwd /srv/repo --ephemeral work claude
 apm attach claude-work-1  # reattach; detach with Ctrl-] or Ctrl-5
 apm sessions | status | stop
 ```
+
+### Sessions for arbitrary commands
+
+`apm run <profile> bash` (or any other command) opens a terminal where every
+provider CLI you start inside it is bound to that profile. That is the point
+of the feature: you work normally in a shell, an editor, or a script, and a
+nested `claude`, `codex`, or `cursor-agent` call uses the profile's account
+instead of whatever the machine defaults to. Agents and tools that shell out
+to a provider CLI inherit the binding the same way.
+
+For Claude and Codex the binding is one provider-named variable in the
+session env. Cursor needs `XDG_CONFIG_HOME`, which would rebind git, gh, and
+every other tool in the session — so the session env stays clean and a
+generated `cursor-agent` shim earlier on `PATH` applies that variable to the
+one binary that needs it. Windows gets no shim; there, only `apm run <profile>
+cursor` binds Cursor.
+
+When a label exists for several providers, prefix the provider:
+`apm run cursor:work bash`.
 
 ### Headless profile onboarding
 
