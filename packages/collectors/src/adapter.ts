@@ -95,10 +95,16 @@ export interface CredentialSyncSupport {
    * differs from the on-disk subset — the local credential is known bad there,
    * so timestamps must not block recovery. Applying sets the file's mtime to
    * rotatedAt, making the mtime the rotation clock on every machine.
+   *
+   * `guard.expectPayload` additionally requires the on-disk payload to still
+   * equal that value (null: no usable file) inside the same snapshot the
+   * write decision uses — the pull path's proof that the local credential is
+   * still the one that failed.
    */
   writeBundle(
     home: string,
     bundle: CredentialBundle,
     mode: WriteBundleMode,
+    guard?: { expectPayload: Record<string, unknown> | null },
   ): Promise<'applied' | 'stale'>;
 }

@@ -101,7 +101,7 @@ export function createCredentialSync(options: CredentialSyncOptions): Credential
       };
     },
 
-    async writeBundle(home, bundle, mode) {
+    async writeBundle(home, bundle, mode, guard) {
       const incoming = options.extract(bundle.payload);
       if (!incoming) {
         throw new Error(`Unusable ${options.provider} credential bundle payload`);
@@ -112,6 +112,12 @@ export function createCredentialSync(options: CredentialSyncOptions): Credential
       }
 
       const current = await snapshot(home);
+      if (guard) {
+        const currentKey = current ? stablePayloadKey(current.payload) : null;
+        const expectedKey =
+          guard.expectPayload === null ? null : stablePayloadKey(guard.expectPayload);
+        if (currentKey !== expectedKey) return 'stale';
+      }
       if (current && !decides(mode, rotatedAtMs, current, incoming)) return 'stale';
 
       const target = file(home);

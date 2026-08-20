@@ -282,17 +282,27 @@ describe('credential sync service', () => {
     service.start();
     stops.push(() => service.stop());
 
+    const token = () =>
+      (JSON.parse(fs.readFileSync(file, 'utf8')) as { claudeAiOauth: { accessToken: string } })
+        .claudeAiOauth.accessToken;
     events.emit({
       type: 'usage-updated',
       profileId: replica.id,
       snapshot: authFailureSnapshot(replica.id),
     });
     await new Promise((resolve) => setTimeout(resolve, 100));
-    const record = JSON.parse(fs.readFileSync(file, 'utf8')) as {
-      claudeAiOauth: { accessToken: string };
-    };
-    expect(record.claudeAiOauth.accessToken).toBe('cli-rotated');
+    expect(token()).toBe('cli-rotated');
     expect(usage.refreshes).toHaveLength(0);
+
+    // The aborted round consumed nothing: when the rotated credential fails
+    // too, the same peer candidate is still eligible and now applies.
+    events.emit({
+      type: 'usage-updated',
+      profileId: replica.id,
+      snapshot: authFailureSnapshot(replica.id),
+    });
+    await vi.waitFor(() => expect(token()).toBe('peer-token'));
+    await vi.waitFor(() => expect(usage.refreshes).toHaveLength(1));
   });
 
   it('repeats only transport codes, never remote message text, in its logs', async () => {

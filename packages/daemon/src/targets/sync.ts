@@ -140,18 +140,17 @@ export function createSyncService(
     for (const candidate of candidates) {
       const key = stablePayloadKey(candidate.payload);
       if (tried.has(key)) continue;
-      tried.add(key);
       // The pull's authority to disregard timestamps rests on the local
-      // credential still being the one that failed. If a CLI rotation or an
-      // incoming push replaced it while peers were queried, that new state
-      // may be valid — abort and let the next collection decide.
-      const currentNow = await credentialSync.readBundle(profile.home);
-      if ((currentNow ? stablePayloadKey(currentNow.payload) : null) !== failedKey) {
-        logSync(`pull for ${profile.label} aborted: credentials changed while querying peers`);
-        return;
-      }
-      const outcome = await credentialSync.writeBundle(profile.home, candidate, 'if-differs');
+      // credential still being the one that failed; the guard makes
+      // writeBundle enforce that inside its own snapshot, so a CLI rotation
+      // or incoming push that lands mid-pull wins and the round is a no-op.
+      const outcome = await credentialSync.writeBundle(profile.home, candidate, 'if-differs', {
+        expectPayload: local?.payload ?? null,
+      });
       if (outcome === 'applied') {
+        // Only applied candidates count as tried: an aborted round must not
+        // consume a candidate that was never given to the provider.
+        tried.add(key);
         syncedMtime.set(profile.id, Date.parse(candidate.rotatedAt));
         logSync(`applied pulled credentials for ${profile.label} (${candidate.rotatedAt})`);
         // Validate immediately: force skips the adapter's error cooldown, so
@@ -228,7 +227,7 @@ export async function adoptProfile(
     transport = ctx.targets.transportFor(params.targetId);
     remote = await ctx.targets.resolveProfile(params.targetId, params.remoteProfileId);
   } catch (error: unknown) {
-    throw toApiFailure(error);
+    throw sanitizedSyncFailure(error, params.targetId);
   }
   if (transport.target.kind !== 'remote') {
     throw new ApiFailure(
@@ -303,7 +302,7 @@ async function enableSyncOnOwner(
       { timeoutMs: 30_000 },
     );
   } catch (error: unknown) {
-    throw toApiFailure(error);
+    throw sanitizedSyncFailure(error, targetId);
   }
   if (result.exitCode !== 0) {
     // Remote stderr never reaches the response: a peer's output could carry

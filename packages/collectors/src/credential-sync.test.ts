@@ -25,6 +25,7 @@ function writeFileAt(file: string, value: unknown, mtimeMs: number): void {
 const T0 = Date.parse('2026-08-20T10:00:00.000Z');
 const T1 = Date.parse('2026-08-20T11:00:00.000Z');
 const T2 = Date.parse('2026-08-20T12:00:00.000Z');
+const T3 = Date.parse('2026-08-20T13:00:00.000Z');
 
 function claudeBundle(token: string, rotatedAtMs: number): CredentialBundle {
   return {
@@ -108,6 +109,39 @@ describe('credential sync (claude)', () => {
       'stale',
     );
     expect(Math.trunc(fs.statSync(file).mtimeMs)).toBe(T1);
+  });
+
+  it('honors the expectPayload guard: applies only while the on-disk payload matches', async () => {
+    const dir = home();
+    const file = path.join(dir, '.credentials.json');
+    writeFileAt(file, { claudeAiOauth: { accessToken: 'failed-local' } }, T1);
+    const failedPayload = { claudeAiOauth: { accessToken: 'failed-local' } };
+
+    // The on-disk payload rotated after the guard value was captured: stale.
+    writeFileAt(file, { claudeAiOauth: { accessToken: 'rotated-meanwhile' } }, T2);
+    expect(
+      await sync.writeBundle(dir, claudeBundle('candidate', T3), 'if-differs', {
+        expectPayload: failedPayload,
+      }),
+    ).toBe('stale');
+
+    // Matching expectation applies; a null expectation means "no file yet".
+    expect(
+      await sync.writeBundle(dir, claudeBundle('candidate', T3), 'if-differs', {
+        expectPayload: { claudeAiOauth: { accessToken: 'rotated-meanwhile' } },
+      }),
+    ).toBe('applied');
+    const empty = home();
+    expect(
+      await sync.writeBundle(empty, claudeBundle('first', T1), 'if-differs', {
+        expectPayload: null,
+      }),
+    ).toBe('applied');
+    expect(
+      await sync.writeBundle(home(), claudeBundle('first', T1), 'if-differs', {
+        expectPayload: failedPayload,
+      }),
+    ).toBe('stale');
   });
 
   it('rejects a bundle payload without a usable oauth object', async () => {
