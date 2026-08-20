@@ -233,6 +233,15 @@ describe('resolveProfile', () => {
     expect(() => resolveProfile(profiles, 'work', 'bash')).toThrow(/claude, codex, cursor/);
   });
 
+  it('disambiguates with a provider-qualified name', () => {
+    expect(resolveProfile(profiles, 'cursor:work', 'bash').id).toBe('cursor-work');
+    expect(resolveProfile(profiles, 'claude:work', 'bash').id).toBe('claude-work');
+    expect(() => resolveProfile(profiles, 'codex:work', 'claude')).toThrow(
+      /claude needs a claude profile, not codex/,
+    );
+    expect(() => resolveProfile(profiles, 'nonprovider:work', 'bash')).toThrow(/no profile named/);
+  });
+
   it('accepts a profile id and is case-insensitive on labels', () => {
     expect(resolveProfile(profiles, 'codex-work', 'bash').id).toBe('codex-work');
     expect(resolveProfile(profiles, 'PERSONAL', 'bash').id).toBe('claude-personal');

@@ -274,7 +274,21 @@ export function resolveProfile<T extends ResolvableProfile>(
   name: string,
   app: string,
 ): T {
-  const provider = APP_PROVIDERS[app];
+  const appProvider = APP_PROVIDERS[app]?.provider;
+
+  // A provider-qualified name ("cursor:personal") disambiguates labels shared
+  // across providers when the app itself is provider-neutral (bash).
+  let qualifier: ProviderId | undefined;
+  const colon = name.indexOf(':');
+  if (colon > 0 && isProviderId(name.slice(0, colon))) {
+    qualifier = name.slice(0, colon) as ProviderId;
+    name = name.slice(colon + 1);
+  }
+  if (qualifier && appProvider && qualifier !== appProvider) {
+    throw new CliError(`${app} needs a ${appProvider} profile, not ${qualifier}`);
+  }
+
+  const provider = qualifier ?? appProvider;
   const scope = provider ? profiles.filter((profile) => profile.provider === provider) : profiles;
 
   const byId = scope.find((profile) => profile.id === name);
@@ -297,7 +311,7 @@ export function resolveProfile<T extends ResolvableProfile>(
     const providers = [...new Set(matches.map((profile) => profile.provider))].sort();
     throw new CliError(
       `profile "${name}" is ambiguous (${providers.join(', ')}) — ` +
-        `run it through a provider app (e.g. apm run ${name} ${providers[0]} ...), ` +
+        `prefix the provider (e.g. apm run ${providers[0]}:${name} ...), ` +
         `pass the profile id, or use unique labels`,
     );
   }

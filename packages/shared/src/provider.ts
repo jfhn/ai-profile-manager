@@ -9,15 +9,16 @@ export type ProviderId = (typeof PROVIDER_IDS)[number];
 
 /**
  * Apps whose provider is known. `apm run` scopes the profile lookup to that
- * provider, and the session host refuses to spawn one under a profile of a
- * different provider. Anything absent here is an arbitrary command and binds
- * to whatever profile was named.
+ * provider, the session host refuses to spawn one under a profile of a
+ * different provider, and `spawns` is the binary actually launched — `cursor`
+ * spawns the CLI, not the IDE. Anything absent here is an arbitrary command
+ * and binds to whatever profile was named.
  */
-export const APP_PROVIDERS: Readonly<Record<string, ProviderId>> = {
-  claude: 'claude',
-  codex: 'codex',
-  cursor: 'cursor',
-  'cursor-agent': 'cursor',
+export const APP_PROVIDERS: Readonly<Record<string, { provider: ProviderId; spawns: string }>> = {
+  claude: { provider: 'claude', spawns: 'claude' },
+  codex: { provider: 'codex', spawns: 'codex' },
+  cursor: { provider: 'cursor', spawns: 'cursor-agent' },
+  'cursor-agent': { provider: 'cursor', spawns: 'cursor-agent' },
 };
 
 export function isProviderId(value: unknown): value is ProviderId {

@@ -183,7 +183,8 @@ export function createSessionHost(
       }
 
       const app = req.app;
-      const requiredProvider = APP_PROVIDERS[app];
+      const knownApp = APP_PROVIDERS[app];
+      const requiredProvider = knownApp?.provider;
       if (requiredProvider && profile.provider !== requiredProvider) {
         throw new ApiFailure(
           409,
@@ -202,7 +203,7 @@ export function createSessionHost(
       let pty: PtyHandle;
       try {
         pty = await transport.openPty({
-          argv: [app, ...args],
+          argv: [knownApp?.spawns ?? app, ...args],
           cwd: req.cwd,
           cols,
           rows,
