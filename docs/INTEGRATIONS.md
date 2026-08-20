@@ -117,9 +117,14 @@ upgraded to v2.
 
 The `home` path is the provider configuration root. A process-owning
 integration binds Claude with `CLAUDE_CONFIG_DIR=<home>`, Codex with
-`CODEX_HOME=<home>`, and Cursor with `CURSOR_CONFIG_DIR=<home>`, `AGENT_CLI_CREDENTIAL_STORE=file`,
-and `XDG_CONFIG_HOME=<home>` on Linux (`APPDATA=<home>` on Windows) so the
-file store’s `auth.json` lands in that home. Drop inherited `CURSOR_API_KEY` from the
+`CODEX_HOME=<home>`, and Cursor with `CURSOR_CONFIG_DIR=<home>` and
+`AGENT_CLI_CREDENTIAL_STORE=file`. Cursor’s file store writes
+`$XDG_CONFIG_HOME/cursor/auth.json` on Linux (`%APPDATA%/Cursor/auth.json` on
+Windows), so `XDG_CONFIG_HOME=<home>` (`APPDATA=<home>`) is what puts
+`auth.json` in the home — set it on the `cursor-agent` process only, never on
+a whole shell session, because every other tool reads those roots too. A
+Cursor profile whose home is the user’s own `~/.cursor` gets no variables at
+all. Drop inherited `CURSOR_API_KEY` from the
 child environment, and persist the profile `id` with its own session so a
 restore can resolve that exact entry. It should use the current default only
 for genuinely new work. A missing saved id, provider mismatch, disabled

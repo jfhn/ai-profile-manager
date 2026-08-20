@@ -1,3 +1,5 @@
+import os from 'node:os';
+import path from 'node:path';
 import Fastify, { type FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Profile } from '@apm/shared';
@@ -25,7 +27,7 @@ let app: FastifyInstance;
 beforeAll(async () => {
   const profiles: Pick<ProfileService, 'list' | 'envFor'> = {
     list: () => [LOCAL_PROFILE],
-    envFor: () => ({}),
+    envFor: () => ({ session: {}, appOnly: null }),
   };
   const remote = createFakeRemoteTransport({
     id: 'dev-box',
@@ -34,7 +36,10 @@ beforeAll(async () => {
       { id: 'claude-remote', provider: 'claude', label: 'dev', status: 'active', enabled: true },
     ],
   });
-  const targets = createTargetRegistry(createLocalTransport({ profiles }), [remote]);
+  const targets = createTargetRegistry(
+    createLocalTransport({ profiles, shimsDir: path.join(os.tmpdir(), 'apm-routes-shims') }),
+    [remote],
+  );
 
   app = Fastify({ logger: false });
   app.setErrorHandler((error: unknown, _req, reply) => {

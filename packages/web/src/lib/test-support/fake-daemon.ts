@@ -265,8 +265,8 @@ export function loginCommand(profile: Pick<Profile, 'provider' | 'home'>): strin
       return `CODEX_HOME=${profile.home} codex login`;
     case 'cursor':
       return process.platform === 'win32'
-        ? `CURSOR_CONFIG_DIR=${profile.home} AGENT_CLI_CREDENTIAL_STORE=file APPDATA=${profile.home} cursor-agent login`
-        : `CURSOR_CONFIG_DIR=${profile.home} AGENT_CLI_CREDENTIAL_STORE=file XDG_CONFIG_HOME=${profile.home} cursor-agent login`;
+        ? `env -u CURSOR_API_KEY CURSOR_CONFIG_DIR=${profile.home} AGENT_CLI_CREDENTIAL_STORE=file APPDATA=${profile.home} cursor-agent login`
+        : `env -u CURSOR_API_KEY CURSOR_CONFIG_DIR=${profile.home} AGENT_CLI_CREDENTIAL_STORE=file XDG_CONFIG_HOME=${profile.home} cursor-agent login`;
     default: {
       const _exhaustive: never = profile.provider;
       return _exhaustive;

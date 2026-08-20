@@ -15,7 +15,7 @@ import {
 } from '@apm/shared';
 import type { DaemonConfig } from '../config.js';
 import { ApiFailure, type EventBus, type ProfileService } from '../context.js';
-import { profileCacheDirectory } from './profilePaths.js';
+import { profileCacheDirectory, profileShimDirectory } from './profilePaths.js';
 
 export type AdapterRegistry = Readonly<Record<ProviderId, ProviderAdapter>>;
 
@@ -297,6 +297,10 @@ export function createProfileService(
         fs.rmSync(profile.home, { recursive: true, force: true });
       }
       fs.rmSync(profileCacheDirectory(config.cacheDir, profile.id), {
+        recursive: true,
+        force: true,
+      });
+      fs.rmSync(profileShimDirectory(config.shimsDir, profile.id), {
         recursive: true,
         force: true,
       });

@@ -125,7 +125,8 @@ copies credentials:
   that API-key logins carry no account identity, so pass `--label`.
 - **Cursor** login is `cursor-agent login`. `CURSOR_CONFIG_DIR` isolates
   `cli-config.json`; the file store writes `$XDG_CONFIG_HOME/cursor/auth.json`,
-  so apm sets `XDG_CONFIG_HOME` to the profile home as well. That `auth.json`
+  so apm sets `XDG_CONFIG_HOME` to the profile home for `cursor-agent` itself
+  — a session running anything else keeps its own config roots. That `auth.json`
   is owner-only and unencrypted (Cursor's own tradeoff). There
   are no `CURSOR_API_KEY` profiles. An API key writes nothing into the home.
   Extra args after `--` go to `cursor-agent login`.

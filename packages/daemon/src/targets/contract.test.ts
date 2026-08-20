@@ -3,6 +3,8 @@
  * local transport and the deterministic fake remote one. Anything asserted
  * here is what sessions and the CLI may rely on for any target.
  */
+import os from 'node:os';
+import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   isTransportError,
@@ -47,15 +49,21 @@ interface Fixture {
   cleanup(): Promise<void>;
 }
 
+/** No fixture binds a profile that needs a shim, so this stays empty. */
+const SHIMS_DIR = path.join(os.tmpdir(), 'apm-contract-shims');
+
 function fakeProfiles(): Pick<ProfileService, 'list' | 'envFor'> {
   return {
     list: () => [PROFILE],
-    envFor: (id) => (id === PROFILE.id ? { CLAUDE_CONFIG_DIR: PROFILE.home } : {}),
+    envFor: (id) => ({
+      session: id === PROFILE.id ? { CLAUDE_CONFIG_DIR: PROFILE.home } : {},
+      appOnly: null,
+    }),
   };
 }
 
 async function localFixture(): Promise<Fixture> {
-  const transport = createLocalTransport({ profiles: fakeProfiles() });
+  const transport = createLocalTransport({ profiles: fakeProfiles(), shimsDir: SHIMS_DIR });
   return {
     transport,
     echo: (text) => ({ argv: ['printf', '%s', text] }),

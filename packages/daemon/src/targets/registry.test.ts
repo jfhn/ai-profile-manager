@@ -2,6 +2,8 @@
  * Registry behavior plus the failures only a remote target has: an
  * unapproved machine, an unreachable machine and a closed connection.
  */
+import os from 'node:os';
+import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { LOCAL_TARGET_ID, type Profile, type TargetProfileSummary } from '@apm/shared';
 import type { ProfileService } from '../context.js';
@@ -33,12 +35,17 @@ const REMOTE_PROFILE: TargetProfileSummary = {
   enabled: true,
 };
 
+const SHIMS_DIR = path.join(os.tmpdir(), 'apm-registry-shims');
+
 function localProfiles(): Pick<ProfileService, 'list' | 'envFor'> {
-  return { list: () => [LOCAL_PROFILE], envFor: () => ({ CLAUDE_CONFIG_DIR: LOCAL_PROFILE.home }) };
+  return {
+    list: () => [LOCAL_PROFILE],
+    envFor: () => ({ session: { CLAUDE_CONFIG_DIR: LOCAL_PROFILE.home }, appOnly: null }),
+  };
 }
 
 function harness(options: { approved?: boolean } = {}) {
-  const local = createLocalTransport({ profiles: localProfiles() });
+  const local = createLocalTransport({ profiles: localProfiles(), shimsDir: SHIMS_DIR });
   const remote = createFakeRemoteTransport({
     id: 'workshop',
     approved: options.approved ?? true,
@@ -130,9 +137,10 @@ describe('target registry', () => {
 
   it('reports an unsupported capability rather than pretending', async () => {
     const remote = createFakeRemoteTransport({ id: 'exec-only', capabilities: ['exec'] });
-    const registry = createTargetRegistry(createLocalTransport({ profiles: localProfiles() }), [
-      remote,
-    ]);
+    const registry = createTargetRegistry(
+      createLocalTransport({ profiles: localProfiles(), shimsDir: SHIMS_DIR }),
+      [remote],
+    );
     expect(registry.transportFor('exec-only').supports('pty')).toBe(false);
     await expect(
       registry.transportFor('exec-only').openPty({ argv: ['sh'], cols: 80, rows: 24 }),

@@ -76,7 +76,7 @@ export async function runTargetAgent(): Promise<void> {
 
   const config = resolveConfig();
   const profiles = createProfileService(config, createEventBus());
-  const transport = createLocalTransport({ profiles });
+  const transport = createLocalTransport({ profiles, shimsDir: config.shimsDir });
 
   try {
     switch (parsed.type) {

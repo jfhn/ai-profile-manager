@@ -94,7 +94,9 @@ export function createSessionHost(
   const scrollbackBytes = options.scrollbackBytes ?? DEFAULT_SCROLLBACK_BYTES;
   const targets =
     options.targets ??
-    createTargetRegistry(options.transport ?? createLocalTransport({ profiles }));
+    createTargetRegistry(
+      options.transport ?? createLocalTransport({ profiles, shimsDir: config.shimsDir }),
+    );
   const recentDirsFile = path.join(config.dataDir, 'recent-dirs.json');
   const sessions = new Map<string, SessionRecord>();
   const nameCounters = new Map<string, number>();

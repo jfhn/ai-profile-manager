@@ -161,7 +161,7 @@ function fakeAdapter(
     hasCredentials: (home) => fs.existsSync(path.join(home, 'credentials')),
     detectIdentity: (): ProviderIdentity => ({ account: null, organization: null, plan: null }),
     collectUsage,
-    env: (home) => ({ HOME_FOR_TEST: home }),
+    env: (home) => ({ session: { HOME_FOR_TEST: home }, appOnly: null }),
     loginCommand: (home) => `login ${home}`,
     loginArgv: () => ['login'],
     defaultHome: () => path.join(os.tmpdir(), `missing-${provider}`),

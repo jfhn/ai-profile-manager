@@ -136,6 +136,7 @@ describe('runProfileAdd', () => {
     const { deps, logs, logins } = makeHarness();
     await runProfileAdd(deps, { action: 'add', provider: 'cursor', fresh: false, loginArgs: [] });
     expect(logins[0]?.argv).toEqual(['cursor-agent', 'login']);
+    // The login process is cursor-agent itself, so it takes XDG_CONFIG_HOME too.
     expect(logins[0]?.env).toEqual({
       CURSOR_CONFIG_DIR: '/data/homes/pending-1',
       AGENT_CLI_CREDENTIAL_STORE: 'file',

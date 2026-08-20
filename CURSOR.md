@@ -14,7 +14,8 @@ isolation and not Cursor-as-a-consumer of Claude/Codex profiles.
 | Usage windows                | Monthly `cursor_models` and `other_models` only                                                                                                   |
 | Integrations                 | Breaking OK — bump `apm profiles --json` (and target-scoped profiles) to schemaVersion 2 with `cursor` in the enum                                |
 | Homes                        | `CURSOR_CONFIG_DIR` + `AGENT_CLI_CREDENTIAL_STORE=file` + `XDG_CONFIG_HOME` (Linux) / `APPDATA` (Windows) so `auth.json` lands in the home        |
-| Default home                 | `~/.cursor`                                                                                                                                       |
+| Env reach                    | The two cursor-named vars are session-wide; `XDG_CONFIG_HOME` / `APPDATA` reach `cursor-agent` only, directly or through a PATH shim              |
+| Default home                 | `~/.cursor`. An adopted default home binds nothing: cursor-agent's own defaults are that setup                                                    |
 | IDE fallback                 | Only for that external default home, if `auth.json` is missing: read the IDE session token from `state.vscdb`. Never a profile home, never purged |
 | Login / default app          | `cursor-agent login` / `cursor-agent`. `agent` is the same provider app                                                                           |
 | API-key profiles             | No (`CURSOR_API_KEY` writes nothing into the home)                                                                                                |
@@ -54,15 +55,36 @@ capabilities: {
   notes: undocumented dashboard API; file credential store; default-home IDE token fallback
 }
 env(home): {
-  CURSOR_CONFIG_DIR: home
-  AGENT_CLI_CREDENTIAL_STORE: 'file'
-  XDG_CONFIG_HOME: home   // Linux: file store writes $XDG_CONFIG_HOME/cursor/auth.json
-  // APPDATA: home        // Windows
+  session: {
+    CURSOR_CONFIG_DIR: home
+    AGENT_CLI_CREDENTIAL_STORE: 'file'
+  }
+  appOnly: {
+    app: 'cursor-agent'
+    env: { XDG_CONFIG_HOME: home }   // Linux: the file store writes $XDG_CONFIG_HOME/cursor/auth.json
+                                     // Windows: { APPDATA: home }
+  }
 }
+// The adopted default home is cursor-agent's own setup: { session: {}, appOnly: null }
 loginArgv(): ['cursor-agent', 'login']
-loginCommand(home): env assignments + `cursor-agent login`
+loginCommand(home): `env -u CURSOR_API_KEY` + env assignments + `cursor-agent login`
 defaultHome(): ~/.cursor
 ```
+
+`session` variables carry Cursor's own name and are harmless to git, gh or
+anything else in a session. `XDG_CONFIG_HOME` is not: it must reach
+`cursor-agent` alone. The daemon merges `appOnly.env` straight into the child
+when the spawned command _is_ `cursor-agent`, and otherwise writes a
+`cursor-agent` shell shim under `<dataDir>/shims/profile-<hash>/`, prepended to
+the session `PATH`. The shim exports those variables, drops its own directory
+from `PATH` and execs the real `cursor-agent`. Windows gets no shim, so there
+an `apm run <cursor profile> bash` session cannot rebind `%APPDATA%` for
+`cursor-agent`; running `cursor-agent` as the session app still works.
+
+Binding nothing for the adopted `~/.cursor` home keeps sessions consistent
+with detection: `hasCredentials` accepts the IDE `state.vscdb` session there,
+which forcing the file store would hide, dropping an active profile at a
+login prompt.
 
 `hasCredentials` / `detectIdentity` are local-files only. They look at
 `auth.json` under `home`, or `home/cursor/auth.json` (Linux file store when
@@ -102,7 +124,9 @@ Order, first hit wins:
 `apm profile add` merge `{ ...process.env, ...profileEnv }`. A daemon-level
 `CURSOR_API_KEY` would bypass the home. After applying a Cursor profile
 env (login and session), **delete** `CURSOR_API_KEY` from the child env.
-Empty string is not enough. Profile binding is the home.
+Empty string is not enough. Profile binding is the home. A profile adopted at
+the default home applies no env at all, so it keeps an exported
+`CURSOR_API_KEY` — the same thing the user's own `cursor-agent` would do.
 
 ## Usage collection
 
@@ -221,7 +245,8 @@ README, PLAN.md implemented scope, `docs/API.md` discovery line,
 Note that `AGENT_CLI_CREDENTIAL_STORE=file` writes an owner-only
 unencrypted `auth.json`. `CURSOR_CONFIG_DIR` alone is not enough: on Linux the
 CLI writes `$XDG_CONFIG_HOME/cursor/auth.json`, so apm also sets
-`XDG_CONFIG_HOME` to the profile home. IDE fallback
+`XDG_CONFIG_HOME` to the profile home — for `cursor-agent` only, through a
+PATH shim when the session runs something else. IDE fallback
 is default-home only.
 
 ## Files (expected)

@@ -557,7 +557,7 @@ function fakeAdapter(provider: ProviderId): ProviderAdapter {
         ? { account: 'alice@example.test', organization: null, plan: 'pro' }
         : null,
     collectUsage: async (): Promise<CollectResult> => emptyResult(),
-    env: (home) => ({ [`${provider.toUpperCase()}_HOME`]: home }),
+    env: (home) => ({ session: { [`${provider.toUpperCase()}_HOME`]: home }, appOnly: null }),
     loginCommand: (home) => `${provider.toUpperCase()}_HOME=${home} ${defaultApp} login`,
     loginArgv: () => [defaultApp, 'login'],
     defaultHome: () => path.join(os.tmpdir(), `missing-${provider}`),
