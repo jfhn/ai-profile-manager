@@ -1,4 +1,10 @@
-import type { AdapterCapabilities, CollectResult, ProviderId, ProviderIdentity } from '@apm/shared';
+import type {
+  AdapterCapabilities,
+  CollectResult,
+  ProfileEnv,
+  ProviderId,
+  ProviderIdentity,
+} from '@apm/shared';
 
 /** Everything an adapter may use for one collection run. */
 export interface CollectContext {
@@ -46,8 +52,8 @@ export interface ProviderAdapter {
   detectIdentity(home: string): ProviderIdentity | null;
   /** Collect a usage snapshot. Never throws; failures land in result.error. */
   collectUsage(ctx: CollectContext): Promise<CollectResult>;
-  /** Env vars that bind a spawned process tree to the given home. */
-  env(home: string): Record<string, string>;
+  /** Env vars that bind a spawned process to the given home, split by reach. */
+  env(home: string): ProfileEnv;
   /** Exact login command the user runs in a normal terminal for a fresh home. */
   loginCommand(home: string): string;
   /**

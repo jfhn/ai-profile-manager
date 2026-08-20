@@ -37,6 +37,21 @@ export interface AdapterCapabilities {
   notes?: string;
 }
 
+/**
+ * The environment that binds a process to one profile home, split by how far
+ * it may travel.
+ *
+ * `session` variables carry the provider's own name (CLAUDE_CONFIG_DIR,
+ * CURSOR_CONFIG_DIR) and mean nothing to any other program, so a whole
+ * terminal session can hold them. `appOnly` variables rename general-purpose
+ * roots — XDG_CONFIG_HOME, APPDATA — and would rebind git, gh and every other
+ * tool that reads them, so they must reach `appOnly.app` and nothing else.
+ */
+export interface ProfileEnv {
+  session: Record<string, string>;
+  appOnly: { app: string; env: Record<string, string> } | null;
+}
+
 /** Identity detected from a profile home's credentials/config. */
 export interface ProviderIdentity {
   /** Primary account identifier — email where available. */

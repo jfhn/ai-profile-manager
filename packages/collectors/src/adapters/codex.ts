@@ -67,7 +67,7 @@ export const codexAdapter: ProviderAdapter = {
   hasCredentials: (home) => isRecord(readJsonSync(path.join(home, 'auth.json'))),
   detectIdentity: (home) => codexIdentity(readJsonSync(path.join(home, 'auth.json'))),
   collectUsage: async (ctx) => collectCodexUsage(ctx),
-  env: (home) => ({ CODEX_HOME: home }),
+  env: (home) => ({ session: { CODEX_HOME: home }, appOnly: null }),
   loginCommand: (home) => `CODEX_HOME=${home} codex login`,
   loginArgv: () => ['codex', 'login'],
   defaultHome: () => path.join(os.homedir(), '.codex'),

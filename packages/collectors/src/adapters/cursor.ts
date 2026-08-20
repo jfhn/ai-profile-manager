@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import type { CollectResult, ProviderIdentity, UsageWindow } from '@apm/shared';
+import type { CollectResult, ProfileEnv, ProviderIdentity, UsageWindow } from '@apm/shared';
 import type { CollectContext, ProviderAdapter } from '../adapter.js';
 import { readJsonSync, statOrNull } from '../bounded.js';
 import { fetchJson, refreshOnce } from '../oauth.js';
@@ -35,6 +35,7 @@ const REFRESH_URL = 'https://api2.cursor.sh/oauth/token';
  * rotated tokens valid for the CLI/IDE that owns the home. Undocumented.
  */
 const OAUTH_CLIENT_ID = 'KbZUR41cY7W6zRSdpSUJ7I7mLYBKOCmB';
+const CLI_APP = 'cursor-agent';
 const IDE_ACCESS_TOKEN_KEY = 'cursorAuth/accessToken';
 const IDE_REFRESH_TOKEN_KEY = 'cursorAuth/refreshToken';
 const IDE_EMAIL_KEY = 'cursorAuth/cachedEmail';
@@ -78,14 +79,17 @@ export const cursorAdapter: ProviderAdapter = {
   hasCredentials: (home) => Boolean(tokensForHome(home)?.tokens.accessToken),
   detectIdentity: (home) => cursorIdentity(home),
   collectUsage: async (ctx) => collectCursorUsage(ctx),
-  env: (home) => cursorChildEnv(home),
+  env: (home) => cursorProfileEnv(home),
   loginCommand: (home) => {
-    const assignments = Object.entries(cursorChildEnv(home))
-      .map(([key, value]) => `${key}=${value}`)
-      .join(' ');
-    return `${assignments} cursor-agent login`;
+    const { session, appOnly } = cursorProfileEnv(home);
+    const assignments = Object.entries({ ...session, ...appOnly?.env }).map(
+      ([key, value]) => `${key}=${value}`,
+    );
+    // An exported CURSOR_API_KEY would put the CLI in API-key mode and write
+    // no credentials at all, so the login the user pastes drops it.
+    return ['env', '-u', 'CURSOR_API_KEY', ...assignments, CLI_APP, 'login'].join(' ');
   },
-  loginArgv: () => ['cursor-agent', 'login'],
+  loginArgv: () => [CLI_APP, 'login'],
   defaultHome: () => path.join(os.homedir(), '.cursor'),
 };
 
@@ -93,20 +97,22 @@ export const cursorAdapter: ProviderAdapter = {
  * `CURSOR_CONFIG_DIR` isolates `cli-config.json`. The file credential store
  * ignores it and writes `$XDG_CONFIG_HOME/cursor/auth.json` on Linux
  * (`%APPDATA%/Cursor/auth.json` on Windows). Point those roots at the profile
- * home so login tokens land inside it.
+ * home so login tokens land inside it — but only for cursor-agent, since every
+ * other program in the session reads them too.
+ *
+ * The adopted default home is cursor-agent's own setup, so nothing is bound
+ * there: forcing the file store would hide the IDE session that
+ * `hasCredentials` and `detectIdentity` accept for that home, and drop an
+ * active profile at a login prompt.
  */
-function cursorChildEnv(home: string): Record<string, string> {
-  if (process.platform === 'win32') {
-    return {
-      CURSOR_CONFIG_DIR: home,
-      AGENT_CLI_CREDENTIAL_STORE: 'file',
-      APPDATA: home,
-    };
-  }
+function cursorProfileEnv(home: string): ProfileEnv {
+  if (isDefaultHome(home)) return { session: {}, appOnly: null };
   return {
-    CURSOR_CONFIG_DIR: home,
-    AGENT_CLI_CREDENTIAL_STORE: 'file',
-    XDG_CONFIG_HOME: home,
+    session: { CURSOR_CONFIG_DIR: home, AGENT_CLI_CREDENTIAL_STORE: 'file' },
+    appOnly: {
+      app: CLI_APP,
+      env: process.platform === 'win32' ? { APPDATA: home } : { XDG_CONFIG_HOME: home },
+    },
   };
 }
 

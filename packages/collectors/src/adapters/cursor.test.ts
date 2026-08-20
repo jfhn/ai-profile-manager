@@ -86,17 +86,27 @@ function usagePayload(): unknown {
 }
 
 describe('cursorAdapter', () => {
-  it('binds env and login argv to cursor-agent with a file credential store', () => {
-    const { home } = setupHome();
-    expect(cursorAdapter.env(home)).toEqual({
-      CURSOR_CONFIG_DIR: home,
-      AGENT_CLI_CREDENTIAL_STORE: 'file',
-      XDG_CONFIG_HOME: home,
+  it('keeps XDG_CONFIG_HOME out of the session env of a managed home', () => {
+    const { root } = setupHome();
+    const managed = path.join(root, 'managed');
+    fs.mkdirSync(managed);
+    expect(cursorAdapter.env(managed)).toEqual({
+      session: { CURSOR_CONFIG_DIR: managed, AGENT_CLI_CREDENTIAL_STORE: 'file' },
+      appOnly: { app: 'cursor-agent', env: { XDG_CONFIG_HOME: managed } },
     });
     expect(cursorAdapter.loginArgv()).toEqual(['cursor-agent', 'login']);
-    expect(cursorAdapter.loginCommand(home)).toContain('cursor-agent login');
-    expect(cursorAdapter.loginCommand(home)).toContain(`CURSOR_CONFIG_DIR=${home}`);
-    expect(cursorAdapter.loginCommand(home)).toContain(`XDG_CONFIG_HOME=${home}`);
+    expect(cursorAdapter.loginCommand(managed)).toBe(
+      `env -u CURSOR_API_KEY CURSOR_CONFIG_DIR=${managed} ` +
+        `AGENT_CLI_CREDENTIAL_STORE=file XDG_CONFIG_HOME=${managed} cursor-agent login`,
+    );
+  });
+
+  it('binds nothing for the adopted default home, where the IDE session counts', () => {
+    const { home } = setupHome();
+    writeStateDb({ accessToken: SECRET, email: 'ide@example.test' });
+    expect(cursorAdapter.hasCredentials(home)).toBe(true);
+    expect(cursorAdapter.env(home)).toEqual({ session: {}, appOnly: null });
+    expect(cursorAdapter.loginCommand(home)).toBe('env -u CURSOR_API_KEY cursor-agent login');
   });
 
   it('treats auth.json as credentials and reads identity from a JWT', () => {

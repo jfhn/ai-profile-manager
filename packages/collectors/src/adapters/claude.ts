@@ -53,7 +53,7 @@ export const claudeAdapter: ProviderAdapter = {
     Boolean(oauthCredentials(readJsonSync(path.join(home, '.credentials.json')))?.token),
   detectIdentity: (home) => claudeIdentity(home),
   collectUsage: async (ctx) => collectClaudeUsage(ctx),
-  env: (home) => ({ CLAUDE_CONFIG_DIR: home }),
+  env: (home) => ({ session: { CLAUDE_CONFIG_DIR: home }, appOnly: null }),
   loginCommand: (home) => `CLAUDE_CONFIG_DIR=${home} claude`,
   loginArgv: () => ['claude'],
   defaultHome: () => path.join(os.homedir(), '.claude'),
