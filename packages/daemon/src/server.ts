@@ -41,7 +41,7 @@ export async function createContext(config: DaemonConfig): Promise<AppContext> {
   const usage = createUsageService(config, events, profiles);
   // One local transport for the whole daemon; configured remotes are resolved
   // only through the same approved registry.
-  const localTransport = createLocalTransport({ profiles });
+  const localTransport = createLocalTransport({ profiles, shimsDir: config.shimsDir });
   const targets = createTargetRegistry(localTransport, createConfiguredTransports(config));
   const sessions = createSessionHost(config, events, profiles, { targets });
   return { config, events, profiles, usage, sessions, targets };
@@ -143,6 +143,16 @@ export async function startDaemon(config: DaemonConfig): Promise<DaemonHandle> {
 
   writeRunFile(config);
   ctx.usage.start();
+  // The sweep runs after the daemon is already listening, so a failing persist
+  // or event listener must not become an uncaught exception.
+  setImmediate(() => {
+    try {
+      ctx.profiles.refreshIdentities();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(`apm: identity refresh failed: ${message}`);
+    }
+  });
 
   const url = `http://${config.host}:${config.port}/?token=${config.token}`;
   let closed = false;

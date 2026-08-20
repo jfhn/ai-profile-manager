@@ -16,6 +16,8 @@ export interface DaemonConfig {
   homesDir: string;
   /** Per-profile collector caches (OAuth usage cache etc.). */
   cacheDir: string;
+  /** Per-profile PATH shims that bind a provider CLI without binding the session. */
+  shimsDir: string;
   /** Runtime rendezvous data (daemon.json with port + token). */
   runDir: string;
   runFile: string;
@@ -57,6 +59,7 @@ export function resolveConfig(
     usageDb: path.join(dataDir, 'usage.db'),
     homesDir: path.join(dataDir, 'homes'),
     cacheDir: path.join(dataDir, 'cache'),
+    shimsDir: path.join(dataDir, 'shims'),
     runDir,
     runFile: path.join(runDir, 'daemon.json'),
     logsDir: path.join(dataDir, 'logs'),
@@ -73,6 +76,7 @@ export function ensureDirs(config: DaemonConfig): void {
     config.dataDir,
     config.homesDir,
     config.cacheDir,
+    config.shimsDir,
     config.runDir,
     config.logsDir,
   ]) {

@@ -8,13 +8,18 @@
 
   let { provider }: Props = $props();
 
-  const INITIALS: Record<string, string> = { claude: 'A', codex: 'C' };
+  const INITIALS: Record<ProviderId, string> = { claude: 'A', codex: 'C', cursor: '▸' };
 
   const label = $derived(app.providerLabel(provider));
-  const initial = $derived(INITIALS[provider] ?? label.charAt(0).toUpperCase());
+  const initial = $derived(INITIALS[provider]);
 </script>
 
-<span class="mark {provider}" title={label} aria-hidden="true">{initial}</span>
+<span
+  class="mark"
+  style="--pcolor: var(--provider-{provider}, var(--dot-muted))"
+  title={label}
+  aria-hidden="true">{initial}</span
+>
 
 <style>
   .mark {
@@ -28,14 +33,6 @@
     font-weight: 700;
     line-height: 1;
     color: #ffffff;
-    background: var(--dot-muted);
-  }
-
-  .claude {
-    background: var(--claude);
-  }
-
-  .codex {
-    background: var(--codex);
+    background: var(--pcolor);
   }
 </style>

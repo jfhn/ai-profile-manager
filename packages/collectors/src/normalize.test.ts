@@ -28,6 +28,9 @@ describe('normalize helpers', () => {
 
   it('redacts credential-shaped errors and classifies failures', () => {
     expect(safeReason('Bearer abc.def_123 auth=secret accessToken: nope')).not.toContain('secret');
+    expect(safeReason('connect ECONNREFUSED after eyJhbGciOiJub25lIn0.eyJhIjoxfQ.sig')).toBe(
+      'connect ECONNREFUSED after [redacted]',
+    );
     expect(failureKind('request timed out')).toBe('timeout');
     expect(failureKind('HTTP 429')).toBe('rate-limited');
     expect(failureKind('HTTP 401 token rejected')).toBe('auth');

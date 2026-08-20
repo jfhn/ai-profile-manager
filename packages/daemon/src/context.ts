@@ -4,6 +4,7 @@ import type {
   DefaultProfileIds,
   DiscoveryCandidate,
   Profile,
+  ProfileEnv,
   ProviderId,
   ProviderInfo,
   ServerEvent,
@@ -28,6 +29,11 @@ export interface EventBus {
 }
 
 export interface ProfileService {
+  /**
+   * Re-read the detected identity of every active profile. Touches disk per
+   * profile, so the daemon runs it once after it is already serving.
+   */
+  refreshIdentities(): void;
   list(): Profile[];
   get(id: string): Profile | null;
   defaults(): DefaultProfileIds;
@@ -41,8 +47,8 @@ export interface ProfileService {
   startWizard(provider: ProviderId): Promise<WizardStateResponse>;
   wizardState(profileId: string): Promise<WizardStateResponse>;
   confirmWizard(profileId: string, label: string): Promise<Profile>;
-  /** Env vars binding a spawned process tree to this profile (CLAUDE_CONFIG_DIR / CODEX_HOME). */
-  envFor(profileId: string): Record<string, string>;
+  /** Env binding a spawned process to this profile (CLAUDE_CONFIG_DIR / CODEX_HOME / ...). */
+  envFor(profileId: string): ProfileEnv;
 }
 
 /** Options for a single usage refresh run. */

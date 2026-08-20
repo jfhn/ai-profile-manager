@@ -25,11 +25,15 @@ const HOUR = 3_600_000;
  * is inferred from the window id. Ids we don't know keep an unknown length and
  * fall back to the reset-distance heuristic below.
  */
+const MONTHLY_MS = 30 * 24 * HOUR;
+
 export const WINDOW_DURATION_MS: Record<string, number> = {
   five_hour: 5 * HOUR,
   weekly: 7 * 24 * HOUR,
   fable_weekly: 7 * 24 * HOUR,
-  monthly: 30 * 24 * HOUR,
+  monthly: MONTHLY_MS,
+  cursor_models: MONTHLY_MS,
+  other_models: MONTHLY_MS,
 };
 
 /** Display labels for the redesign; adapter labels are the fallback. */
@@ -38,9 +42,18 @@ const WINDOW_LABELS: Record<string, string> = {
   weekly: 'Weekly',
   fable_weekly: 'Weekly · Fable 5',
   monthly: 'Monthly',
+  cursor_models: 'Cursor Models',
+  other_models: 'Other Models',
 };
 
-const WINDOW_ORDER = ['five_hour', 'weekly', 'fable_weekly', 'monthly'];
+const WINDOW_ORDER = [
+  'five_hour',
+  'weekly',
+  'fable_weekly',
+  'monthly',
+  'cursor_models',
+  'other_models',
+];
 
 export function windowLabel(window: UsageWindow): string {
   return WINDOW_LABELS[window.id] ?? window.label;
@@ -50,6 +63,11 @@ export function remainingOf(window: UsageWindow): number | null {
   if (window.remainingPercent !== null) return window.remainingPercent;
   if (window.usedPercent !== null) return 100 - window.usedPercent;
   return null;
+}
+
+/** Whole percents stay whole; otherwise at most two decimal places. */
+export function formatPercent(value: number): string {
+  return Number(value.toFixed(2)).toString();
 }
 
 export interface WindowView {

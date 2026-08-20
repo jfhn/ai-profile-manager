@@ -4,6 +4,7 @@
   import {
     buildTiles,
     buildVerdict,
+    formatPercent,
     groupByProvider,
     profileView,
     qualifiedName,
@@ -135,7 +136,7 @@
     {#if views.length === 0}
       <EmptyState
         title="No profiles yet"
-        description="A profile binds one provider account to its own config home, so Claude and Codex sessions never share credentials. Add one to see quota, reset times and freshness at a glance."
+        description="A profile binds one provider account to its own config home, so Claude, Codex and Cursor sessions never share credentials. Add one to see quota, reset times and freshness at a glance."
         icon="sparkle"
         dashed
       >
@@ -153,11 +154,11 @@
           {#if verdict.best}
             <span>
               Keep working on <strong>{qualifiedName(verdict.best)}</strong>
-              — {Math.round(verdict.headroom ?? 0)}% headroom
+              — {formatPercent(verdict.headroom ?? 0)}% headroom
             </span>
             <span class="sub">
               {#if verdict.worst}
-                · {qualifiedName(verdict.worst)} is down to {Math.round(
+                · {qualifiedName(verdict.worst)} is down to {formatPercent(
                   verdict.worst.headroom ?? 0,
                 )}%{verdictResetLabel ? `, its next reset is in ${verdictResetLabel}` : ''}
               {:else if verdictResetLabel}
@@ -177,7 +178,7 @@
               {#if tiles.tightest.remaining === null}
                 —
               {:else}
-                {Math.round(tiles.tightest.remaining)}<span class="unit">% left</span>
+                {formatPercent(tiles.tightest.remaining)}<span class="unit">% left</span>
               {/if}
             </span>
             <span class="context truncate">
@@ -238,7 +239,7 @@
                 <StatusDot tone={group.tone} size={7} />
                 {group.profiles.length}
                 {group.profiles.length === 1 ? 'profile' : 'profiles'}
-                {group.headroom === null ? '' : `· ${Math.round(group.headroom)}% headroom`}
+                {group.headroom === null ? '' : `· ${formatPercent(group.headroom)}% headroom`}
               </span>
             {/if}
             <span class="chevron" class:folded aria-hidden="true">

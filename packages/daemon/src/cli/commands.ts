@@ -34,6 +34,7 @@ import type {
   TerminalSession,
 } from '@apm/shared';
 import { ensureDirs, readLiveRunFile, resolveConfig, type RunFileData } from '../config.js';
+import { childProcessEnv } from '../process-env.js';
 import { DetachEscapeParser } from './detach-escape.js';
 import {
   CliError,
@@ -101,7 +102,7 @@ function runLoginProcess(argv: string[], env: Record<string, string>): Promise<n
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
       stdio: 'inherit',
-      env: { ...process.env, ...env },
+      env: childProcessEnv(env),
     });
     child.on('error', (error) => {
       reject(new CliError(`failed to start ${command}: ${error.message} — is it installed?`));
@@ -180,7 +181,7 @@ export function buildRunSessionRequest(
 
 export function profilesContract(overview: OverviewResponse): ProfilesCliResponse {
   return profilesCliResponseSchema.parse({
-    schemaVersion: 1,
+    schemaVersion: 2,
     defaultProfileIds: { ...overview.defaultProfileIds },
     profiles: overview.profiles.map((profile) => {
       const usage = usageSnapshotSchema.safeParse(overview.usage[profile.id]);
@@ -246,7 +247,7 @@ export function targetProfilesContract(
   response: TargetProfilesResponse,
 ): TargetProfilesCliResponse {
   return targetProfilesCliResponseSchema.parse({
-    schemaVersion: 1,
+    schemaVersion: 2,
     targetId,
     profiles: response.profiles.map((profile) => ({ ...profile })),
   });

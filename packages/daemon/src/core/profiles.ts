@@ -15,7 +15,7 @@ import {
 } from '@apm/shared';
 import type { DaemonConfig } from '../config.js';
 import { ApiFailure, type EventBus, type ProfileService } from '../context.js';
-import { profileCacheDirectory } from './profilePaths.js';
+import { profileCacheDirectory, profileShimDirectory } from './profilePaths.js';
 
 export type AdapterRegistry = Readonly<Record<ProviderId, ProviderAdapter>>;
 
@@ -150,6 +150,31 @@ export function createProfileService(
   }
 
   return {
+    refreshIdentities() {
+      let changed = false;
+      const updated = profiles.map((profile) => {
+        if (profile.status !== 'active') return profile;
+        const detected = safelyDetectIdentity(adapterFor(profile.provider), profile.home);
+        if (!detected) return profile;
+        const merged = mergeIdentity(detected, profile.identity);
+        if (identitiesEqual(merged, profile.identity)) return profile;
+        changed = true;
+        return { ...profile, identity: merged };
+      });
+      if (!changed) return;
+      // Roll back on persist failure so the next sweep retries instead of
+      // serving an identity that never reached disk.
+      const previous = profiles;
+      profiles = updated;
+      try {
+        persist();
+      } catch (error) {
+        profiles = previous;
+        throw error;
+      }
+      events.emit({ type: 'profiles-changed' });
+    },
+
     list() {
       return [...profiles].sort(
         (left, right) =>
@@ -202,6 +227,7 @@ export function createProfileService(
           id: adapter.provider,
           label: adapter.displayName,
           capabilities: adapter.capabilities,
+          defaultApp: adapter.loginArgv()[0] ?? adapter.provider,
         }))
         .sort((left, right) => left.id.localeCompare(right.id));
     },
@@ -271,6 +297,10 @@ export function createProfileService(
         fs.rmSync(profile.home, { recursive: true, force: true });
       }
       fs.rmSync(profileCacheDirectory(config.cacheDir, profile.id), {
+        recursive: true,
+        force: true,
+      });
+      fs.rmSync(profileShimDirectory(config.shimsDir, profile.id), {
         recursive: true,
         force: true,
       });
@@ -556,6 +586,33 @@ function safelyDetectIdentity(adapter: ProviderAdapter, home: string): ProviderI
   } catch {
     return null;
   }
+}
+
+/**
+ * A detection is authoritative about the fields it finds, never about the ones
+ * it misses: a removed cli-config.json only means the organization is not
+ * visible right now. A null field therefore keeps whatever the store knew.
+ * A different account is a different login though, so its identity replaces
+ * the stored one instead of inheriting the previous organization and plan.
+ */
+function mergeIdentity(
+  detected: ProviderIdentity,
+  stored: ProviderIdentity | null,
+): ProviderIdentity {
+  if (detected.account && stored?.account && detected.account !== stored.account) return detected;
+  return {
+    account: detected.account ?? stored?.account ?? null,
+    organization: detected.organization ?? stored?.organization ?? null,
+    plan: detected.plan ?? stored?.plan ?? null,
+  };
+}
+
+function identitiesEqual(left: ProviderIdentity | null, right: ProviderIdentity | null): boolean {
+  return (
+    left?.account === right?.account &&
+    left?.organization === right?.organization &&
+    left?.plan === right?.plan
+  );
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

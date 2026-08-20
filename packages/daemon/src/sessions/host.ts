@@ -15,11 +15,10 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { LOCAL_TARGET_ID } from '@apm/shared';
+import { APP_PROVIDERS, LOCAL_TARGET_ID } from '@apm/shared';
 import type {
   CreateSessionRequest,
   ExitStatus,
-  ProviderId,
   PtyHandle,
   TargetTransport,
   TerminalSession,
@@ -33,12 +32,6 @@ import { createTargetRegistry, type TargetRegistry } from '../targets/registry.j
 /** Scrollback kept per session; oldest whole chunks are dropped past this. */
 export const DEFAULT_SCROLLBACK_BYTES = 1024 * 1024;
 const RECENT_DIRS_LIMIT = 20;
-
-/** Apps whose provider is known — the profile must match, or we refuse to spawn. */
-const KNOWN_APPS: Record<string, ProviderId> = {
-  claude: 'claude',
-  codex: 'codex',
-};
 
 /** Live view of one session, used by the terminal WebSocket. */
 export interface SessionListener {
@@ -101,7 +94,9 @@ export function createSessionHost(
   const scrollbackBytes = options.scrollbackBytes ?? DEFAULT_SCROLLBACK_BYTES;
   const targets =
     options.targets ??
-    createTargetRegistry(options.transport ?? createLocalTransport({ profiles }));
+    createTargetRegistry(
+      options.transport ?? createLocalTransport({ profiles, shimsDir: config.shimsDir }),
+    );
   const recentDirsFile = path.join(config.dataDir, 'recent-dirs.json');
   const sessions = new Map<string, SessionRecord>();
   const nameCounters = new Map<string, number>();
@@ -188,7 +183,8 @@ export function createSessionHost(
       }
 
       const app = req.app;
-      const requiredProvider = KNOWN_APPS[app];
+      const knownApp = APP_PROVIDERS[app];
+      const requiredProvider = knownApp?.provider;
       if (requiredProvider && profile.provider !== requiredProvider) {
         throw new ApiFailure(
           409,
@@ -207,7 +203,7 @@ export function createSessionHost(
       let pty: PtyHandle;
       try {
         pty = await transport.openPty({
-          argv: [app, ...args],
+          argv: [knownApp?.spawns ?? app, ...args],
           cwd: req.cwd,
           cols,
           rows,

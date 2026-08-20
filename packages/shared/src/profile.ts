@@ -2,8 +2,8 @@ import type { ProviderId, ProviderIdentity } from './provider.js';
 
 /**
  * A profile binds a provider to one config home (CLAUDE_CONFIG_DIR /
- * CODEX_HOME). Credentials live only inside that home on disk — never in the
- * profile store, never in API responses.
+ * CODEX_HOME / CURSOR_CONFIG_DIR). Credentials live only inside that home on
+ * disk — never in the profile store, never in API responses.
  */
 
 export type ProfileStatus = 'pending' | 'active' | 'error';

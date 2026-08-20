@@ -1,19 +1,25 @@
-import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import type { CollectResult, ProviderIdentity, UsageWindow } from '@apm/shared';
 import type { CollectContext, ProviderAdapter } from '../adapter.js';
-import { readJsonBounded, readTailBounded, statOrNull, walkFilesBounded } from '../bounded.js';
+import { readJsonSync, readTailBounded, statOrNull, walkFilesBounded } from '../bounded.js';
+import { fetchJson, refreshOnce } from '../oauth.js';
 import {
   failureKind,
   hasFutureReset,
   isRecord,
+  jwtClaims,
   makeQuotaWindow,
-  normalizeTimestamp,
   readString,
   safeReason,
 } from '../normalize.js';
+import {
+  readUsageCache,
+  writeUsageCache,
+  writeUsageError,
+  type UsageCache,
+} from '../usage-cache.js';
 
 const CODEX_STALE_MS = 24 * 60 * 60 * 1000;
 const CODEX_SCAN_AGE_MS = 21 * 24 * 60 * 60 * 1000;
@@ -61,7 +67,7 @@ export const codexAdapter: ProviderAdapter = {
   hasCredentials: (home) => isRecord(readJsonSync(path.join(home, 'auth.json'))),
   detectIdentity: (home) => codexIdentity(readJsonSync(path.join(home, 'auth.json'))),
   collectUsage: async (ctx) => collectCodexUsage(ctx),
-  env: (home) => ({ CODEX_HOME: home }),
+  env: (home) => ({ session: { CODEX_HOME: home }, appOnly: null }),
   loginCommand: (home) => `CODEX_HOME=${home} codex login`,
   loginArgv: () => ['codex', 'login'],
   defaultHome: () => path.join(os.homedir(), '.codex'),
@@ -352,32 +358,6 @@ function usableUsagePayload(
   };
 }
 
-interface UsageCache {
-  usage: unknown | null;
-  updatedAt: string | null;
-  ageMs: number;
-  errorAt: string | null;
-  errorAgeMs: number;
-  errorReason: string | null;
-}
-
-async function readUsageCache(file: string, nowMs: number): Promise<UsageCache> {
-  const data = await readJsonBounded(file);
-  const record = isRecord(data) ? data : null;
-  const updatedAt = normalizeTimestamp(record?.updatedAt);
-  const errorAt = normalizeTimestamp(record?.lastErrorAt);
-  const updatedMs = Date.parse(updatedAt ?? '');
-  const errorMs = Date.parse(errorAt ?? '');
-  return {
-    usage: record?.usage ?? null,
-    updatedAt,
-    ageMs: Number.isFinite(updatedMs) ? nowMs - updatedMs : Infinity,
-    errorAt,
-    errorAgeMs: Number.isFinite(errorMs) ? nowMs - errorMs : Infinity,
-    errorReason: readString(record?.lastErrorReason),
-  };
-}
-
 /**
  * True when the profile logged in (or refreshed its token) after the recorded
  * error, which makes the cached failure obsolete and worth retrying at once.
@@ -426,7 +406,9 @@ async function fetchCodexUsage(
   if (first.status !== 401) return { usage: first.usage, reason: first.reason };
   if (!credentials.refreshToken)
     return { usage: null, reason: 'Codex usage endpoint rejected credentials; run codex login' };
-  const refreshed = await refreshCodexTokens(ctx, authFile, credentials, nowMs);
+  const refreshed = await refreshOnce(refreshInFlight, ctx.home, () =>
+    requestTokenRefresh(ctx, authFile, credentials, nowMs),
+  );
   if (!refreshed.tokens) return { usage: null, reason: refreshed.reason };
   const retry = await usageRequest(ctx, refreshed.tokens);
   return retry.status === 401
@@ -438,41 +420,33 @@ async function usageRequest(
   ctx: CollectContext,
   tokens: CodexTokens,
 ): Promise<{ status: number | null; usage: unknown | null; reason: string | null }> {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 8_000);
-  try {
-    const response = await (ctx.fetchImpl ?? fetch)(CODEX_USAGE_URL, {
-      method: 'GET',
-      headers: {
-        Authorization: `Bearer ${tokens.accessToken}`,
-        ...(tokens.accountId ? { 'chatgpt-account-id': tokens.accountId } : {}),
-      },
-      signal: controller.signal,
-    });
-    if (!response.ok)
+  const outcome = await fetchJson(ctx.fetchImpl, CODEX_USAGE_URL, {
+    method: 'GET',
+    headers: {
+      Authorization: `Bearer ${tokens.accessToken}`,
+      ...(tokens.accountId ? { 'chatgpt-account-id': tokens.accountId } : {}),
+    },
+  });
+  switch (outcome.kind) {
+    case 'ok':
+      return { status: outcome.status, usage: outcome.body, reason: null };
+    case 'http-error':
       return {
-        status: response.status,
+        status: outcome.status,
         usage: null,
         reason:
-          response.status === 401 || response.status === 403
+          outcome.status === 401 || outcome.status === 403
             ? 'Codex usage endpoint rejected credentials; run codex login'
-            : `Codex usage endpoint returned HTTP ${response.status}`,
+            : `Codex usage endpoint returned HTTP ${outcome.status}`,
       };
-    return { status: response.status, usage: await response.json(), reason: null };
-  } catch (error) {
-    return {
-      status: null,
-      usage: null,
-      reason: safeReason(
-        error instanceof Error && error.name === 'AbortError'
-          ? 'Codex usage endpoint timed out'
-          : error instanceof Error
-            ? error.message
-            : error,
-      ),
-    };
-  } finally {
-    clearTimeout(timeout);
+    case 'timeout':
+      return { status: null, usage: null, reason: safeReason('Codex usage endpoint timed out') };
+    case 'failed':
+      return {
+        status: null,
+        usage: null,
+        reason: safeReason(outcome.error instanceof Error ? outcome.error.message : outcome.error),
+      };
   }
 }
 
@@ -481,25 +455,7 @@ interface RefreshOutcome {
   reason: string | null;
 }
 
-/** In-flight refreshes keyed by resolved home: concurrent collections for the
- * same profile must never race a single-use refresh token. */
 const refreshInFlight = new Map<string, Promise<RefreshOutcome>>();
-
-function refreshCodexTokens(
-  ctx: CollectContext,
-  authFile: string,
-  credentials: CodexTokens,
-  nowMs: number,
-): Promise<RefreshOutcome> {
-  const key = path.resolve(ctx.home);
-  const pending = refreshInFlight.get(key);
-  if (pending) return pending;
-  const run = requestTokenRefresh(ctx, authFile, credentials, nowMs).finally(() =>
-    refreshInFlight.delete(key),
-  );
-  refreshInFlight.set(key, run);
-  return run;
-}
 
 async function requestTokenRefresh(
   ctx: CollectContext,
@@ -507,50 +463,45 @@ async function requestTokenRefresh(
   credentials: CodexTokens,
   nowMs: number,
 ): Promise<RefreshOutcome> {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 8_000);
-  try {
-    const response = await (ctx.fetchImpl ?? fetch)(CODEX_TOKEN_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        client_id: CODEX_OAUTH_CLIENT_ID,
-        grant_type: 'refresh_token',
-        refresh_token: credentials.refreshToken,
-        scope: 'openid profile email',
-      }),
-      signal: controller.signal,
-    });
-    if (!response.ok)
-      return { tokens: null, reason: 'Codex token refresh was rejected; run codex login' };
-    const payload: unknown = await response.json();
-    const record = isRecord(payload) ? payload : null;
-    const accessToken = readString(record?.access_token);
-    if (!accessToken)
-      return { tokens: null, reason: 'Codex token refresh was rejected; run codex login' };
-    return persistRotatedTokens(
-      authFile,
-      credentials,
-      {
-        accessToken,
-        refreshToken: readString(record?.refresh_token),
-        idToken: readString(record?.id_token),
-      },
-      nowMs,
-    );
-  } catch (error) {
-    return {
-      tokens: null,
-      reason: safeReason(
-        error instanceof Error && error.name === 'AbortError'
-          ? 'Codex token refresh timed out'
-          : error instanceof Error
-            ? error.message
-            : error,
-      ),
-    };
-  } finally {
-    clearTimeout(timeout);
+  const rejected: RefreshOutcome = {
+    tokens: null,
+    reason: 'Codex token refresh was rejected; run codex login',
+  };
+  const outcome = await fetchJson(ctx.fetchImpl, CODEX_TOKEN_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      client_id: CODEX_OAUTH_CLIENT_ID,
+      grant_type: 'refresh_token',
+      refresh_token: credentials.refreshToken,
+      scope: 'openid profile email',
+    }),
+  });
+  switch (outcome.kind) {
+    case 'ok': {
+      const record = isRecord(outcome.body) ? outcome.body : null;
+      const accessToken = readString(record?.access_token);
+      if (!accessToken) return rejected;
+      return persistRotatedTokens(
+        authFile,
+        credentials,
+        {
+          accessToken,
+          refreshToken: readString(record?.refresh_token),
+          idToken: readString(record?.id_token),
+        },
+        nowMs,
+      );
+    }
+    case 'http-error':
+      return rejected;
+    case 'timeout':
+      return { tokens: null, reason: safeReason('Codex token refresh timed out') };
+    case 'failed':
+      return {
+        tokens: null,
+        reason: safeReason(outcome.error instanceof Error ? outcome.error.message : outcome.error),
+      };
   }
 }
 
@@ -618,38 +569,6 @@ async function writeAuthAtomic(file: string, value: unknown): Promise<void> {
   } catch {
     // Persisting is best-effort: the in-memory tokens still serve this run.
     await fsp.rm(temp, { force: true }).catch(() => undefined);
-  }
-}
-
-async function writeUsageCache(
-  file: string,
-  data: { updatedAt: string; usage: unknown },
-): Promise<void> {
-  try {
-    await fsp.mkdir(path.dirname(file), { recursive: true });
-    await fsp.writeFile(file, `${JSON.stringify(data, null, 2)}\n`, { mode: 0o600 });
-    await fsp.chmod(file, 0o600);
-  } catch {
-    // Cache writes are best-effort.
-  }
-}
-
-async function writeUsageError(
-  file: string,
-  cache: UsageCache,
-  reason: string,
-  nowMs: number,
-): Promise<void> {
-  try {
-    await fsp.mkdir(path.dirname(file), { recursive: true });
-    await fsp.writeFile(
-      file,
-      `${JSON.stringify({ updatedAt: cache.updatedAt, usage: cache.usage, lastErrorAt: new Date(nowMs).toISOString(), lastErrorReason: safeReason(reason) }, null, 2)}\n`,
-      { mode: 0o600 },
-    );
-    await fsp.chmod(file, 0o600);
-  } catch {
-    // Cache writes are best-effort.
   }
 }
 
@@ -723,27 +642,4 @@ function codexIdentity(value: unknown): ProviderIdentity | null {
       readString(claims.chatgpt_plan_type) ??
       readString(auth.plan_type),
   };
-}
-
-function jwtClaims(token: string | null): Record<string, unknown> | null {
-  if (!token) return null;
-  try {
-    const part = token.split('.')[1];
-    if (!part) return null;
-    const decoded = Buffer.from(part.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString(
-      'utf8',
-    );
-    const claims: unknown = JSON.parse(decoded);
-    return isRecord(claims) ? claims : null;
-  } catch {
-    return null;
-  }
-}
-
-function readJsonSync(file: string): unknown | null {
-  try {
-    return JSON.parse(fs.readFileSync(file, 'utf8')) as unknown;
-  } catch {
-    return null;
-  }
 }

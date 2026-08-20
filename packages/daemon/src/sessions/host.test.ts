@@ -32,10 +32,10 @@ function fakeProfiles(profiles: Profile[]): ProfileService {
     get: (id) => profiles.find((profile) => profile.id === id) ?? null,
     envFor: (id) => {
       const profile = profiles.find((entry) => entry.id === id);
-      if (!profile) return {};
+      if (!profile) return { session: {}, appOnly: null };
       return profile.provider === 'claude'
-        ? { CLAUDE_CONFIG_DIR: profile.home }
-        : { CODEX_HOME: profile.home };
+        ? { session: { CLAUDE_CONFIG_DIR: profile.home }, appOnly: null }
+        : { session: { CODEX_HOME: profile.home }, appOnly: null };
     },
   };
   return partial as ProfileService;
@@ -194,7 +194,7 @@ describe('session host', () => {
       ],
     });
     const targets = createTargetRegistry(
-      createLocalTransport({ profiles: fakeProfiles(localProfiles) }),
+      createLocalTransport({ profiles: fakeProfiles(localProfiles), shimsDir: config.shimsDir }),
       [remote],
     );
     const host = makeHost(localProfiles, { targets });
@@ -231,7 +231,7 @@ describe('session host', () => {
       ],
     });
     const targets = createTargetRegistry(
-      createLocalTransport({ profiles: fakeProfiles(localProfiles) }),
+      createLocalTransport({ profiles: fakeProfiles(localProfiles), shimsDir: config.shimsDir }),
       [remote],
     );
     const host = makeHost(localProfiles, { targets });
@@ -279,6 +279,30 @@ describe('session host', () => {
     expect(events.filter((event) => event.type === 'sessions-changed').length).toBeGreaterThan(1);
   });
 
+  it('spawns the provider CLI for the app name cursor', async () => {
+    const remoteProfile: TargetProfileSummary = {
+      id: 'remote-cursor',
+      provider: 'cursor',
+      label: 'work',
+      status: 'active',
+      enabled: true,
+    };
+    const remote = createFakeRemoteTransport({ id: 'workstation', profiles: [remoteProfile] });
+    const targets = createTargetRegistry(
+      createLocalTransport({ profiles: fakeProfiles([]), shimsDir: config.shimsDir }),
+      [remote],
+    );
+    const host = makeHost([], { targets });
+
+    const session = await host.create({
+      targetId: 'workstation',
+      profileId: remoteProfile.id,
+      app: 'cursor',
+    });
+    expect(session.app).toBe('cursor');
+    expect(remote.lastPty().spec.argv).toEqual(['cursor-agent']);
+  });
+
   it('selects a remote target and preserves its profile, argv and pty events', async () => {
     const localProfiles = [makeProfile()];
     const remoteProfile: TargetProfileSummary = {
@@ -290,7 +314,7 @@ describe('session host', () => {
     };
     const remote = createFakeRemoteTransport({ id: 'workstation', profiles: [remoteProfile] });
     const targets = createTargetRegistry(
-      createLocalTransport({ profiles: fakeProfiles(localProfiles) }),
+      createLocalTransport({ profiles: fakeProfiles(localProfiles), shimsDir: config.shimsDir }),
       [remote],
     );
     const host = makeHost(localProfiles, { targets });
@@ -362,7 +386,7 @@ describe('session host', () => {
       ],
     });
     const targets = createTargetRegistry(
-      createLocalTransport({ profiles: fakeProfiles(localProfiles) }),
+      createLocalTransport({ profiles: fakeProfiles(localProfiles), shimsDir: config.shimsDir }),
       [remote],
     );
     const host = makeHost(localProfiles, { targets });
@@ -402,6 +426,12 @@ describe('session host', () => {
       statusCode: 409,
     });
     await expect(host.create({ profileId: 'profile-1', app: 'codex' })).rejects.toMatchObject({
+      statusCode: 409,
+      code: 'provider-mismatch',
+    });
+    await expect(
+      host.create({ profileId: 'profile-1', app: 'cursor-agent' }),
+    ).rejects.toMatchObject({
       statusCode: 409,
       code: 'provider-mismatch',
     });

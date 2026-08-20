@@ -62,19 +62,43 @@ export type AgentResponse =
   | ({ type: 'exit' } & ExitStatus)
   | { type: 'error'; code: TransportErrorCode; message: string };
 
+const targetProfileSchema = z.object({
+  id: profileIdSchema,
+  provider: providerIdSchema,
+  label: z.string(),
+  status: z.enum(['pending', 'active', 'error']),
+  enabled: z.boolean(),
+});
+
+const knownProviderEntrySchema = z.object({ provider: providerIdSchema });
+
+/**
+ * A newer remote apm may list profiles of a provider this build does not know.
+ * Only those entries are dropped, so the rest of the target stays reachable.
+ * An entry of a known provider that does not parse is real corruption and
+ * fails the whole response, as it did before.
+ */
+const targetProfilesSchema = z.array(z.unknown()).transform((entries, ctx) => {
+  const profiles: TargetProfileSummary[] = [];
+  for (const entry of entries) {
+    const parsed = targetProfileSchema.safeParse(entry);
+    if (parsed.success) {
+      profiles.push(parsed.data);
+      continue;
+    }
+    if (knownProviderEntrySchema.safeParse(entry).success) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Malformed profile entry' });
+      return z.NEVER;
+    }
+  }
+  return profiles;
+});
+
 export const agentResponseSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('ready'), handleId: z.string().optional() }),
   z.object({
     type: z.literal('profiles'),
-    profiles: z.array(
-      z.object({
-        id: profileIdSchema,
-        provider: providerIdSchema,
-        label: z.string(),
-        status: z.enum(['pending', 'active', 'error']),
-        enabled: z.boolean(),
-      }),
-    ),
+    profiles: targetProfilesSchema,
   }),
   z.object({
     type: z.literal('result'),

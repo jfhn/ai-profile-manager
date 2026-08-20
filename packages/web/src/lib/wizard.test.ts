@@ -207,3 +207,25 @@ describe('WizardFlow: dismiss, resume, confirm', () => {
     expect(flow.step).toBe('login');
   });
 });
+
+describe('loginCommand', () => {
+  it('matches each provider adapter, including Cursor file-store env', () => {
+    expect(loginCommand({ provider: 'claude', home: '/h' })).toBe('CLAUDE_CONFIG_DIR=/h claude');
+    expect(loginCommand({ provider: 'codex', home: '/h' })).toBe('CODEX_HOME=/h codex login');
+    expect(loginCommand({ provider: 'cursor', home: '/h' })).toBe(
+      'env -u CURSOR_API_KEY CURSOR_CONFIG_DIR=/h AGENT_CLI_CREDENTIAL_STORE=file ' +
+        'XDG_CONFIG_HOME=/h cursor-agent login',
+    );
+  });
+
+  it('starts a Cursor wizard with that command', async () => {
+    const daemon = new FakeDaemon();
+    const { flow } = harness(daemon);
+    await flow.start('cursor');
+    const pending = daemon.profiles[0];
+    expect(pending?.provider).toBe('cursor');
+    expect(flow.wizard?.loginCommand).toBe(loginCommand(pending!));
+    expect(flow.wizard?.loginCommand).toContain('cursor-agent login');
+    expect(flow.wizard?.loginCommand).not.toContain('codex login');
+  });
+});

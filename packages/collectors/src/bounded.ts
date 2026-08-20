@@ -1,3 +1,4 @@
+import fsSync from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
@@ -78,6 +79,15 @@ export async function walkFilesBounded(
 
   await visit(root, 0);
   return files;
+}
+
+/** Read a small provider-owned JSON file from a synchronous path. */
+export function readJsonSync(file: string): unknown | null {
+  try {
+    return JSON.parse(fsSync.readFileSync(file, 'utf8')) as unknown;
+  } catch {
+    return null;
+  }
 }
 
 export async function statOrNull(

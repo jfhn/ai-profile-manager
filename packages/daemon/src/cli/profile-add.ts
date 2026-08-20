@@ -55,7 +55,10 @@ export async function runProfileAdd(
     deps.log('If the provider CLI stays open after the login completes, exit it to continue.');
     deps.log('');
     const argv = [...adapter.loginArgv(), ...invocation.loginArgs];
-    const exitCode = await deps.runLogin(argv, adapter.env(state.profile.home));
+    // The login command is the provider CLI itself, so it takes the app-only
+    // vars directly.
+    const binding = adapter.env(state.profile.home);
+    const exitCode = await deps.runLogin(argv, { ...binding.session, ...binding.appOnly?.env });
     state = await waitForCredentials(deps, profileId);
     if (!state.credentialsFound) {
       const exitNote = exitCode === 0 ? '' : ` (login exited with code ${exitCode})`;
@@ -82,7 +85,8 @@ export async function runProfileAdd(
 
   const identity = profile.identity?.account;
   deps.log(`profile "${profile.label}" added${identity ? ` (${identity})` : ''}`);
-  deps.log(`run it with: apm run ${profile.label} ${profile.provider}`);
+  const defaultApp = adapter.loginArgv()[0] ?? profile.provider;
+  deps.log(`run it with: apm run ${profile.label} ${defaultApp}`);
 }
 
 /**

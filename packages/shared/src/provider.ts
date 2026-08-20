@@ -4,8 +4,22 @@
  * (packages/collectors); everything here is provider-agnostic shape.
  */
 
-export const PROVIDER_IDS = ['claude', 'codex'] as const;
+export const PROVIDER_IDS = ['claude', 'codex', 'cursor'] as const;
 export type ProviderId = (typeof PROVIDER_IDS)[number];
+
+/**
+ * Apps whose provider is known. `apm run` scopes the profile lookup to that
+ * provider, the session host refuses to spawn one under a profile of a
+ * different provider, and `spawns` is the binary actually launched — `cursor`
+ * spawns the CLI, not the IDE. Anything absent here is an arbitrary command
+ * and binds to whatever profile was named.
+ */
+export const APP_PROVIDERS: Readonly<Record<string, { provider: ProviderId; spawns: string }>> = {
+  claude: { provider: 'claude', spawns: 'claude' },
+  codex: { provider: 'codex', spawns: 'codex' },
+  cursor: { provider: 'cursor', spawns: 'cursor-agent' },
+  'cursor-agent': { provider: 'cursor', spawns: 'cursor-agent' },
+};
 
 export function isProviderId(value: unknown): value is ProviderId {
   return typeof value === 'string' && (PROVIDER_IDS as readonly string[]).includes(value);
@@ -23,6 +37,21 @@ export interface AdapterCapabilities {
   windows: string[];
   /** Human-readable caveats, e.g. "OAuth usage endpoint is undocumented". */
   notes?: string;
+}
+
+/**
+ * The environment that binds a process to one profile home, split by how far
+ * it may travel.
+ *
+ * `session` variables carry the provider's own name (CLAUDE_CONFIG_DIR,
+ * CURSOR_CONFIG_DIR) and mean nothing to any other program, so a whole
+ * terminal session can hold them. `appOnly` variables rename general-purpose
+ * roots — XDG_CONFIG_HOME, APPDATA — and would rebind git, gh and every other
+ * tool that reads them, so they must reach `appOnly.app` and nothing else.
+ */
+export interface ProfileEnv {
+  session: Record<string, string>;
+  appOnly: { app: string; env: Record<string, string> } | null;
 }
 
 /** Identity detected from a profile home's credentials/config. */

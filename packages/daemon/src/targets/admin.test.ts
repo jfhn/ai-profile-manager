@@ -38,7 +38,10 @@ const STATUS_JSON = JSON.stringify({
   },
 });
 
-const noProfiles: Pick<ProfileService, 'list' | 'envFor'> = { list: () => [], envFor: () => ({}) };
+const noProfiles: Pick<ProfileService, 'list' | 'envFor'> = {
+  list: () => [],
+  envFor: () => ({ session: {}, appOnly: null }),
+};
 
 let dataDir: string;
 let config: DaemonConfig;
@@ -78,7 +81,9 @@ beforeEach(async () => {
   config = resolveConfig({ dataDir });
   created = [];
   status = { stdout: STATUS_JSON };
-  targets = createTargetRegistry(createLocalTransport({ profiles: noProfiles }));
+  targets = createTargetRegistry(
+    createLocalTransport({ profiles: noProfiles, shimsDir: config.shimsDir }),
+  );
 
   app = Fastify({ logger: false });
   app.setErrorHandler((error: unknown, _req, reply) => {

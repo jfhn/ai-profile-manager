@@ -13,6 +13,7 @@ import {
   type TargetTransport,
 } from '@apm/shared';
 import type { ProfileService } from '../context.js';
+import { profileShimDirectory } from '../core/profilePaths.js';
 import { createLocalTarget, createLocalTransport } from './local.js';
 
 const PROFILE: Profile = {
@@ -36,13 +37,32 @@ const CODEX_PROFILE: Profile = {
   home: '/tmp/apm-codex-home',
 };
 
+const CURSOR_PROFILE: Profile = {
+  ...PROFILE,
+  id: 'profile-cursor',
+  provider: 'cursor',
+  label: 'cursor work',
+  home: '/tmp/apm-cursor-home',
+};
+
 function profiles(): Pick<ProfileService, 'list' | 'envFor'> {
   return {
-    list: () => [PROFILE, CODEX_PROFILE],
+    list: () => [PROFILE, CODEX_PROFILE, CURSOR_PROFILE],
     envFor: (id) => {
-      if (id === PROFILE.id) return { CLAUDE_CONFIG_DIR: PROFILE.home };
-      if (id === CODEX_PROFILE.id) return { CODEX_HOME: CODEX_PROFILE.home };
-      return {};
+      if (id === PROFILE.id) return { session: { CLAUDE_CONFIG_DIR: PROFILE.home }, appOnly: null };
+      if (id === CODEX_PROFILE.id) {
+        return { session: { CODEX_HOME: CODEX_PROFILE.home }, appOnly: null };
+      }
+      if (id === CURSOR_PROFILE.id) {
+        return {
+          session: {
+            CURSOR_CONFIG_DIR: CURSOR_PROFILE.home,
+            AGENT_CLI_CREDENTIAL_STORE: 'file',
+          },
+          appOnly: { app: 'cursor-agent', env: { XDG_CONFIG_HOME: CURSOR_PROFILE.home } },
+        };
+      }
+      return { session: {}, appOnly: null };
     },
   };
 }
@@ -50,10 +70,12 @@ function profiles(): Pick<ProfileService, 'list' | 'envFor'> {
 describe('local transport', () => {
   let transport: TargetTransport;
   let dir: string;
+  let shimsDir: string;
 
   beforeEach(() => {
-    transport = createLocalTransport({ profiles: profiles() });
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'apm-local-'));
+    shimsDir = path.join(dir, 'shims');
+    transport = createLocalTransport({ profiles: profiles(), shimsDir });
   });
 
   afterEach(async () => {
@@ -90,6 +112,15 @@ describe('local transport', () => {
       cwd: dir,
     });
     expect(unbound.stdout).toBe('');
+
+    // A provider that binds through its own variables needs no shim.
+    const withPath = await transport.exec({
+      argv: ['sh', '-c', 'printf %s "$PATH"'],
+      profileIds: [PROFILE.id],
+      cwd: dir,
+    });
+    expect(withPath.stdout).toBe(process.env.PATH);
+    expect(fs.existsSync(shimsDir)).toBe(false);
   });
 
   it('merges every bound profile’s env — one per provider — into one process', async () => {
@@ -107,6 +138,68 @@ describe('local transport', () => {
       cwd: dir,
     });
     expect(codexOnly.stdout).toBe(`:${CODEX_PROFILE.home}`);
+  });
+
+  it('drops inherited CURSOR_API_KEY when a Cursor profile is bound', async () => {
+    const previous = process.env.CURSOR_API_KEY;
+    process.env.CURSOR_API_KEY = 'inherited-secret';
+    try {
+      const result = await transport.exec({
+        argv: ['sh', '-c', 'printf %s "${CURSOR_API_KEY+set}:$CURSOR_CONFIG_DIR"'],
+        profileIds: [CURSOR_PROFILE.id],
+        cwd: dir,
+      });
+      expect(result.stdout).toBe(`:${CURSOR_PROFILE.home}`);
+    } finally {
+      if (previous === undefined) delete process.env.CURSOR_API_KEY;
+      else process.env.CURSOR_API_KEY = previous;
+    }
+  });
+
+  it('keeps a Cursor binding out of the session and reaches cursor-agent through a shim', async () => {
+    const binDir = path.join(dir, 'bin');
+    fs.mkdirSync(binDir);
+    fs.writeFileSync(
+      path.join(binDir, 'cursor-agent'),
+      '#!/bin/sh\nprintf \'%s\\n\' "$XDG_CONFIG_HOME" "$PATH" "$CURSOR_CONFIG_DIR"\n',
+      { mode: 0o755 },
+    );
+
+    const result = await transport.exec({
+      argv: ['sh', '-c', `printf '%s\\n' "$XDG_CONFIG_HOME" "$CURSOR_CONFIG_DIR"; cursor-agent`],
+      profileIds: [CURSOR_PROFILE.id],
+      env: { PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ''}` },
+      cwd: dir,
+    });
+
+    const [sessionXdg, sessionConfigDir, agentXdg, agentPath, agentConfigDir] =
+      result.stdout.split('\n');
+    expect(sessionXdg).not.toBe(CURSOR_PROFILE.home);
+    expect(sessionConfigDir).toBe(CURSOR_PROFILE.home);
+    expect(agentXdg).toBe(CURSOR_PROFILE.home);
+    expect(agentConfigDir).toBe(CURSOR_PROFILE.home);
+    // The shim dropped its own directory, so cursor-agent ran the real binary.
+    const shimDir = profileShimDirectory(shimsDir, CURSOR_PROFILE.id);
+    expect(agentPath?.split(path.delimiter)).not.toContain(shimDir);
+    expect(fs.statSync(path.join(shimDir, 'cursor-agent')).mode & 0o777).toBe(0o755);
+  });
+
+  it('gives cursor-agent itself the app-only vars without a shim', async () => {
+    const agent = path.join(dir, 'cursor-agent');
+    fs.writeFileSync(agent, '#!/bin/sh\nprintf \'%s\\n\' "$XDG_CONFIG_HOME" "$PATH"\n', {
+      mode: 0o755,
+    });
+
+    const result = await transport.exec({
+      argv: [agent],
+      profileIds: [CURSOR_PROFILE.id],
+      cwd: dir,
+    });
+
+    const [xdg, pathValue] = result.stdout.split('\n');
+    expect(xdg).toBe(CURSOR_PROFILE.home);
+    expect(pathValue).toBe(process.env.PATH);
+    expect(fs.existsSync(shimsDir)).toBe(false);
   });
 
   it('runs in the requested cwd and defaults to the home directory', async () => {

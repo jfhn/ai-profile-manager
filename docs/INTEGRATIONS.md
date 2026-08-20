@@ -17,14 +17,18 @@ returned. Successful `--json` output writes one JSON document and a trailing
 newline to stdout; daemon logs and failures never share stdout. A failure is
 reported on stderr with a non-zero exit status.
 
-Target discovery follows the same stdout and schema-version rules. `apm
-targets --json` returns the local target plus configured remotes, including
-their capability, approval, and status fields. `apm targets --profiles
-<target-id> --json` returns profile summaries from that target's own namespace:
+`apm profiles --json` and target-scoped profiles (`apm targets --profiles
+<id> --json`) are schemaVersion 2. `apm targets --json` stays at
+schemaVersion 1. It has no provider enum.
+
+Target discovery follows the same stdout rules. `apm targets --json` returns
+the local target plus configured remotes, including their capability,
+approval, and status fields. `apm targets --profiles <target-id> --json`
+returns profile summaries from that target's own namespace:
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "targetId": "devbox",
   "profiles": [
     {
@@ -51,11 +55,11 @@ an added capability must never make an otherwise usable target invalid.
 `targetsCliProducerSchema` from `@apm/shared` is a producer-side assertion used
 by APM itself, not a forward-compatible consumer validator.
 
-## Version 1 stdout schema
+## Version 2 stdout schema
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "defaultProfileIds": {
     "claude": "6ba4b56c-..."
   },
@@ -82,16 +86,18 @@ profile-id mismatches are omitted without rewriting usage history. A later
 valid row becomes visible normally. Credentials and detected account identity
 are not part of this contract.
 
-Profile ids are opaque and must be preserved exactly. In schema version 1 an
+Profile ids are opaque and must be preserved exactly. In schema version 2 an
 id must be nonblank after trimming, contain no Unicode control character
 (General Category `Cc`), and occupy at most 256 bytes when UTF-8 encoded. Edge
 or interior whitespace, punctuation, slashes, and Unicode are otherwise valid;
 an id is never a path segment or shell token.
 
-Version 1 has a closed provider enum and default-key set: only `claude` and
-`codex` are valid. Consumers should reject other provider values or keys. Adding
-a provider therefore requires a schema-version bump or explicit compatibility
-handling rather than silently extending version 1.
+Version 2 has a closed provider enum and default-key set: only `claude`,
+`codex`, and `cursor` are valid. The same enum applies to `apm profiles
+--json` and `apm targets --profiles <id> --json`. Consumers must reject other
+provider values or keys, and must reject any other `schemaVersion`. Version
+1's enum was only `claude` and `codex`, so adding a provider required this
+bump rather than silently extending version 1.
 
 `defaultProfileIds` is intentionally partial. An absent provider key means the
 provider has no active, enabled profile at all; starting new provider work must
@@ -110,8 +116,16 @@ upgraded to v2.
 ## Launch ownership
 
 The `home` path is the provider configuration root. A process-owning
-integration binds Claude with `CLAUDE_CONFIG_DIR=<home>` and Codex with
-`CODEX_HOME=<home>`, then persists the profile `id` with its own session so a
+integration binds Claude with `CLAUDE_CONFIG_DIR=<home>`, Codex with
+`CODEX_HOME=<home>`, and Cursor with `CURSOR_CONFIG_DIR=<home>` and
+`AGENT_CLI_CREDENTIAL_STORE=file`. Cursor’s file store writes
+`$XDG_CONFIG_HOME/cursor/auth.json` on Linux (`%APPDATA%/Cursor/auth.json` on
+Windows), so `XDG_CONFIG_HOME=<home>` (`APPDATA=<home>`) is what puts
+`auth.json` in the home — set it on the `cursor-agent` process only, never on
+a whole shell session, because every other tool reads those roots too. A
+Cursor profile whose home is the user’s own `~/.cursor` gets no variables at
+all. Drop inherited `CURSOR_API_KEY` from the
+child environment, and persist the profile `id` with its own session so a
 restore can resolve that exact entry. It should use the current default only
 for genuinely new work. A missing saved id, provider mismatch, disabled
 profile or non-active status is an error; never fall back to the current
@@ -126,4 +140,5 @@ and an otherwise invalid store is left untouched.
 
 `apm run <profile> <app> ...` remains the interactive path when apm should own
 the PTY and attach lifecycle. The metadata command does not change that
-behavior, modify global `~/.claude` or `~/.codex`, or launch provider CLIs.
+behavior, modify global `~/.claude`, `~/.codex` or `~/.cursor`, or launch
+provider CLIs.

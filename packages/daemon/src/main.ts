@@ -4,7 +4,7 @@
  *
  *   apm [start] [--port N] [--no-open] [--foreground]   start or reuse the daemon, open the UI
  *   apm url                                             print the authenticated URL, open nothing
- *   apm profile add <claude|codex> [--label <label>] [--new] [-- login-args...]
+ *   apm profile add <claude|codex|cursor> [--label <label>] [--new] [-- login-args...]
  *                                                       log in to a fresh managed profile
  *   apm profiles [--json] [--refresh]                   list profiles and provider defaults
  *   apm targets [--json] [--profiles <target>]          list targets or one target's profiles

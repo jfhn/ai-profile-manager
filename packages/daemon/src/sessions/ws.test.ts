@@ -34,7 +34,7 @@ const profile: Profile = {
 const profiles = {
   list: () => [profile],
   get: (id: string) => (id === profile.id ? profile : null),
-  envFor: () => ({ CLAUDE_CONFIG_DIR: profile.home }),
+  envFor: () => ({ session: { CLAUDE_CONFIG_DIR: profile.home }, appOnly: null }),
 } as Partial<ProfileService> as ProfileService;
 
 const events: EventBus = { emit: () => undefined, subscribe: () => () => undefined };
@@ -71,7 +71,10 @@ describe('terminal websocket', () => {
         },
       ],
     });
-    const targets = createTargetRegistry(createLocalTransport({ profiles }), [remote]);
+    const targets = createTargetRegistry(
+      createLocalTransport({ profiles, shimsDir: config.shimsDir }),
+      [remote],
+    );
     host = createSessionHost(config, events, profiles, { targets });
     const ctx = {
       config,

@@ -40,9 +40,10 @@ status, enabled flag and creation time. Usage snapshots are normalized into
 provider-independent windows with percentages, reset times, source, freshness
 and error state.
 
-Provider CLIs run in PTYs with `CODEX_HOME` or `CLAUDE_CONFIG_DIR` set from the
-chosen profile. Sessions outlive browser tabs. The browser and `apm attach`
-are two clients of the same session host, with bounded scrollback on reattach.
+Provider CLIs run in PTYs with `CODEX_HOME`, `CLAUDE_CONFIG_DIR` or
+`CURSOR_CONFIG_DIR` set from the chosen profile. Sessions outlive browser tabs.
+The browser and `apm attach` are two clients of the same session host, with
+bounded scrollback on reattach.
 
 Execution targets extend the same session model to approved machines. Commands
 cross the transport boundary as structured argv, cwd, environment and profile
@@ -68,7 +69,7 @@ copied to the daemon, browser or another target.
 
 ## Implemented product scope
 
-- Claude and Codex profile discovery, CRUD, defaults and onboarding.
+- Claude, Codex and Cursor profile discovery, CRUD, defaults and onboarding.
 - Profile-specific usage collection with cached and stale states.
 - Local and target-scoped profile resolution.
 - Persistent and connection-bound terminal sessions.

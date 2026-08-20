@@ -117,6 +117,7 @@ describe('profilesContract', () => {
           id: 'claude',
           label: 'Claude',
           capabilities: { usage: true, usageSources: ['oauth-api'], identity: true, windows: [] },
+          defaultApp: 'claude',
         },
       ],
       profiles: [
@@ -151,7 +152,7 @@ describe('profilesContract', () => {
     };
 
     expect(profilesContract(overview)).toEqual({
-      schemaVersion: 1,
+      schemaVersion: 2,
       defaultProfileIds: { claude: 'claude-work' },
       profiles: [
         {
@@ -315,7 +316,7 @@ describe('target integration contracts', () => {
 
     const contract = targetProfilesContract('dev-box', response);
     expect(contract).toEqual({
-      schemaVersion: 1,
+      schemaVersion: 2,
       targetId: 'dev-box',
       profiles: response.profiles,
     });
@@ -343,6 +344,7 @@ function singleProfileOverview(id: string): OverviewResponse {
         id: 'claude',
         label: 'Claude',
         capabilities: { usage: true, usageSources: ['oauth-api'], identity: true, windows: [] },
+        defaultApp: 'claude',
       },
     ],
     profiles: [

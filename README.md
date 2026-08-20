@@ -1,15 +1,17 @@
 # ai-profile-manager (apm)
 
-Local-first companion app for managing AI provider profiles (Claude, Codex),
-viewing quota usage, and launching tools with the correct account. See
+Local-first companion app for managing AI provider profiles (Claude, Codex,
+Cursor), viewing quota usage, and launching tools with the correct account. See
 [PLAN.md](PLAN.md) for goals and architecture, [docs/API.md](docs/API.md) for
 the daemon API, and [docs/TARGETS.md](docs/TARGETS.md) for the execution-target
 and transport contract.
 
 > **Status: early.** Built for my own setup and so far only exercised against
-> my accounts (one Claude, one Codex). Linux/WSL is the primary platform.
+> my accounts (one Claude, one Codex). Cursor is included as a third provider.
+> Linux/WSL is the primary platform.
 > Usage collection reads local provider data and, for Claude, an undocumented
-> OAuth usage endpoint — treat that as a maintenance risk, not a contract.
+> OAuth usage endpoint. Treat that as a maintenance risk, not a contract.
+> Cursor usage is an undocumented dashboard RPC with the same posture.
 > Issues and reports welcome.
 
 ## Quick start
@@ -73,6 +75,7 @@ data dir and port, so a daemon you are already running stays untouched.
 apm                       # start (or reuse) the daemon and open the dashboard
 apm url                   # print the authenticated dashboard URL, open nothing
 apm profile add claude    # log in to a fresh managed profile, no dashboard needed
+apm profile add cursor    # same flow for Cursor
 apm profiles              # human-readable profiles and provider defaults
 apm profiles --json       # versioned machine contract, JSON only on stdout
 apm profiles --json --refresh
@@ -82,7 +85,9 @@ apm targets --json        # versioned machine contract for integrations
 apm targets --profiles devbox --json
                           # target-scoped profiles, without local home paths
 apm run work claude       # run claude bound to profile "work"
-apm run work bash         # any command; children inherit the profile env
+apm run work cursor       # Cursor; spawns cursor-agent, never the IDE
+apm run work bash         # any command; provider CLIs inside it stay bound
+apm run cursor:work bash  # provider-qualified label when "work" is ambiguous
 apm run --target devbox --cwd /srv/repo work claude --resume
                           # run in an explicit directory on approved target "devbox"
 apm run --target devbox --cwd /srv/repo --ephemeral work claude
@@ -91,18 +96,39 @@ apm attach claude-work-1  # reattach; detach with Ctrl-] or Ctrl-5
 apm sessions | status | stop
 ```
 
+### Sessions for arbitrary commands
+
+`apm run <profile> bash` (or any other command) opens a terminal where every
+provider CLI you start inside it is bound to that profile. That is the point
+of the feature: you work normally in a shell, an editor, or a script, and a
+nested `claude`, `codex`, or `cursor-agent` call uses the profile's account
+instead of whatever the machine defaults to. Agents and tools that shell out
+to a provider CLI inherit the binding the same way.
+
+For Claude and Codex the binding is one provider-named variable in the
+session env. Cursor needs `XDG_CONFIG_HOME`, which would rebind git, gh, and
+every other tool in the session — so the session env stays clean and a
+generated `cursor-agent` shim earlier on `PATH` applies that variable to the
+one binary that needs it. Windows gets no shim; there, only `apm run <profile>
+cursor` binds Cursor.
+
+When a label exists for several providers, prefix the provider:
+`apm run cursor:work bash`.
+
 ### Headless profile onboarding
 
-`apm profile add <claude|codex>` runs the whole add-profile flow in the
-terminal — on an SSH-only machine no dashboard is required. It starts (or
+`apm profile add <claude|codex|cursor>` runs the whole add-profile flow in the
+terminal. On an SSH-only machine no dashboard is required. It starts (or
 reuses) the daemon without opening a browser, creates a fresh managed home,
 runs the provider's own login command in your terminal bound to that home
-(`CLAUDE_CONFIG_DIR` / `CODEX_HOME`), waits for credentials to appear, and
-activates the profile with `--label <label>` or a label suggested from the
+(`CLAUDE_CONFIG_DIR` / `CODEX_HOME` / `CURSOR_CONFIG_DIR`, plus
+`AGENT_CLI_CREDENTIAL_STORE=file` and `XDG_CONFIG_HOME` for Cursor), waits for credentials to appear,
+and activates the profile with `--label <label>` or a label suggested from the
 detected account.
 
 ```sh
 apm profile add claude --label work
+apm profile add cursor
 apm profile add codex -- --device-auth   # extra args go to the provider login
 ```
 
@@ -117,9 +143,20 @@ copies credentials:
   (must be enabled in ChatGPT security/workspace settings) or fully
   non-interactively via `-- --with-api-key` (pipe the key on stdin). Note
   that API-key logins carry no account identity, so pass `--label`.
+- **Cursor** login is `cursor-agent login`. `CURSOR_CONFIG_DIR` isolates
+  `cli-config.json`; the file store writes `$XDG_CONFIG_HOME/cursor/auth.json`,
+  so apm sets `XDG_CONFIG_HOME` to the profile home for `cursor-agent` itself
+  — a session running anything else keeps its own config roots. That `auth.json`
+  is owner-only and unencrypted (Cursor's own tradeoff). There
+  are no `CURSOR_API_KEY` profiles. An API key writes nothing into the home.
+  Extra args after `--` go to `cursor-agent login`.
 - Token/env-var auth (`CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_API_KEY`) writes
   no credential files into a profile home, so it cannot be onboarded as a
   profile.
+
+Adopting `~/.cursor` without `auth.json` can still work if the IDE session
+token is in `state.vscdb`. That fallback is default-home only. Purge never
+touches `~/.config/Cursor`.
 
 A failed or interrupted login keeps the pending profile: rerunning
 `apm profile add <provider>` resumes it (`--new` forces a fresh home), and

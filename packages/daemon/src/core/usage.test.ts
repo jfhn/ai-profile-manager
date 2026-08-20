@@ -31,6 +31,7 @@ describe('usage service', () => {
     const adapters: AdapterRegistry = {
       claude: fakeAdapter('claude', failingCollect),
       codex: fakeAdapter('codex', successfulCollect),
+      cursor: fakeAdapter('cursor', failingCollect),
     };
     const profiles = createProfileService(config, createEventBus(), adapters);
     const claudeHome = makeCredentialHome(directory, 'claude-home');
@@ -82,6 +83,7 @@ describe('usage service', () => {
     const adapters: AdapterRegistry = {
       claude: fakeAdapter('claude', collect),
       codex: fakeAdapter('codex', collect),
+      cursor: fakeAdapter('cursor', collect),
     };
     const profiles = createProfileService(config, createEventBus(), adapters);
     const active = await profiles.create({
@@ -114,6 +116,7 @@ describe('usage service', () => {
     const adapters: AdapterRegistry = {
       claude: fakeAdapter('claude', collect),
       codex: fakeAdapter('codex', collect),
+      cursor: fakeAdapter('cursor', collect),
     };
     const profiles = createProfileService(config, createEventBus(), adapters);
     const profile = await profiles.create({
@@ -158,7 +161,7 @@ function fakeAdapter(
     hasCredentials: (home) => fs.existsSync(path.join(home, 'credentials')),
     detectIdentity: (): ProviderIdentity => ({ account: null, organization: null, plan: null }),
     collectUsage,
-    env: (home) => ({ HOME_FOR_TEST: home }),
+    env: (home) => ({ session: { HOME_FOR_TEST: home }, appOnly: null }),
     loginCommand: (home) => `login ${home}`,
     loginArgv: () => ['login'],
     defaultHome: () => path.join(os.tmpdir(), `missing-${provider}`),

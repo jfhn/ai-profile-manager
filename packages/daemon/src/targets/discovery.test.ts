@@ -5,6 +5,8 @@
  * hub, which are already targets and what happens when tailscale cannot answer
  * — is exercised here without a tailnet.
  */
+import os from 'node:os';
+import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   TransportError,
@@ -89,7 +91,10 @@ function peer(overrides: Partial<TailnetPeer> = {}): TailnetPeer {
 
 function localRegistry() {
   return createTargetRegistry(
-    createLocalTransport({ profiles: { list: () => [], envFor: () => ({}) } }),
+    createLocalTransport({
+      profiles: { list: () => [], envFor: () => ({ session: {}, appOnly: null }) },
+      shimsDir: path.join(os.tmpdir(), 'apm-discovery-shims'),
+    }),
   );
 }
 

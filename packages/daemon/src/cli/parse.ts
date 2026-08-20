@@ -7,7 +7,7 @@
  * app verbatim; a literal `--` directly after <profile> or after <app> is an
  * optional escape hatch.
  */
-import { isProviderId, PROVIDER_IDS, type ProviderId } from '@apm/shared';
+import { APP_PROVIDERS, isProviderId, PROVIDER_IDS, type ProviderId } from '@apm/shared';
 
 /** An error meant for the user, printed as `apm: <message>`. */
 export class CliError extends Error {}
@@ -16,7 +16,7 @@ export const USAGE =
   `usage: apm [start|profile|profiles|targets|run|attach|sessions|status|url|stop]\n` +
   `  apm [start] [--port N] [--no-open] [--foreground]   start or reuse the daemon, open the UI\n` +
   `  apm url                                             print the authenticated URL, open nothing\n` +
-  `  apm profile add <claude|codex> [--label <label>] [--new] [-- login-args...]\n` +
+  `  apm profile add <claude|codex|cursor> [--label <label>] [--new] [-- login-args...]\n` +
   `                                                      log in to a fresh managed profile\n` +
   `  apm profiles [--json] [--refresh]                   list profiles and provider defaults\n` +
   `  apm targets [--json] [--profiles <target>]          list targets or one target's profiles\n` +
@@ -126,12 +126,6 @@ export function parseTargetsArgv(argv: string[]): TargetsInvocation {
 const RUN_USAGE =
   'usage: apm run [--target <target>] [--cwd <path>] [--ephemeral] <profile> <app> [args...]';
 
-/** Known provider apps — these scope the profile lookup to one provider. */
-export const APP_PROVIDERS: Record<string, ProviderId> = {
-  claude: 'claude',
-  codex: 'codex',
-};
-
 export function parseRunArgv(argv: string[]): RunInvocation {
   const rest = [...argv];
   let target: string | undefined;
@@ -211,7 +205,7 @@ export interface ProfileAddInvocation {
 }
 
 const PROFILE_USAGE =
-  'usage: apm profile add <claude|codex> [--label <label>] [--new] [-- login-args...]';
+  'usage: apm profile add <claude|codex|cursor> [--label <label>] [--new] [-- login-args...]';
 
 export function parseProfileArgv(argv: string[]): ProfileAddInvocation {
   const rest = [...argv];
@@ -280,7 +274,21 @@ export function resolveProfile<T extends ResolvableProfile>(
   name: string,
   app: string,
 ): T {
-  const provider = APP_PROVIDERS[app];
+  const appProvider = APP_PROVIDERS[app]?.provider;
+
+  // A provider-qualified name ("cursor:personal") disambiguates labels shared
+  // across providers when the app itself is provider-neutral (bash).
+  let qualifier: ProviderId | undefined;
+  const colon = name.indexOf(':');
+  if (colon > 0 && isProviderId(name.slice(0, colon))) {
+    qualifier = name.slice(0, colon) as ProviderId;
+    name = name.slice(colon + 1);
+  }
+  if (qualifier && appProvider && qualifier !== appProvider) {
+    throw new CliError(`${app} needs a ${appProvider} profile, not ${qualifier}`);
+  }
+
+  const provider = qualifier ?? appProvider;
   const scope = provider ? profiles.filter((profile) => profile.provider === provider) : profiles;
 
   const byId = scope.find((profile) => profile.id === name);
@@ -303,7 +311,7 @@ export function resolveProfile<T extends ResolvableProfile>(
     const providers = [...new Set(matches.map((profile) => profile.provider))].sort();
     throw new CliError(
       `profile "${name}" is ambiguous (${providers.join(', ')}) — ` +
-        `run it through a provider app (e.g. apm run ${name} ${providers[0]} ...), ` +
+        `prefix the provider (e.g. apm run ${providers[0]}:${name} ...), ` +
         `pass the profile id, or use unique labels`,
     );
   }

@@ -1,7 +1,7 @@
 <script lang="ts">
   import { api } from '../api';
   import { app, refreshAll } from '../stores.svelte';
-  import type { ProfileView } from '../runway';
+  import { formatPercent, type ProfileView } from '../runway';
   import { timeAgo, timeUntil, timeUntilFrom, absolute } from '../time.svelte';
   import { toast, toastError } from '../toasts.svelte';
   import Badge from './Badge.svelte';
@@ -149,7 +149,8 @@
 </script>
 
 <article
-  class="card {profile.provider}"
+  class="card"
+  style="--pcolor: var(--provider-{profile.provider}, var(--primary))"
   class:disabled={!profile.enabled}
   class:is-default={isDefault}
 >
@@ -158,7 +159,7 @@
       tone={view.tone}
       title={view.headroom === null
         ? 'No usage reported'
-        : `${Math.round(view.headroom)}% left on ${view.tightest?.label}`}
+        : `${formatPercent(view.headroom)}% left on ${view.tightest?.label}`}
     />
     <ProviderMark provider={profile.provider} />
     <h3 class="name truncate" title={profile.label}>{profile.label}</h3>
@@ -225,7 +226,7 @@
               {#if window.remaining === null}
                 <span class="win-pct muted">not reported</span>
               {:else}
-                <span class="win-pct {window.tone}">{Math.round(window.remaining)}% left</span>
+                <span class="win-pct {window.tone}">{formatPercent(window.remaining)}% left</span>
               {/if}
             </div>
             <ProgressBar
@@ -370,14 +371,6 @@
 
   .card:hover {
     border-color: var(--border-hover);
-  }
-
-  .card.claude {
-    --pcolor: var(--claude);
-  }
-
-  .card.codex {
-    --pcolor: var(--codex);
   }
 
   /* The default card gets a subtle provider-tinted ring so it reads at a glance. */

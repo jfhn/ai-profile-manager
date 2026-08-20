@@ -5,6 +5,7 @@ import {
   buildVerdict,
   burnPace,
   compareByUrgency,
+  formatPercent,
   groupByProvider,
   profileView,
   readCollapsed,
@@ -87,6 +88,17 @@ describe('windowView', () => {
     expect(view.elapsedFraction).toBeNull();
   });
 
+  it('treats Cursor spend windows as monthly', () => {
+    const resetAt = iso(24 * HOUR);
+    const monthly = windowView(makeWindow({ id: 'monthly', resetAt }), NOW);
+    const cursorModels = windowView(makeWindow({ id: 'cursor_models', resetAt }), NOW);
+    const otherModels = windowView(makeWindow({ id: 'other_models', resetAt }), NOW);
+    expect(cursorModels.elapsedFraction).toBe(monthly.elapsedFraction);
+    expect(otherModels.elapsedFraction).toBe(monthly.elapsedFraction);
+    expect(cursorModels.label).toBe('Cursor Models');
+    expect(otherModels.label).toBe('Other Models');
+  });
+
   it('marks an unreported window as muted with no score', () => {
     const view = windowView(makeWindow({ remainingPercent: null, usedPercent: null }), NOW);
     expect(view.remaining).toBeNull();
@@ -98,6 +110,16 @@ describe('windowView', () => {
     const view = windowView(makeWindow({ remainingPercent: null, usedPercent: 90 }), NOW);
     expect(view.remaining).toBe(10);
     expect(view.tone).toBe('destructive');
+  });
+});
+
+describe('formatPercent', () => {
+  it('keeps whole percents whole and caps fractions at two decimal places', () => {
+    expect(formatPercent(100)).toBe('100');
+    expect(formatPercent(50)).toBe('50');
+    expect(formatPercent(99.5445)).toBe('99.54');
+    expect(formatPercent(0.4555)).toBe('0.46');
+    expect(formatPercent(0)).toBe('0');
   });
 });
 

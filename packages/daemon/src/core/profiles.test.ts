@@ -19,6 +19,15 @@ afterEach(() => {
 });
 
 describe('profile service', () => {
+  it('lists providers with defaultApp from loginArgv', () => {
+    const service = createProfileService(tempConfig(), createEventBus(), fakeAdapters());
+    expect(service.providers()).toEqual([
+      expect.objectContaining({ id: 'claude', label: 'Claude', defaultApp: 'claude' }),
+      expect.objectContaining({ id: 'codex', label: 'Codex', defaultApp: 'codex' }),
+      expect.objectContaining({ id: 'cursor', label: 'Cursor', defaultApp: 'cursor-agent' }),
+    ]);
+  });
+
   it('persists adoption, renames, uniqueness, and managed purges', async () => {
     const config = tempConfig();
     const service = createProfileService(config, createEventBus(), fakeAdapters());
@@ -401,6 +410,62 @@ describe('profile service', () => {
     );
   });
 
+  it('merges a partial identity detection into the stored one', () => {
+    const config = tempConfig();
+    const home = makeHome(config.dataDir, 'identity-sweep', true);
+    fs.writeFileSync(
+      config.profilesFile,
+      JSON.stringify({
+        version: 2,
+        profiles: [
+          storedProfile({
+            id: 'claude-profile',
+            home,
+            identity: { account: 'alice@example.test', organization: 'Acme', plan: null },
+          }),
+        ],
+        defaultProfileIds: { claude: 'claude-profile' },
+      }),
+    );
+
+    const service = createProfileService(config, createEventBus(), fakeAdapters());
+    service.refreshIdentities();
+
+    // The adapter detects no organization, which must not erase the stored one.
+    const expected = { account: 'alice@example.test', organization: 'Acme', plan: 'pro' };
+    expect(service.get('claude-profile')?.identity).toEqual(expected);
+    const persisted = JSON.parse(fs.readFileSync(config.profilesFile, 'utf8'));
+    expect(persisted.profiles[0].identity).toEqual(expected);
+  });
+
+  it('replaces the stored identity when the detected account is a different login', () => {
+    const config = tempConfig();
+    const home = makeHome(config.dataDir, 'identity-switch', true);
+    fs.writeFileSync(
+      config.profilesFile,
+      JSON.stringify({
+        version: 2,
+        profiles: [
+          storedProfile({
+            id: 'claude-profile',
+            home,
+            identity: { account: 'old@example.test', organization: 'Acme', plan: 'team' },
+          }),
+        ],
+        defaultProfileIds: { claude: 'claude-profile' },
+      }),
+    );
+
+    const service = createProfileService(config, createEventBus(), fakeAdapters());
+    service.refreshIdentities();
+
+    expect(service.get('claude-profile')?.identity).toEqual({
+      account: 'alice@example.test',
+      organization: null,
+      plan: 'pro',
+    });
+  });
+
   it('runs the prepare-login wizard without handling credentials', async () => {
     const config = tempConfig();
     const service = createProfileService(config, createEventBus(), fakeAdapters());
@@ -475,13 +540,16 @@ function fakeAdapters(): AdapterRegistry {
   return {
     claude: fakeAdapter('claude'),
     codex: fakeAdapter('codex'),
+    cursor: fakeAdapter('cursor'),
   };
 }
 
 function fakeAdapter(provider: ProviderId): ProviderAdapter {
+  const names = { claude: 'Claude', codex: 'Codex', cursor: 'Cursor' } as const;
+  const defaultApp = provider === 'cursor' ? 'cursor-agent' : provider;
   return {
     provider,
-    displayName: provider === 'claude' ? 'Claude' : 'Codex',
+    displayName: names[provider],
     capabilities: { usage: true, usageSources: ['local-files'], identity: true, windows: [] },
     hasCredentials: (home) => fs.existsSync(path.join(home, 'credentials')),
     detectIdentity: (home): ProviderIdentity | null =>
@@ -489,9 +557,9 @@ function fakeAdapter(provider: ProviderId): ProviderAdapter {
         ? { account: 'alice@example.test', organization: null, plan: 'pro' }
         : null,
     collectUsage: async (): Promise<CollectResult> => emptyResult(),
-    env: (home) => ({ [`${provider.toUpperCase()}_HOME`]: home }),
-    loginCommand: (home) => `${provider.toUpperCase()}_HOME=${home} ${provider} login`,
-    loginArgv: () => [provider, 'login'],
+    env: (home) => ({ session: { [`${provider.toUpperCase()}_HOME`]: home }, appOnly: null }),
+    loginCommand: (home) => `${provider.toUpperCase()}_HOME=${home} ${defaultApp} login`,
+    loginArgv: () => [defaultApp, 'login'],
     defaultHome: () => path.join(os.tmpdir(), `missing-${provider}`),
   };
 }
