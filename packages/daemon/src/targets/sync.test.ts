@@ -13,6 +13,7 @@ import { createFakeRemoteTransport } from './test-support/fake-remote.js';
 import { adoptProfile, createSyncService } from './sync.js';
 
 const SYNC_ID = '11111111-2222-4333-8444-555555555555';
+const T0 = Date.parse('2026-08-20T09:00:00.000Z');
 const T1 = Date.parse('2026-08-20T10:00:00.000Z');
 const T2 = Date.parse('2026-08-20T11:00:00.000Z');
 const T3 = Date.parse('2026-08-20T12:00:00.000Z');
@@ -97,7 +98,7 @@ describe('credential sync service', () => {
       [remote],
     );
     const usage = fakeUsage();
-    const service = createSyncService(config, profiles, targets, usage, events);
+    const service = createSyncService(profiles, targets, usage, events);
 
     await service.tick();
     expect(remote.syncPushes).toHaveLength(1);
@@ -130,7 +131,7 @@ describe('credential sync service', () => {
       createLocalTransport({ profiles, shimsDir: config.shimsDir }),
       [remote],
     );
-    const service = createSyncService(config, profiles, targets, fakeUsage(), events);
+    const service = createSyncService(profiles, targets, fakeUsage(), events);
     await service.tick();
     expect(remote.syncPushes).toHaveLength(0);
   });
@@ -154,7 +155,7 @@ describe('credential sync service', () => {
       [remote],
     );
     const usage = fakeUsage();
-    const service = createSyncService(config, profiles, targets, usage, events);
+    const service = createSyncService(profiles, targets, usage, events);
     service.start();
     stops.push(() => service.stop());
 
@@ -184,6 +185,160 @@ describe('credential sync service', () => {
     });
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(usage.refreshes).toHaveLength(1);
+  });
+
+  it('advances to the next untried candidate per round and forgets them on success', async () => {
+    const config = tempConfig();
+    const events = createEventBus();
+    const profiles = createProfileService(config, events);
+    // The local dead token predates both peer bundles, so the startup push
+    // sweep cannot replace either peer's offer.
+    const home = writeClaudeHome(config.homesDir, 'replica-home', 'dead-token', T0);
+    const replica = await profiles.createReplica({
+      provider: 'claude',
+      label: 'work',
+      home,
+      sync: { id: SYNC_ID, role: 'replica' },
+    });
+    const file = path.join(home, '.credentials.json');
+
+    // Peer A offers the newest (future-dated, still bad) bundle, peer B an
+    // older valid one. Tried-payload memory must reach B on the second round.
+    const peerA = createFakeRemoteTransport({ id: 'peer-a' });
+    peerA.setBundle(SYNC_ID, claudeBundle('bad-newest', T3));
+    const peerB = createFakeRemoteTransport({ id: 'peer-b' });
+    peerB.setBundle(SYNC_ID, claudeBundle('good-older', T1));
+    const targets = createTargetRegistry(
+      createLocalTransport({ profiles, shimsDir: config.shimsDir }),
+      [peerA, peerB],
+    );
+    const usage = fakeUsage();
+    const service = createSyncService(profiles, targets, usage, events, undefined, {
+      pullCooldownMs: 0,
+    });
+    service.start();
+    stops.push(() => service.stop());
+
+    const token = () =>
+      (JSON.parse(fs.readFileSync(file, 'utf8')) as { claudeAiOauth: { accessToken: string } })
+        .claudeAiOauth.accessToken;
+    const fail = () =>
+      events.emit({
+        type: 'usage-updated',
+        profileId: replica.id,
+        snapshot: authFailureSnapshot(replica.id),
+      });
+
+    fail();
+    await vi.waitFor(() => expect(token()).toBe('bad-newest'));
+    await vi.waitFor(() => expect(usage.refreshes).toHaveLength(1));
+
+    fail();
+    await vi.waitFor(() => expect(token()).toBe('good-older'));
+    await vi.waitFor(() => expect(usage.refreshes).toHaveLength(2));
+
+    // A successful collection clears the tried set: the previously tried
+    // newest candidate becomes eligible again on the next failure.
+    events.emit({
+      type: 'usage-updated',
+      profileId: replica.id,
+      snapshot: { ...authFailureSnapshot(replica.id), failureKind: null, error: null },
+    });
+    fail();
+    await vi.waitFor(() => expect(token()).toBe('bad-newest'));
+    await vi.waitFor(() => expect(usage.refreshes).toHaveLength(3));
+  });
+
+  it('aborts the pull when local credentials change while peers are queried', async () => {
+    const config = tempConfig();
+    const events = createEventBus();
+    const profiles = createProfileService(config, events);
+    const home = writeClaudeHome(config.homesDir, 'replica-home', 'dead-token', T1);
+    const replica = await profiles.createReplica({
+      provider: 'claude',
+      label: 'work',
+      home,
+      sync: { id: SYNC_ID, role: 'replica' },
+    });
+    const file = path.join(home, '.credentials.json');
+
+    const remote = createFakeRemoteTransport();
+    remote.setBundle(SYNC_ID, claudeBundle('peer-token', T3));
+    // A provider CLI rotates the local credentials in the middle of the pull.
+    const originalPull = remote.syncPull.bind(remote);
+    remote.syncPull = async (sync) => {
+      fs.writeFileSync(file, JSON.stringify({ claudeAiOauth: { accessToken: 'cli-rotated' } }));
+      fs.utimesSync(file, T2 / 1000, T2 / 1000);
+      return originalPull(sync);
+    };
+    const targets = createTargetRegistry(
+      createLocalTransport({ profiles, shimsDir: config.shimsDir }),
+      [remote],
+    );
+    const usage = fakeUsage();
+    const service = createSyncService(profiles, targets, usage, events, undefined, {
+      pullCooldownMs: 0,
+    });
+    service.start();
+    stops.push(() => service.stop());
+
+    events.emit({
+      type: 'usage-updated',
+      profileId: replica.id,
+      snapshot: authFailureSnapshot(replica.id),
+    });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const record = JSON.parse(fs.readFileSync(file, 'utf8')) as {
+      claudeAiOauth: { accessToken: string };
+    };
+    expect(record.claudeAiOauth.accessToken).toBe('cli-rotated');
+    expect(usage.refreshes).toHaveLength(0);
+  });
+
+  it('repeats only transport codes, never remote message text, in its logs', async () => {
+    const config = tempConfig();
+    const events = createEventBus();
+    const profiles = createProfileService(config, events);
+    const home = writeClaudeHome(config.dataDir, 'owner-home', 'sync-t1', T1);
+    const created = await profiles.create({ provider: 'claude', label: 'work', home });
+    profiles.enableSync(created.id);
+    const replicaHome = writeClaudeHome(config.homesDir, 'replica-home', 'dead-token', T2);
+    const replica = await profiles.createReplica({
+      provider: 'claude',
+      label: 'replica',
+      home: replicaHome,
+      sync: { id: SYNC_ID, role: 'replica' },
+    });
+
+    const remote = createFakeRemoteTransport();
+    remote.scriptSyncFailure('unreachable', 'Authorization: Bearer sk-SECRET-material');
+    const targets = createTargetRegistry(
+      createLocalTransport({ profiles, shimsDir: config.shimsDir }),
+      [remote],
+    );
+    const logged: string[] = [];
+    const spy = vi.spyOn(console, 'error').mockImplementation((line: unknown) => {
+      logged.push(String(line));
+    });
+    stops.push(() => spy.mockRestore());
+
+    const service = createSyncService(profiles, targets, fakeUsage(), events, undefined, {
+      pullCooldownMs: 0,
+    });
+    service.start();
+    stops.push(() => service.stop());
+    await service.tick();
+    events.emit({
+      type: 'usage-updated',
+      profileId: replica.id,
+      snapshot: authFailureSnapshot(replica.id),
+    });
+    await vi.waitFor(() => {
+      expect(logged.some((line) => line.includes('skipped'))).toBe(true);
+    });
+    expect(logged.some((line) => line.includes('dropped'))).toBe(true);
+    expect(logged.join('\n')).not.toContain('sk-SECRET');
+    expect(logged.join('\n')).toContain('unreachable');
   });
 });
 
@@ -263,6 +418,31 @@ describe('adopt flow', () => {
         { targetId: remote.target.id, provider: 'codex', remoteProfileId: 'remote-1' },
       ),
     ).rejects.toMatchObject({ code: 'provider-mismatch' });
+  });
+
+  it('keeps remote stderr and remote error text out of API failures', async () => {
+    const { config, profiles, targets, remote } = adoptFixture();
+    remote.scriptExec(['apm', 'profile', 'sync-enable', 'remote-1'], {
+      exitCode: 1,
+      stderr: 'apm: Authorization: Bearer sk-SECRET-material',
+    });
+    const enableFailure = await adoptProfile(
+      { config, profiles, targets },
+      { targetId: remote.target.id, provider: 'claude', remoteProfileId: 'remote-1' },
+    ).catch((error: unknown) => error as ApiFailure);
+    expect(enableFailure).toMatchObject({ code: 'sync-enable-failed' });
+    expect((enableFailure as ApiFailure).message).not.toContain('sk-SECRET');
+
+    remote.scriptExec(['apm', 'profile', 'sync-enable', 'remote-1'], {
+      stdout: `${JSON.stringify({ syncId: SYNC_ID, role: 'owner' })}\n`,
+    });
+    remote.scriptSyncFailure('sync-not-enabled', 'echoed remote text sk-SECRET-material');
+    const pullFailure = await adoptProfile(
+      { config, profiles, targets },
+      { targetId: remote.target.id, provider: 'claude', remoteProfileId: 'remote-1' },
+    ).catch((error: unknown) => error as ApiFailure);
+    expect(pullFailure).toMatchObject({ code: 'sync-not-enabled' });
+    expect((pullFailure as ApiFailure).message).not.toContain('sk-SECRET');
   });
 
   it('fails loudly when sync-enable on the target prints no sync id', async () => {

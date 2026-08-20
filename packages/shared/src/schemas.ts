@@ -165,7 +165,7 @@ export const credentialBundleSchema = z.object({
   rotatedAt: isoTimestamp,
   payload: z
     .record(z.string(), z.unknown())
-    .refine((payload) => JSON.stringify(payload).length <= CREDENTIAL_BUNDLE_MAX_BYTES, {
+    .refine((payload) => utf8ByteLength(JSON.stringify(payload)) <= CREDENTIAL_BUNDLE_MAX_BYTES, {
       message: `credential bundle payloads must not exceed ${CREDENTIAL_BUNDLE_MAX_BYTES} bytes`,
     }),
 });

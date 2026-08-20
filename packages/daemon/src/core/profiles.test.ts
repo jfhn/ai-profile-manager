@@ -140,6 +140,32 @@ describe('profile service', () => {
     ).rejects.toMatchObject({ code: 'already-synced' });
   });
 
+  it('rolls back the in-memory sync state when the persist fails', async () => {
+    const config = tempConfig();
+    const service = createProfileService(config, createEventBus(), syncCapableAdapters());
+    const created = await service.create({
+      provider: 'claude',
+      label: 'work',
+      home: makeHome(config.dataDir, 'work', true),
+    });
+
+    // Make the next persist fail: the store path becomes a directory.
+    fs.rmSync(config.profilesFile);
+    fs.mkdirSync(config.profilesFile);
+    expect(() => service.enableSync(created.id)).toThrow();
+    expect(service.get(created.id)?.sync).toBeNull();
+
+    await expect(
+      service.createReplica({
+        provider: 'claude',
+        label: 'replica',
+        home: makeHome(config.dataDir, 'replica', true),
+        sync: { id: '11111111-2222-4333-8444-555555555555', role: 'replica' },
+      }),
+    ).rejects.toThrow();
+    expect(service.list().map((profile) => profile.label)).toEqual(['work']);
+  });
+
   it('rejects a persisted store where two profiles share a sync id', () => {
     const config = tempConfig();
     const sync = { id: '11111111-2222-4333-8444-555555555555', role: 'owner' as const };

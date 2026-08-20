@@ -45,7 +45,7 @@ export async function createContext(config: DaemonConfig): Promise<AppContext> {
   const localTransport = createLocalTransport({ profiles, shimsDir: config.shimsDir });
   const targets = createTargetRegistry(localTransport, createConfiguredTransports(config));
   const sessions = createSessionHost(config, events, profiles, { targets });
-  const sync = createSyncService(config, profiles, targets, usage, events);
+  const sync = createSyncService(profiles, targets, usage, events);
   return { config, events, profiles, usage, sessions, targets, sync };
 }
 

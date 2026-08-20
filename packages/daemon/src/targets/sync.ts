@@ -43,13 +43,14 @@ const POLL_INTERVAL_MS = 15_000;
 const PULL_COOLDOWN_MS = 4 * 60_000;
 
 export function createSyncService(
-  config: DaemonConfig,
   profiles: ProfileService,
   targets: TargetRegistry,
   usage: UsageService,
   events: EventBus,
   adapterRegistry: AdapterRegistry = defaultAdapters,
+  options: { pullCooldownMs?: number } = {},
 ): SyncService {
+  const pullCooldownMs = options.pullCooldownMs ?? PULL_COOLDOWN_MS;
   /** Rotation timestamp (ms) last pushed or applied per profile — the echo brake. */
   const syncedMtime = new Map<string, number>();
   /** Payload keys tried since the last successful collection, per profile. */
@@ -99,9 +100,13 @@ export function createSyncService(
         // Offline or not-yet-adopted peers are expected; the next rotation or
         // restart retries. A role conflict is a misconfiguration — say so.
         if (isTransportError(error) && error.code === 'sync-conflict') {
-          logSync(`CONFLICT pushing ${profile.label} to target "${target.id}": ${error.message}`);
+          logSync(
+            `CONFLICT pushing ${profile.label} to target "${target.id}": both machines claim the owner role`,
+          );
         } else {
-          logSync(`push of ${profile.label} to target "${target.id}" dropped: ${message(error)}`);
+          logSync(
+            `push of ${profile.label} to target "${target.id}" dropped (${describeFailure(error)})`,
+          );
         }
       }
     }
@@ -110,13 +115,14 @@ export function createSyncService(
   async function pull(profile: Profile, sync: ProfileSync): Promise<void> {
     const credentialSync = adapterRegistry[profile.provider]?.credentialSync;
     if (!credentialSync) return;
-    pullCooldownUntil.set(profile.id, Date.now() + PULL_COOLDOWN_MS);
+    pullCooldownUntil.set(profile.id, Date.now() + pullCooldownMs);
 
     const tried = triedPayloads.get(profile.id) ?? new Set<string>();
     triedPayloads.set(profile.id, tried);
     // The on-disk payload just failed against the provider — never re-apply it.
     const local = await credentialSync.readBundle(profile.home);
-    if (local) tried.add(stablePayloadKey(local.payload));
+    const failedKey = local ? stablePayloadKey(local.payload) : null;
+    if (failedKey) tried.add(failedKey);
 
     const candidates: CredentialBundle[] = [];
     for (const { target, transport } of peers()) {
@@ -124,7 +130,9 @@ export function createSyncService(
         const bundle = await transport.syncPull(sync);
         if (bundle.provider === profile.provider) candidates.push(bundle);
       } catch (error) {
-        logSync(`pull of ${profile.label} from target "${target.id}" skipped: ${message(error)}`);
+        logSync(
+          `pull of ${profile.label} from target "${target.id}" skipped (${describeFailure(error)})`,
+        );
       }
     }
     candidates.sort((left, right) => Date.parse(right.rotatedAt) - Date.parse(left.rotatedAt));
@@ -133,6 +141,15 @@ export function createSyncService(
       const key = stablePayloadKey(candidate.payload);
       if (tried.has(key)) continue;
       tried.add(key);
+      // The pull's authority to disregard timestamps rests on the local
+      // credential still being the one that failed. If a CLI rotation or an
+      // incoming push replaced it while peers were queried, that new state
+      // may be valid — abort and let the next collection decide.
+      const currentNow = await credentialSync.readBundle(profile.home);
+      if ((currentNow ? stablePayloadKey(currentNow.payload) : null) !== failedKey) {
+        logSync(`pull for ${profile.label} aborted: credentials changed while querying peers`);
+        return;
+      }
       const outcome = await credentialSync.writeBundle(profile.home, candidate, 'if-differs');
       if (outcome === 'applied') {
         syncedMtime.set(profile.id, Date.parse(candidate.rotatedAt));
@@ -242,7 +259,7 @@ export async function adoptProfile(
   try {
     bundle = await transport.syncPull(sync);
   } catch (error: unknown) {
-    throw toApiFailure(error);
+    throw sanitizedSyncFailure(error, params.targetId);
   }
   if (bundle.provider !== params.provider) {
     throw new ApiFailure(
@@ -289,10 +306,12 @@ async function enableSyncOnOwner(
     throw toApiFailure(error);
   }
   if (result.exitCode !== 0) {
+    // Remote stderr never reaches the response: a peer's output could carry
+    // anything, and credential hygiene bars unvetted remote text from errors.
     throw new ApiFailure(
       502,
       'sync-enable-failed',
-      `apm profile sync-enable failed on target "${targetId}": ${result.stderr.trim().slice(0, 300)}`,
+      `apm profile sync-enable exited with code ${result.exitCode ?? 'null'} on target "${targetId}" — run it there to see the reason`,
     );
   }
   const lastLine = result.stdout.trim().split('\n').at(-1) ?? '';
@@ -318,6 +337,30 @@ async function enableSyncOnOwner(
 
 function logSync(line: string): void {
   console.error(`apm sync: ${line}`);
+}
+
+/**
+ * What may be said about a failed peer operation: transport errors carry
+ * remote-agent text in their message, so only their code is repeated;
+ * anything else was raised locally and its message is our own.
+ */
+function describeFailure(error: unknown): string {
+  if (isTransportError(error)) return error.code;
+  return message(error);
+}
+
+/**
+ * Sync-operation failures answered to API callers name only the target and
+ * the transport code — never the remote message, for the same reason.
+ */
+function sanitizedSyncFailure(error: unknown, targetId: string): ApiFailure {
+  const mapped = toApiFailure(error);
+  if (!isTransportError(error)) return mapped;
+  return new ApiFailure(
+    mapped.statusCode,
+    mapped.code,
+    `Credential sync with target "${targetId}" failed (${error.code})`,
+  );
 }
 
 function message(error: unknown): string {

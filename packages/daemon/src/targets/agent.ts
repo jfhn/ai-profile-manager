@@ -11,7 +11,12 @@
  */
 import readline from 'node:readline';
 import { adapters } from '@apm/collectors';
-import { isTransportError, type PtyHandle, type TransportErrorCode } from '@apm/shared';
+import {
+  credentialBundleSchema,
+  isTransportError,
+  type PtyHandle,
+  type TransportErrorCode,
+} from '@apm/shared';
 import { killProcessGroup } from './local.js';
 import { resolveConfig } from '../config.js';
 import { createEventBus } from '../core/events.js';
@@ -147,6 +152,12 @@ async function serveSync(
     const bundle = await credentialSync.readBundle(profile.home);
     if (!bundle) {
       return sendError('sync-not-enabled', 'The synced profile has no credential file');
+    }
+    // Outbound bundles pass the same schema the receiver enforces, so an
+    // oversized or malformed credential file fails here instead of as an
+    // opaque parse error on the caller's side.
+    if (!credentialBundleSchema.safeParse(bundle).success) {
+      return sendError('spawn-failed', 'The credential bundle failed schema validation');
     }
     return send({ type: 'sync-bundle', bundle });
   }

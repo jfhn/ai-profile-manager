@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest';
+import { TransportError } from '@apm/shared';
 import {
   agentRequestSchema,
   agentResponseSchema,
   encodeAgentMessage,
   type AgentRequest,
 } from './protocol.js';
+import { isLegacySyncRejection } from './ssh.js';
 
 describe('target agent protocol', () => {
   it('round-trips argv, env and cwd as structured JSON values', () => {
@@ -117,7 +119,8 @@ describe('target agent protocol', () => {
     expect(
       agentRequestSchema.safeParse({ type: 'sync-pull', syncId: '../etc', role: 'owner' }).success,
     ).toBe(false);
-    // An oversized payload is rejected by the bundle size cap.
+    // An oversized payload is rejected by the bundle size cap — measured in
+    // UTF-8 bytes, so multi-byte characters cannot smuggle past it.
     const huge = { blob: 'x'.repeat(65 * 1024) };
     expect(
       agentRequestSchema.safeParse({
@@ -126,6 +129,26 @@ describe('target agent protocol', () => {
         role: 'owner',
         bundle: { ...bundle, payload: huge },
       }).success,
+    ).toBe(false);
+    const hugeMultiByte = { blob: '€'.repeat(30 * 1024) };
+    expect(
+      agentRequestSchema.safeParse({
+        type: 'sync-push',
+        syncId,
+        role: 'owner',
+        bundle: { ...bundle, payload: hugeMultiByte },
+      }).success,
+    ).toBe(false);
+  });
+
+  it('treats only the fixed pre-sync rejection strings as "old peer"', () => {
+    const legacy = (message: string) => new TransportError('spawn-failed', 't', message);
+    expect(isLegacySyncRejection(legacy('Invalid target-agent request'))).toBe(true);
+    expect(isLegacySyncRejection(legacy('Malformed target-agent request'))).toBe(true);
+    // A genuine sync failure on a current agent must surface as itself.
+    expect(isLegacySyncRejection(legacy('EACCES: permission denied'))).toBe(false);
+    expect(
+      isLegacySyncRejection(new TransportError('unreachable', 't', 'Invalid target-agent request')),
     ).toBe(false);
   });
 });

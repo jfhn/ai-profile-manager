@@ -62,9 +62,7 @@ export function createCredentialSync(options: CredentialSyncOptions): Credential
    * read, stat again, retry when the mtime moved mid-read so a bundle can
    * never mix two rotations. Null when the file is missing or unusable.
    */
-  async function snapshot(
-    home: string,
-  ): Promise<{
+  async function snapshot(home: string): Promise<{
     record: Record<string, unknown>;
     payload: Record<string, unknown>;
     mtimeMs: number;
@@ -122,6 +120,11 @@ export function createCredentialSync(options: CredentialSyncOptions): Credential
       try {
         await fsp.writeFile(temp, `${JSON.stringify(merged, null, 2)}\n`, { mode: 0o600 });
         await fsp.chmod(temp, 0o600);
+        // rotatedAt goes onto the temp file so the rename makes payload and
+        // rotation timestamp visible in one atomic step — a concurrent poll
+        // must never see the new payload under a fresh mtime and re-push it.
+        const rotated = new Date(rotatedAtMs);
+        await fsp.utimes(temp, rotated, rotated);
         // Re-check right before the rename: a CLI or adapter refresh that
         // landed since the decision wins, exactly like the adapters' own
         // rotation-conflict guards.
@@ -137,8 +140,6 @@ export function createCredentialSync(options: CredentialSyncOptions): Credential
           return 'stale';
         }
         await fsp.rename(temp, target);
-        const rotated = new Date(rotatedAtMs);
-        await fsp.utimes(target, rotated, rotated);
         return 'applied';
       } catch (error) {
         await fsp.rm(temp, { force: true }).catch(() => undefined);

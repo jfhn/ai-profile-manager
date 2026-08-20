@@ -126,8 +126,10 @@ export function createSshTransport(options: SshTargetOptions): TargetTransport {
 
   /**
    * A sync message to a pre-sync apm agent fails schema validation there and
-   * comes back as 'spawn-failed'; that peer is simply a target without the
-   * capability, so the failure is reported as exactly that.
+   * comes back as its fixed invalid-request rejection; that peer is simply a
+   * target without the capability, so the failure is reported as exactly
+   * that. Any other spawn-failed is a genuine sync failure on a current
+   * agent and passes through untouched.
    */
   async function syncOneShot<T extends 'sync-bundle' | 'sync-applied'>(
     request: AgentRequest,
@@ -137,7 +139,7 @@ export function createSshTransport(options: SshTargetOptions): TargetTransport {
     try {
       return await oneShot(request, expected);
     } catch (error: unknown) {
-      if (error instanceof TransportError && error.code === 'spawn-failed') {
+      if (error instanceof TransportError && isLegacySyncRejection(error)) {
         throw failure('unsupported', `Target "${target.id}" does not support credential sync`);
       }
       throw error;
@@ -370,4 +372,17 @@ function parseResponse(line: string): AgentResponse | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * The two exact rejection strings every pre-sync agent answers an unknown
+ * request with (agent.ts parseRequest, unchanged since the first release).
+ * Only these mean "old peer" — any other spawn-failed is a real failure.
+ */
+export function isLegacySyncRejection(error: TransportError): boolean {
+  return (
+    error.code === 'spawn-failed' &&
+    (error.message === 'Invalid target-agent request' ||
+      error.message === 'Malformed target-agent request')
+  );
 }
