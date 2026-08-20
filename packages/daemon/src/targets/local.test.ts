@@ -83,12 +83,14 @@ describe('local transport', () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
-  it('describes this machine as an approved local target with every capability', () => {
+  it('describes this machine as an approved local target with every capability but sync', () => {
     const target = createLocalTarget();
     expect(target.id).toBe(LOCAL_TARGET_ID);
     expect(target.kind).toBe('local');
     expect(target.approved).toBe(true);
-    expect(target.capabilities).toEqual([...TARGET_CAPABILITIES]);
+    expect(target.capabilities).toEqual(
+      TARGET_CAPABILITIES.filter((capability) => capability !== 'sync'),
+    );
     expect(target.identity.fingerprint).toBeNull();
   });
 

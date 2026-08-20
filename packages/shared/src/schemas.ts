@@ -148,6 +148,37 @@ export const terminalClientMessageSchema = z.union([
   }),
 ]);
 
+export const profileSyncSchema = z.object({
+  id: z.string().uuid(),
+  role: z.enum(['owner', 'replica']),
+});
+
+/**
+ * A synced profile's credentials in transit (see CredentialBundle). The
+ * payload stays an opaque record here — its exact shape belongs to the
+ * provider adapter — but its size is capped so no message can smuggle bulk
+ * data through the sync path.
+ */
+export const CREDENTIAL_BUNDLE_MAX_BYTES = 64 * 1024;
+export const credentialBundleSchema = z.object({
+  provider: providerIdSchema,
+  rotatedAt: isoTimestamp,
+  payload: z
+    .record(z.string(), z.unknown())
+    .refine((payload) => JSON.stringify(payload).length <= CREDENTIAL_BUNDLE_MAX_BYTES, {
+      message: `credential bundle payloads must not exceed ${CREDENTIAL_BUNDLE_MAX_BYTES} bytes`,
+    }),
+});
+
+/** POST /api/targets/:id/sync-adopt — creating a replica of a remote profile. */
+export const syncAdoptRequestSchema = z
+  .object({
+    provider: providerIdSchema,
+    remoteProfileId: profileIdSchema,
+    label: label.optional(),
+  })
+  .strict();
+
 /** Persisted profile store shape (profiles.json). */
 export const profileSchema = z.object({
   id: profileIdSchema,
@@ -167,10 +198,15 @@ export const profileSchema = z.object({
   status: z.enum(['pending', 'active', 'error']),
   statusReason: z.string().nullable(),
   enabled: z.boolean(),
+  // Absent in stores written before credential sync existed.
+  sync: profileSyncSchema.nullable().optional().default(null),
   createdAt: z.string(),
 });
 
-const persistedProfilesSchema = z.array(profileSchema).superRefine(assertUniqueProfileIds);
+const persistedProfilesSchema = z
+  .array(profileSchema)
+  .superRefine(assertUniqueProfileIds)
+  .superRefine(assertUniqueSyncIds);
 
 export const profileStoreFileV1Schema = z.object({
   version: z.literal(1),
@@ -296,6 +332,27 @@ function assertUniqueProfileIds<T extends { id: string }>(
       code: z.ZodIssueCode.custom,
       path: [index, 'id'],
       message: `profiles[${index}].id duplicates profiles[${firstIndex}].id (${JSON.stringify(profile.id)})`,
+    });
+  }
+}
+
+function assertUniqueSyncIds(
+  profiles: Array<{ sync?: { id: string } | null }>,
+  context: z.RefinementCtx,
+): void {
+  const firstIndexBySyncId = new Map<string, number>();
+  for (const [index, profile] of profiles.entries()) {
+    const syncId = profile.sync?.id;
+    if (syncId === undefined) continue;
+    const firstIndex = firstIndexBySyncId.get(syncId);
+    if (firstIndex === undefined) {
+      firstIndexBySyncId.set(syncId, index);
+      continue;
+    }
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: [index, 'sync', 'id'],
+      message: `profiles[${index}].sync.id duplicates profiles[${firstIndex}].sync.id (${JSON.stringify(syncId)})`,
     });
   }
 }

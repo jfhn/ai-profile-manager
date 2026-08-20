@@ -24,7 +24,7 @@ export type TargetKind = 'local' | 'remote';
  * consumers must check `capabilities` (or `TargetTransport.supports`) before
  * using one instead of assuming every target behaves like the local machine.
  */
-export const TARGET_CAPABILITIES = ['exec', 'pty', 'signal', 'profiles'] as const;
+export const TARGET_CAPABILITIES = ['exec', 'pty', 'signal', 'profiles', 'sync'] as const;
 export type TargetCapability = (typeof TARGET_CAPABILITIES)[number];
 
 /** Last known reachability. 'unknown' until a transport probed the target. */

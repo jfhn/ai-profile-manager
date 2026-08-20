@@ -4,6 +4,7 @@ import path from 'node:path';
 import type { CollectResult, ProviderIdentity, UsageWindow } from '@apm/shared';
 import type { CollectContext, ProviderAdapter } from '../adapter.js';
 import { readJsonBounded, readJsonSync, statOrNull } from '../bounded.js';
+import { createCredentialSync } from '../credential-sync.js';
 import { fetchJson, refreshOnce } from '../oauth.js';
 import {
   failureKind,
@@ -57,6 +58,13 @@ export const claudeAdapter: ProviderAdapter = {
   loginCommand: (home) => `CLAUDE_CONFIG_DIR=${home} claude`,
   loginArgv: () => ['claude'],
   defaultHome: () => path.join(os.homedir(), '.claude'),
+  credentialSync: createCredentialSync({
+    provider: 'claude',
+    fileName: '.credentials.json',
+    extract: (record) =>
+      isRecord(record.claudeAiOauth) ? { claudeAiOauth: record.claudeAiOauth } : null,
+    merge: (current, payload) => ({ ...current, claudeAiOauth: payload.claudeAiOauth }),
+  }),
 };
 
 async function collectClaudeUsage(ctx: CollectContext): Promise<CollectResult> {
@@ -472,6 +480,12 @@ async function fetchOauth(
   let token = credentials.token;
   let refreshed = false;
   if (credentials.expiresMs !== null && credentials.expiresMs <= nowMs + 30_000) {
+    if (ctx.allowRefresh === false)
+      return {
+        usage: null,
+        reason:
+          'Claude OAuth access token is expired; awaiting a credential sync from the owner machine',
+      };
     if (!refreshToken || !ctx.allowNetwork)
       return {
         usage: null,
@@ -488,7 +502,13 @@ async function fetchOauth(
   // A rejected token that still looked valid on disk was likely revoked by a
   // refresh elsewhere; one refresh-and-retry recovers without waiting for the
   // real CLI to rewrite the credentials file.
-  if (attempt.unauthorized && !refreshed && refreshToken && ctx.allowNetwork) {
+  if (
+    attempt.unauthorized &&
+    !refreshed &&
+    refreshToken &&
+    ctx.allowNetwork &&
+    ctx.allowRefresh !== false
+  ) {
     const refresh = await refreshOnce(refreshInFlight, ctx.home, () =>
       requestOauthRefresh(ctx, { token: credentials.token, refreshToken }, nowMs),
     );

@@ -3,11 +3,14 @@ import {
   TransportError,
   type CommandResult,
   type CommandSpec,
+  type CredentialBundle,
   type ExecOptions,
   type ExecutionTarget,
   type ExitStatus,
+  type ProfileSync,
   type PtyHandle,
   type PtySpec,
+  type SyncPushResult,
   type TargetCapability,
   type TargetProfileSummary,
   type TargetSignal,
@@ -44,11 +47,23 @@ export interface FakePty {
   readonly exited: boolean;
 }
 
+export interface FakeSyncPush {
+  sync: ProfileSync;
+  bundle: CredentialBundle;
+  applied: boolean;
+}
+
 export interface FakeRemoteTransport extends TargetTransport {
   readonly execs: FakeExecCall[];
   readonly ptys: FakePty[];
+  /** Every syncPush received, in order. */
+  readonly syncPushes: FakeSyncPush[];
   scriptExec(argv: readonly string[], result: Partial<CommandResult>): void;
   scriptFailure(argv: readonly string[], code: TransportErrorCode, message?: string): void;
+  /** The bundle syncPull answers for this sync id; push replaces it when newer. */
+  setBundle(syncId: string, bundle: CredentialBundle): void;
+  getBundle(syncId: string): CredentialBundle | undefined;
+  scriptSyncFailure(code: TransportErrorCode, message?: string): void;
   setOnline(online: boolean): void;
   setApproved(approved: boolean): void;
   lastPty(): FakePty;
@@ -62,7 +77,7 @@ export function createFakeRemoteTransport(options: FakeRemoteOptions = {}): Fake
     kind: 'remote',
     transport: 'fake',
     identity: { hostname: id, address: `${id}.example`, fingerprint: `fp-${id}` },
-    capabilities: options.capabilities ?? ['exec', 'pty', 'signal', 'profiles'],
+    capabilities: options.capabilities ?? ['exec', 'pty', 'signal', 'profiles', 'sync'],
     approved: options.approved ?? true,
     status: options.online === false ? 'offline' : 'online',
   };
@@ -71,6 +86,9 @@ export function createFakeRemoteTransport(options: FakeRemoteOptions = {}): Fake
   const results = new Map<string, Partial<CommandResult>>();
   const failures = new Map<string, TransportError>();
   const profiles = options.profiles ?? [];
+  const bundles = new Map<string, CredentialBundle>();
+  const syncPushes: FakeSyncPush[] = [];
+  let syncFailure: TransportError | null = null;
   let online = options.online ?? true;
   let closed = false;
 
@@ -168,6 +186,7 @@ export function createFakeRemoteTransport(options: FakeRemoteOptions = {}): Fake
     target,
     execs,
     ptys,
+    syncPushes,
     supports: (capability) => target.capabilities.includes(capability),
     async probe(): Promise<TargetStatus> {
       target.status = closed || !online ? 'offline' : 'online';
@@ -197,6 +216,28 @@ export function createFakeRemoteTransport(options: FakeRemoteOptions = {}): Fake
       guard('profiles');
       return profiles.map((profile) => ({ ...profile }));
     },
+    async syncPull(sync: ProfileSync): Promise<CredentialBundle> {
+      guard('sync');
+      if (syncFailure) throw syncFailure;
+      const bundle = bundles.get(sync.id);
+      if (!bundle) {
+        throw new TransportError(
+          'sync-not-enabled',
+          id,
+          `No synced profile for sync id ${sync.id}`,
+        );
+      }
+      return { ...bundle };
+    },
+    async syncPush(sync: ProfileSync, bundle: CredentialBundle): Promise<SyncPushResult> {
+      guard('sync');
+      if (syncFailure) throw syncFailure;
+      const current = bundles.get(sync.id);
+      const applied = !current || Date.parse(bundle.rotatedAt) > Date.parse(current.rotatedAt);
+      if (applied) bundles.set(sync.id, bundle);
+      syncPushes.push({ sync, bundle, applied });
+      return { applied };
+    },
     async close(): Promise<void> {
       closed = true;
       for (const pty of ptys) await pty.handle.close();
@@ -206,6 +247,15 @@ export function createFakeRemoteTransport(options: FakeRemoteOptions = {}): Fake
     },
     scriptFailure(argv, code, message) {
       failures.set(key(argv), new TransportError(code, id, message ?? `${code}: ${argv[0]}`));
+    },
+    setBundle(syncId, bundle) {
+      bundles.set(syncId, bundle);
+    },
+    getBundle(syncId) {
+      return bundles.get(syncId);
+    },
+    scriptSyncFailure(code, message) {
+      syncFailure = new TransportError(code, id, message ?? `${code}: sync`);
     },
     setOnline(next) {
       online = next;

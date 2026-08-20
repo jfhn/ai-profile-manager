@@ -32,10 +32,12 @@ import type { z } from 'zod';
 import {
   LOCAL_TARGET_ID,
   addTargetRequestSchema,
+  syncAdoptRequestSchema,
   type CommandResult,
   type CommandSpec,
   type ExecOptions,
   type ExecutionTarget,
+  type Profile,
   type TargetCandidatesResponse,
   type TargetProfilesResponse,
   type TargetTransport,
@@ -46,6 +48,7 @@ import { readConfiguredTargets, writeConfiguredTargets, type ConfiguredTarget } 
 import { findPeer, mergeCandidates, readTailnetPeers } from './discovery.js';
 import { toApiFailure } from './errors.js';
 import { createSshTransport } from './ssh.js';
+import { adoptProfile } from './sync.js';
 
 export interface TargetRouteDeps {
   /**
@@ -87,6 +90,17 @@ export function registerTargetRoutes(
       } catch (error: unknown) {
         throw toApiFailure(error);
       }
+    },
+  );
+
+  app.post<{ Params: { id: string } }>(
+    '/api/targets/:id/sync-adopt',
+    async (req, reply): Promise<Profile> => {
+      const parsed = syncAdoptRequestSchema.safeParse(req.body ?? {});
+      if (!parsed.success) throw new ApiFailure(400, 'bad-request', formatIssues(parsed.error));
+      const profile = await adoptProfile(ctx, { targetId: req.params.id, ...parsed.data });
+      reply.code(201);
+      return profile;
     },
   );
 

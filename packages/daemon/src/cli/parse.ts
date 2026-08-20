@@ -18,6 +18,9 @@ export const USAGE =
   `  apm url                                             print the authenticated URL, open nothing\n` +
   `  apm profile add <claude|codex|cursor> [--label <label>] [--new] [-- login-args...]\n` +
   `                                                      log in to a fresh managed profile\n` +
+  `  apm profile add <claude|codex> --from-target <target> [--label <label>] <profile>\n` +
+  `                                                      adopt a synced replica of a remote profile\n` +
+  `  apm profile sync-enable <profile>                   make a profile a credential-sync owner\n` +
   `  apm profiles [--json] [--refresh]                   list profiles and provider defaults\n` +
   `  apm targets [--json] [--profiles <target>]          list targets or one target's profiles\n` +
   `  apm run [--target <target>] [--cwd <path>] [--ephemeral] <profile> <app> [args...]\n` +
@@ -204,14 +207,47 @@ export interface ProfileAddInvocation {
   loginArgs: string[];
 }
 
-const PROFILE_USAGE =
-  'usage: apm profile add <claude|codex|cursor> [--label <label>] [--new] [-- login-args...]';
+/** `apm profile add <provider> --from-target <target> <profile>` — adopt a replica. */
+export interface ProfileAdoptInvocation {
+  action: 'adopt';
+  provider: ProviderId;
+  target: string;
+  /** Remote profile id or label, resolved against the target's profile list. */
+  remoteProfile: string;
+  /** Local label; defaults to the remote profile's label. */
+  label?: string;
+}
 
-export function parseProfileArgv(argv: string[]): ProfileAddInvocation {
+/** `apm profile sync-enable <profile>` — make a local profile a sync owner. */
+export interface ProfileSyncEnableInvocation {
+  action: 'sync-enable';
+  /** Local profile id or label. */
+  profile: string;
+}
+
+export type ProfileInvocation =
+  ProfileAddInvocation | ProfileAdoptInvocation | ProfileSyncEnableInvocation;
+
+const PROFILE_USAGE =
+  'usage: apm profile add <claude|codex|cursor> [--label <label>] [--new] [-- login-args...]\n' +
+  '       apm profile add <claude|codex> --from-target <target> [--label <label>] <profile>\n' +
+  '       apm profile sync-enable <profile>';
+
+export function parseProfileArgv(argv: string[]): ProfileInvocation {
   const rest = [...argv];
 
   const action = rest.shift();
   if (action === undefined) throw new CliError(`profile requires a subcommand\n${PROFILE_USAGE}`);
+  if (action === 'sync-enable') {
+    const profile = rest.shift();
+    if (profile === undefined || profile.startsWith('-')) {
+      throw new CliError(`sync-enable requires <profile>\n${PROFILE_USAGE}`);
+    }
+    if (rest.length > 0) {
+      throw new CliError(`unexpected argument: ${rest[0]}\n${PROFILE_USAGE}`);
+    }
+    return { action: 'sync-enable', profile };
+  }
   if (action !== 'add') {
     throw new CliError(`unknown profile subcommand: ${action}\n${PROFILE_USAGE}`);
   }
@@ -226,6 +262,8 @@ export function parseProfileArgv(argv: string[]): ProfileAddInvocation {
 
   let label: string | undefined;
   let fresh = false;
+  let fromTarget: string | undefined;
+  let remoteProfile: string | undefined;
   const loginArgs: string[] = [];
 
   while (rest.length > 0) {
@@ -242,11 +280,39 @@ export function parseProfileArgv(argv: string[]): ProfileAddInvocation {
       }
     } else if (arg === '--new') {
       fresh = true;
+    } else if (arg === '--from-target') {
+      fromTarget = rest.shift();
+      if (fromTarget === undefined || fromTarget.startsWith('-')) {
+        throw new CliError(`--from-target requires <target>\n${PROFILE_USAGE}`);
+      }
+    } else if (!arg.startsWith('-') && remoteProfile === undefined) {
+      remoteProfile = arg;
     } else {
       throw new CliError(
         `unknown flag: ${arg} (provider login arguments go after \`--\`)\n${PROFILE_USAGE}`,
       );
     }
+  }
+
+  if (fromTarget === undefined && remoteProfile !== undefined) {
+    throw new CliError(
+      `unexpected argument: ${remoteProfile} (a remote profile needs --from-target)\n${PROFILE_USAGE}`,
+    );
+  }
+  if (fromTarget !== undefined) {
+    if (remoteProfile === undefined) {
+      throw new CliError(`--from-target requires a remote <profile>\n${PROFILE_USAGE}`);
+    }
+    if (fresh || loginArgs.length > 0) {
+      throw new CliError(`--from-target does not take --new or login arguments\n${PROFILE_USAGE}`);
+    }
+    return {
+      action: 'adopt',
+      provider,
+      target: fromTarget,
+      remoteProfile,
+      ...(label === undefined ? {} : { label }),
+    };
   }
 
   return label === undefined

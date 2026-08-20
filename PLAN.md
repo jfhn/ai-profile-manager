@@ -15,7 +15,10 @@ usage, and launching tools with the correct account.
 
 ## Core principles
 
-- Credentials stay on the machine that owns them.
+- Credentials stay on the machine that owns them, with one deliberate
+  exception: profiles enrolled in credential sync exchange their tokens with
+  mutually approved machines over SSH, inside the two schema-validated sync
+  messages and nowhere else (docs/TARGETS.md, "Credential sync").
 - Profiles isolate accounts without overwriting global authentication files.
 - Provider-specific behavior belongs in adapters.
 - Discovery and usage collection are read-only by default.
@@ -47,8 +50,9 @@ bounded scrollback on reattach.
 
 Execution targets extend the same session model to approved machines. Commands
 cross the transport boundary as structured argv, cwd, environment and profile
-ids. The target resolves profile credentials locally. Credentials are never
-copied to the daemon, browser or another target.
+ids. The target resolves profile credentials locally. Credentials never reach
+the browser, logs or session payloads; they travel between machines only for
+sync-enrolled profiles, inside the transport's two sync messages.
 
 ## Stack
 

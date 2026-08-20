@@ -7,12 +7,15 @@ import {
   TARGET_SIGNALS,
   TRANSPORT_ERROR_CODES,
   commandSpecSchema,
+  credentialBundleSchema,
   profileIdSchema,
   providerIdSchema,
   type CommandSpec,
   type CommandResult,
+  type CredentialBundle,
   type ExecOptions,
   type ExitStatus,
+  type ProfileSync,
   type PtySpec,
   type TargetProfileSummary,
   type TransportErrorCode,
@@ -42,6 +45,17 @@ export const agentRequestSchema = z.discriminatedUnion('type', [
   }),
   z.object({ type: z.literal('signal'), signal: z.enum(TARGET_SIGNALS) }),
   z.object({ type: z.literal('close') }),
+  z.object({
+    type: z.literal('sync-pull'),
+    syncId: z.string().uuid(),
+    role: z.enum(['owner', 'replica']),
+  }),
+  z.object({
+    type: z.literal('sync-push'),
+    syncId: z.string().uuid(),
+    role: z.enum(['owner', 'replica']),
+    bundle: credentialBundleSchema,
+  }),
 ]);
 
 export type AgentRequest =
@@ -52,7 +66,9 @@ export type AgentRequest =
   | { type: 'input'; data: string }
   | { type: 'resize'; cols: number; rows: number }
   | { type: 'signal'; signal: (typeof TARGET_SIGNALS)[number] }
-  | { type: 'close' };
+  | { type: 'close' }
+  | { type: 'sync-pull'; syncId: string; role: ProfileSync['role'] }
+  | { type: 'sync-push'; syncId: string; role: ProfileSync['role']; bundle: CredentialBundle };
 
 export type AgentResponse =
   | { type: 'ready'; handleId?: string }
@@ -60,7 +76,9 @@ export type AgentResponse =
   | { type: 'result'; result: CommandResult }
   | { type: 'data'; data: string }
   | ({ type: 'exit' } & ExitStatus)
-  | { type: 'error'; code: TransportErrorCode; message: string };
+  | { type: 'error'; code: TransportErrorCode; message: string }
+  | { type: 'sync-bundle'; bundle: CredentialBundle }
+  | { type: 'sync-applied'; applied: boolean };
 
 const targetProfileSchema = z.object({
   id: profileIdSchema,
@@ -120,6 +138,8 @@ export const agentResponseSchema = z.discriminatedUnion('type', [
     code: z.enum(TRANSPORT_ERROR_CODES),
     message: z.string(),
   }),
+  z.object({ type: z.literal('sync-bundle'), bundle: credentialBundleSchema }),
+  z.object({ type: z.literal('sync-applied'), applied: z.boolean() }),
 ]);
 
 export function encodeAgentMessage(message: AgentRequest | AgentResponse): string {

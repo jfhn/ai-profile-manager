@@ -8,11 +8,14 @@ import {
   TransportError,
   type CommandResult,
   type CommandSpec,
+  type CredentialBundle,
   type ExecOptions,
   type ExecutionTarget,
   type ExitStatus,
+  type ProfileSync,
   type PtyHandle,
   type PtySpec,
+  type SyncPushResult,
   type TargetCapability,
   type TargetProfileSummary,
   type TargetSignal,
@@ -38,7 +41,7 @@ export interface SshTargetOptions {
 }
 
 export function createSshTransport(options: SshTargetOptions): TargetTransport {
-  const capabilities: TargetCapability[] = ['exec', 'pty', 'signal', 'profiles'];
+  const capabilities: TargetCapability[] = ['exec', 'pty', 'signal', 'profiles', 'sync'];
   const target: ExecutionTarget = {
     id: options.id,
     label: options.label,
@@ -97,6 +100,22 @@ export function createSshTransport(options: SshTargetOptions): TargetTransport {
       return response.profiles;
     },
 
+    async syncPull(sync: ProfileSync): Promise<CredentialBundle> {
+      const response = await syncOneShot(
+        { type: 'sync-pull', syncId: sync.id, role: sync.role },
+        'sync-bundle',
+      );
+      return response.bundle;
+    },
+
+    async syncPush(sync: ProfileSync, bundle: CredentialBundle): Promise<SyncPushResult> {
+      const response = await syncOneShot(
+        { type: 'sync-push', syncId: sync.id, role: sync.role, bundle },
+        'sync-applied',
+      );
+      return { applied: response.applied };
+    },
+
     async close(): Promise<void> {
       if (closed) return;
       closed = true;
@@ -105,10 +124,29 @@ export function createSshTransport(options: SshTargetOptions): TargetTransport {
     },
   };
 
-  async function oneShot<T extends 'ready' | 'profiles' | 'result'>(
+  /**
+   * A sync message to a pre-sync apm agent fails schema validation there and
+   * comes back as 'spawn-failed'; that peer is simply a target without the
+   * capability, so the failure is reported as exactly that.
+   */
+  async function syncOneShot<T extends 'sync-bundle' | 'sync-applied'>(
     request: AgentRequest,
     expected: T,
   ): Promise<Extract<AgentResponse, { type: T }>> {
+    guard();
+    try {
+      return await oneShot(request, expected);
+    } catch (error: unknown) {
+      if (error instanceof TransportError && error.code === 'spawn-failed') {
+        throw failure('unsupported', `Target "${target.id}" does not support credential sync`);
+      }
+      throw error;
+    }
+  }
+
+  async function oneShot<
+    T extends 'ready' | 'profiles' | 'result' | 'sync-bundle' | 'sync-applied',
+  >(request: AgentRequest, expected: T): Promise<Extract<AgentResponse, { type: T }>> {
     guard();
     const child = openAgent();
     return new Promise((resolve, reject) => {

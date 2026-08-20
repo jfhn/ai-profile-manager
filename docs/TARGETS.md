@@ -18,7 +18,7 @@ interface ExecutionTarget {
   kind: 'local' | 'remote';
   transport: string;
   identity: { hostname: string | null; address: string | null; fingerprint: string | null };
-  capabilities: Array<'exec' | 'pty' | 'signal' | 'profiles'>;
+  capabilities: Array<'exec' | 'pty' | 'signal' | 'profiles' | 'sync'>;
   approved: boolean;
   status: 'online' | 'offline' | 'unknown';
 }
@@ -31,13 +31,15 @@ Missing capabilities fail with `TransportError('unsupported')`.
 
 `TargetTransport` provides:
 
-| Method             | Purpose                                                   |
-| ------------------ | --------------------------------------------------------- |
-| `probe()`          | Report reachability without throwing                      |
-| `exec(spec, opts)` | Run argv to completion; non-zero exit is still a result   |
-| `openPty(spec)`    | Open an interactive process with data, resize and signals |
-| `profiles()`       | List safe profile summaries from that target              |
-| `close()`          | Release the connection and its live PTYs                  |
+| Method                   | Purpose                                                   |
+| ------------------------ | --------------------------------------------------------- |
+| `probe()`                | Report reachability without throwing                      |
+| `exec(spec, opts)`       | Run argv to completion; non-zero exit is still a result   |
+| `openPty(spec)`          | Open an interactive process with data, resize and signals |
+| `profiles()`             | List safe profile summaries from that target              |
+| `syncPull(sync)`         | Fetch a synced profile's credential bundle                |
+| `syncPush(sync, bundle)` | Offer a rotated bundle; applied only when strictly newer  |
+| `close()`                | Release the connection and its live PTYs                  |
 
 Commands are structured values:
 
@@ -61,12 +63,16 @@ Closing a target connection closes its live PTYs.
 
 Transport errors use shared codes: `target-not-found`, `target-not-approved`,
 `unsupported`, `unreachable`, `unauthorized`, `closed`, `profile-not-found`,
-`cwd-not-found`, `command-not-found`, `spawn-failed` and `timeout`. API routes
-map them through `packages/daemon/src/targets/errors.ts`.
+`cwd-not-found`, `command-not-found`, `spawn-failed`, `timeout`,
+`sync-conflict` and `sync-not-enabled`. API routes map them through
+`packages/daemon/src/targets/errors.ts`.
 
 ## Profiles and credentials
 
-Credentials never cross the transport boundary.
+Credentials cross the transport boundary in exactly one shape: the
+`CredentialBundle` inside the two sync messages, between machines that
+approved each other, over SSH. They never appear in session payloads, HTTP
+responses, events or logs. Everything else below is unchanged.
 
 `profiles()` returns only id, provider, label, status and enabled state. A
 command names profile ids. The selected target resolves those ids and injects
@@ -79,6 +85,59 @@ puts a generated `cursor-agent` shim first on the session’s `PATH`.
 Profile resolution is target-scoped. A profile id from one machine has no
 meaning on another. `GET /api/targets/:id/profiles` and
 `apm targets --profiles <id>` expose the safe summaries needed for selection.
+
+## Credential sync
+
+A Claude or Codex profile can share its OAuth credentials across machines.
+Naive home-copying breaks: both providers rotate the refresh token, and both
+the daemon and the provider CLIs rotate on their own, so two machines holding
+independent copies log each other out. Sync makes one profile the **owner**
+(the only daemon that background-refreshes) and the others **replicas**, tied
+together by a sync id (`Profile.sync = { id, role }`). Cursor cannot sync —
+its rotated tokens live only in process memory — and is excluded by
+construction: its adapter has no `credentialSync`.
+
+Mechanics (`packages/daemon/src/targets/sync.ts` and
+`packages/collectors/src/credential-sync.ts`):
+
+- The credential file's mtime is the rotation clock. Applying a bundle sets
+  the file mtime to the bundle's `rotatedAt`, so re-offering known state is a
+  no-op and machines cannot echo rotations back and forth.
+- Push-on-rotate: every daemon polls its synced profiles' credential file
+  mtimes (~15 s, including once at startup as catch-up) and pushes changed
+  bundles to all approved remote targets. Receivers apply strictly-newer
+  bundles only. Pushes to offline peers are dropped; the next rotation or
+  restart retries.
+- Pull-on-auth-failure: when usage collection reports an auth failure for a
+  synced profile — owner or replica — the daemon pulls candidate bundles from
+  its peers, applies the newest payload it has not already tried, and forces
+  a usage refresh to validate it. This path recovers from missed pushes,
+  clock skew and wrong last-writer picks.
+- The remote agent answers `sync-pull`/`sync-push` from a read-only store
+  view and only ever writes the profile's credential file through the
+  provider adapter. Store mutations happen solely in each machine's own
+  daemon. Two machines both claiming the owner role answer `sync-conflict`.
+
+Setup requires apm on both machines and mutual approval in each machine's
+`targets.json` (each side pushes to the other). Enable on the owner, adopt on
+the replica:
+
+```sh
+owner$    apm profile sync-enable work
+replica$  apm profile add claude --from-target owner-box work
+```
+
+The adopt flow resolves the remote profile, runs `apm profile sync-enable` on
+the target through its own daemon, pulls the first bundle into a fresh
+managed home and creates the local replica profile.
+
+Security note: this legalizes no new reach. An approved SSH peer could
+already read credential files through the exec channel; sync replaces that
+ad-hoc possibility with a schema-validated, size-capped message pair. SSH
+`authorized_keys` remains the authentication boundary. Worst case of the
+remaining write race (a provider CLI rotates in the same instant a bundle is
+applied): the profile reports an auth failure and the owner logs in again —
+the same worst case a naive copy had on every rotation.
 
 ## Registry and approval
 

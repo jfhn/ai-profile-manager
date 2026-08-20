@@ -44,7 +44,10 @@ export interface LocalTransportDeps {
   shimsDir: string;
 }
 
-/** The always-present local target. Approved by definition, all capabilities. */
+/**
+ * The always-present local target. Approved by definition; every capability
+ * except 'sync' — a machine has nothing to sync credentials with itself.
+ */
 export function createLocalTarget(): ExecutionTarget {
   return {
     id: LOCAL_TARGET_ID,
@@ -52,7 +55,7 @@ export function createLocalTarget(): ExecutionTarget {
     kind: 'local',
     transport: 'local',
     identity: { hostname: os.hostname() || null, address: null, fingerprint: null },
-    capabilities: [...TARGET_CAPABILITIES],
+    capabilities: TARGET_CAPABILITIES.filter((capability) => capability !== 'sync'),
     approved: true,
     status: 'online',
   };
@@ -191,6 +194,14 @@ export function createLocalTransport(deps: LocalTransportDeps): TargetTransport 
         status: profile.status,
         enabled: profile.enabled,
       }));
+    },
+
+    async syncPull(): Promise<never> {
+      throw fail('unsupported', 'The local target does not sync credentials with itself');
+    },
+
+    async syncPush(): Promise<never> {
+      throw fail('unsupported', 'The local target does not sync credentials with itself');
     },
 
     async close(): Promise<void> {

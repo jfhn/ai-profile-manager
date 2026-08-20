@@ -282,6 +282,26 @@ describe('codex adapter', () => {
     expect(fs.readdirSync(dir).filter((name) => name.includes('.tmp'))).toEqual([]);
   });
 
+  it('never refreshes with allowRefresh false: 401 reports auth and auth.json stays', async () => {
+    const dir = home();
+    writeSession(dir, '2025-01-09T23:00:00Z', localLimits());
+    writeAuth(dir);
+    const original = fs.readFileSync(path.join(dir, 'auth.json'), 'utf8');
+    const { fetchImpl, urls } = router(() => new Response('', { status: 401 }));
+    const result = await codexAdapter.collectUsage({
+      home: dir,
+      cacheDir: path.join(dir, 'cache'),
+      allowNetwork: true,
+      allowRefresh: false,
+      now,
+      fetchImpl,
+    });
+    expect(urls).toEqual([USAGE_URL]);
+    expect(result.failureKind).toBe('auth');
+    expect(result.error).toContain('awaiting a credential sync');
+    expect(fs.readFileSync(path.join(dir, 'auth.json'), 'utf8')).toBe(original);
+  });
+
   it('falls back to local data with an auth reason when the refresh is rejected', async () => {
     const dir = home();
     writeSession(dir, '2025-01-09T23:00:00Z', localLimits());
