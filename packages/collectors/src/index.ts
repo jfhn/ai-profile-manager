@@ -4,7 +4,8 @@ import { claudeAdapter } from './adapters/claude.js';
 import { codexAdapter } from './adapters/codex.js';
 import { cursorAdapter } from './adapters/cursor.js';
 
-export type { CollectContext, ProviderAdapter } from './adapter.js';
+export type { CollectContext, CredentialSyncSupport, ProviderAdapter } from './adapter.js';
+export { createCredentialSync, stablePayloadKey } from './credential-sync.js';
 
 export const adapters: Record<ProviderId, ProviderAdapter> = {
   claude: claudeAdapter,

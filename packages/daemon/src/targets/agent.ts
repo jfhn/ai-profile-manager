@@ -10,11 +10,17 @@
  *
  */
 import readline from 'node:readline';
-import { isTransportError, type PtyHandle, type TransportErrorCode } from '@apm/shared';
+import { adapters } from '@apm/collectors';
+import {
+  credentialBundleSchema,
+  isTransportError,
+  type PtyHandle,
+  type TransportErrorCode,
+} from '@apm/shared';
 import { killProcessGroup } from './local.js';
 import { resolveConfig } from '../config.js';
 import { createEventBus } from '../core/events.js';
-import { createProfileService } from '../core/profiles.js';
+import { createProfileService, readProfileStore } from '../core/profiles.js';
 import {
   agentRequestSchema,
   encodeAgentMessage,
@@ -75,6 +81,23 @@ export async function runTargetAgent(): Promise<void> {
   if (!parsed) return;
 
   const config = resolveConfig();
+
+  // Sync requests never construct a ProfileService: its construction may
+  // persist migrations, and an agent-side store write would race a running
+  // daemon's in-memory copy. serveSync reads the store and touches only the
+  // profile's credential file through the provider adapter.
+  if (parsed.type === 'sync-pull' || parsed.type === 'sync-push') {
+    try {
+      await serveSync(parsed, config.profilesFile);
+    } catch (error: unknown) {
+      if (isTransportError(error)) sendError(error.code, error.message);
+      else sendError('spawn-failed', error instanceof Error ? error.message : String(error));
+    } finally {
+      input.close();
+    }
+    return;
+  }
+
   const profiles = createProfileService(config, createEventBus());
   const transport = createLocalTransport({ profiles, shimsDir: config.shimsDir });
 
@@ -102,6 +125,51 @@ export async function runTargetAgent(): Promise<void> {
     input.close();
     await transport.close();
   }
+}
+
+async function serveSync(
+  request: Extract<AgentRequest, { type: 'sync-pull' | 'sync-push' }>,
+  profilesFile: string,
+): Promise<void> {
+  const { profiles } = readProfileStore(profilesFile);
+  // The store schema rejects duplicate sync ids, so at most one matches.
+  const profile = profiles.find((candidate) => candidate.sync?.id === request.syncId);
+  if (!profile?.sync) {
+    return sendError('sync-not-enabled', `No synced profile for sync id ${request.syncId}`);
+  }
+  if (request.role === 'owner' && profile.sync.role === 'owner') {
+    return sendError('sync-conflict', 'Both machines claim the owner role for this sync id');
+  }
+  const credentialSync = adapters[profile.provider]?.credentialSync;
+  if (!credentialSync) {
+    return sendError(
+      'unsupported',
+      `Provider ${profile.provider} does not support credential sync`,
+    );
+  }
+
+  if (request.type === 'sync-pull') {
+    const bundle = await credentialSync.readBundle(profile.home);
+    if (!bundle) {
+      return sendError('sync-not-enabled', 'The synced profile has no credential file');
+    }
+    // Outbound bundles pass the same schema the receiver enforces, so an
+    // oversized or malformed credential file fails here instead of as an
+    // opaque parse error on the caller's side.
+    if (!credentialBundleSchema.safeParse(bundle).success) {
+      return sendError('spawn-failed', 'The credential bundle failed schema validation');
+    }
+    return send({ type: 'sync-bundle', bundle });
+  }
+
+  if (request.bundle.provider !== profile.provider) {
+    return sendError(
+      'sync-conflict',
+      `Bundle provider ${request.bundle.provider} does not match profile provider ${profile.provider}`,
+    );
+  }
+  const outcome = await credentialSync.writeBundle(profile.home, request.bundle, 'if-newer');
+  send({ type: 'sync-applied', applied: outcome === 'applied' });
 }
 
 async function servePty(pty: PtyHandle, iterator: AsyncIterator<string>): Promise<void> {

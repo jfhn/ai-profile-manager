@@ -53,6 +53,10 @@ export function createUsageService(
           home: profile.home,
           cacheDir,
           allowNetwork: true,
+          // Replicas never rotate tokens — the sync owner is the sole
+          // background refresher; a replica reports the auth failure and the
+          // sync service pulls fresh credentials instead.
+          allowRefresh: profile.sync?.role !== 'replica',
           force: options?.force === true,
         });
         snapshot = {

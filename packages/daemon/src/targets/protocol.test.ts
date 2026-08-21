@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest';
+import { TransportError } from '@apm/shared';
 import {
   agentRequestSchema,
   agentResponseSchema,
   encodeAgentMessage,
   type AgentRequest,
 } from './protocol.js';
+import { isLegacySyncRejection } from './ssh.js';
 
 describe('target agent protocol', () => {
   it('round-trips argv, env and cwd as structured JSON values', () => {
@@ -88,5 +90,65 @@ describe('target agent protocol', () => {
       rows: 24,
     };
     expect(agentRequestSchema.safeParse({ type: 'pty', spec }).success).toBe(false);
+  });
+
+  it('round-trips the sync messages and validates both directions', () => {
+    const bundle = {
+      provider: 'claude',
+      rotatedAt: '2026-08-20T10:00:00.000Z',
+      payload: { claudeAiOauth: { accessToken: 'token-1' } },
+    };
+    const syncId = '11111111-2222-4333-8444-555555555555';
+
+    const pull: AgentRequest = { type: 'sync-pull', syncId, role: 'replica' };
+    expect(agentRequestSchema.parse(JSON.parse(encodeAgentMessage(pull)))).toEqual(pull);
+
+    const push: AgentRequest = { type: 'sync-push', syncId, role: 'owner', bundle };
+    expect(agentRequestSchema.parse(JSON.parse(encodeAgentMessage(push)))).toEqual(push);
+
+    expect(agentResponseSchema.parse({ type: 'sync-bundle', bundle })).toEqual({
+      type: 'sync-bundle',
+      bundle,
+    });
+    expect(agentResponseSchema.parse({ type: 'sync-applied', applied: false })).toEqual({
+      type: 'sync-applied',
+      applied: false,
+    });
+
+    // Not a UUID: rejected before it can reach store matching.
+    expect(
+      agentRequestSchema.safeParse({ type: 'sync-pull', syncId: '../etc', role: 'owner' }).success,
+    ).toBe(false);
+    // An oversized payload is rejected by the bundle size cap — measured in
+    // UTF-8 bytes, so multi-byte characters cannot smuggle past it.
+    const huge = { blob: 'x'.repeat(65 * 1024) };
+    expect(
+      agentRequestSchema.safeParse({
+        type: 'sync-push',
+        syncId,
+        role: 'owner',
+        bundle: { ...bundle, payload: huge },
+      }).success,
+    ).toBe(false);
+    const hugeMultiByte = { blob: '€'.repeat(30 * 1024) };
+    expect(
+      agentRequestSchema.safeParse({
+        type: 'sync-push',
+        syncId,
+        role: 'owner',
+        bundle: { ...bundle, payload: hugeMultiByte },
+      }).success,
+    ).toBe(false);
+  });
+
+  it('treats only the fixed pre-sync rejection strings as "old peer"', () => {
+    const legacy = (message: string) => new TransportError('spawn-failed', 't', message);
+    expect(isLegacySyncRejection(legacy('Invalid target-agent request'))).toBe(true);
+    expect(isLegacySyncRejection(legacy('Malformed target-agent request'))).toBe(true);
+    // A genuine sync failure on a current agent must surface as itself.
+    expect(isLegacySyncRejection(legacy('EACCES: permission denied'))).toBe(false);
+    expect(
+      isLegacySyncRejection(new TransportError('unreachable', 't', 'Invalid target-agent request')),
+    ).toBe(false);
   });
 });

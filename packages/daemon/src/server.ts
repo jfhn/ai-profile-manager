@@ -18,6 +18,7 @@ import { createLocalTransport } from './targets/local.js';
 import { createTargetRegistry } from './targets/registry.js';
 import { createConfiguredTransports } from './targets/config.js';
 import { registerTargetRoutes } from './targets/routes.js';
+import { createSyncService } from './targets/sync.js';
 
 export interface DaemonHandle {
   config: DaemonConfig;
@@ -44,7 +45,8 @@ export async function createContext(config: DaemonConfig): Promise<AppContext> {
   const localTransport = createLocalTransport({ profiles, shimsDir: config.shimsDir });
   const targets = createTargetRegistry(localTransport, createConfiguredTransports(config));
   const sessions = createSessionHost(config, events, profiles, { targets });
-  return { config, events, profiles, usage, sessions, targets };
+  const sync = createSyncService(profiles, targets, usage, events);
+  return { config, events, profiles, usage, sessions, targets, sync };
 }
 
 export async function startDaemon(config: DaemonConfig): Promise<DaemonHandle> {
@@ -143,6 +145,7 @@ export async function startDaemon(config: DaemonConfig): Promise<DaemonHandle> {
 
   writeRunFile(config);
   ctx.usage.start();
+  ctx.sync.start();
   // The sweep runs after the daemon is already listening, so a failing persist
   // or event listener must not become an uncaught exception.
   setImmediate(() => {
@@ -159,6 +162,7 @@ export async function startDaemon(config: DaemonConfig): Promise<DaemonHandle> {
   const close = async () => {
     if (closed) return;
     closed = true;
+    ctx.sync.stop();
     ctx.usage.stop();
     // Upgraded sockets are not owned by Fastify. Close them explicitly or
     // app.close() waits forever while a terminal client remains attached.

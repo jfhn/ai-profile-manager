@@ -54,6 +54,11 @@ export function registerCoreRoutes(app: FastifyInstance, ctx: AppContext): void 
     return reply.code(204).send();
   });
 
+  app.post<{ Params: IdParams }>('/api/profiles/:id/sync-enable', async (request) => {
+    const id = parseBody(profileIdSchema, request.params.id);
+    return ctx.profiles.enableSync(id);
+  });
+
   app.post<{ Params: IdParams }>('/api/profiles/:id/refresh', async (request, reply) => {
     const id = parseBody(profileIdSchema, request.params.id);
     await ctx.usage.refresh(id, { force: true });

@@ -19,6 +19,8 @@ const API_ERRORS: Record<TransportErrorCode, { status: number; code: string }> =
   'command-not-found': { status: 400, code: 'app-not-found' },
   'spawn-failed': { status: 400, code: 'spawn-failed' },
   timeout: { status: 504, code: 'target-timeout' },
+  'sync-conflict': { status: 409, code: 'sync-conflict' },
+  'sync-not-enabled': { status: 404, code: 'sync-not-enabled' },
 };
 
 /** ApiFailure for a transport error; anything else is rethrown untouched. */

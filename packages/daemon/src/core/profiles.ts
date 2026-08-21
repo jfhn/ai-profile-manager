@@ -256,11 +256,94 @@ export function createProfileService(
         status: hasCredentials ? 'active' : 'error',
         statusReason: hasCredentials ? null : 'no credentials found',
         enabled: true,
+        sync: null,
         createdAt: new Date().toISOString(),
       };
       profiles = [...profiles, profile];
       ensureDefault(profile.provider);
       persist();
+      events.emit({ type: 'profiles-changed' });
+      return profile;
+    },
+
+    enableSync(id: string) {
+      const profile = findProfile(id);
+      if (profile.sync) return profile;
+      if (!adapterFor(profile.provider).credentialSync) {
+        throw new ApiFailure(
+          400,
+          'sync-unsupported',
+          `Provider ${profile.provider} does not support credential sync`,
+        );
+      }
+      if (profile.status !== 'active') {
+        throw new ApiFailure(409, 'not-active', 'Only active profiles can own a credential sync');
+      }
+      const updated: Profile = {
+        ...profile,
+        sync: { id: crypto.randomUUID(), role: 'owner' },
+      };
+      const previous = profiles;
+      profiles = profiles.map((candidate) => (candidate.id === id ? updated : candidate));
+      try {
+        persist();
+      } catch (error) {
+        profiles = previous;
+        throw error;
+      }
+      events.emit({ type: 'profiles-changed' });
+      return updated;
+    },
+
+    async createReplica(req) {
+      const adapter = adapterFor(req.provider);
+      if (!adapter.credentialSync) {
+        throw new ApiFailure(
+          400,
+          'sync-unsupported',
+          `Provider ${req.provider} does not support credential sync`,
+        );
+      }
+      if (profiles.some((profile) => profile.sync?.id === req.sync.id)) {
+        throw new ApiFailure(
+          409,
+          'already-synced',
+          `A profile with sync id ${req.sync.id} already exists on this machine`,
+        );
+      }
+      const home = existingDirectory(req.home);
+      if (
+        profiles.some(
+          (profile) => profile.provider === req.provider && samePath(profile.home, home),
+        )
+      ) {
+        throw new ApiFailure(409, 'home-taken', 'This provider home is already in use');
+      }
+      const hasCredentials = safelyHasCredentials(adapter, home);
+      const profile: Profile = {
+        id: crypto.randomUUID(),
+        provider: req.provider,
+        label: uniqueLabel(req.provider, validLabel(req.label)),
+        home,
+        homeKind: isChildPath(config.homesDir, home) ? 'managed' : 'external',
+        identity: safelyDetectIdentity(adapter, home),
+        status: hasCredentials ? 'active' : 'error',
+        statusReason: hasCredentials ? null : 'no credentials found',
+        enabled: true,
+        sync: { ...req.sync, role: 'replica' },
+        createdAt: new Date().toISOString(),
+      };
+      const previous = profiles;
+      const previousDefaults = defaultProfileIds;
+      profiles = [...profiles, profile];
+      ensureDefault(profile.provider);
+      try {
+        persist();
+      } catch (error) {
+        profiles = previous;
+        defaultProfileIds = previousDefaults;
+        throw error;
+      }
       events.emit({ type: 'profiles-changed' });
       return profile;
     },
@@ -354,6 +437,7 @@ export function createProfileService(
         status: 'pending',
         statusReason: null,
         enabled: true,
+        sync: null,
         createdAt: new Date().toISOString(),
       };
       profiles = [...profiles, profile];
@@ -412,6 +496,20 @@ export function createProfileService(
       return adapterFor(profile.provider).env(profile.home);
     },
   };
+}
+
+/**
+ * Read the store without a service around it — no migration persist, no
+ * default repair, no writes of any kind. The target agent's sync handlers use
+ * this: an agent-side store write would race a running daemon's in-memory
+ * copy and get clobbered, so every store mutation goes through the daemon.
+ */
+export function readProfileStore(file: string): {
+  profiles: Profile[];
+  defaultProfileIds: DefaultProfileIds;
+} {
+  const loaded = loadStore(file);
+  return { profiles: loaded.profiles, defaultProfileIds: loaded.defaultProfileIds };
 }
 
 function loadStore(file: string): LoadedProfileStore {

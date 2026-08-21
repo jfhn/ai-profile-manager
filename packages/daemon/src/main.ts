@@ -6,6 +6,9 @@
  *   apm url                                             print the authenticated URL, open nothing
  *   apm profile add <claude|codex|cursor> [--label <label>] [--new] [-- login-args...]
  *                                                       log in to a fresh managed profile
+ *   apm profile add <claude|codex> --from-target <target> [--label <label>] <profile>
+ *                                                       adopt a synced replica of a remote profile
+ *   apm profile sync-enable <profile>                   make a profile a credential-sync owner
  *   apm profiles [--json] [--refresh]                   list profiles and provider defaults
  *   apm targets [--json] [--profiles <target>]          list targets or one target's profiles
  *   apm run [--target <target>] [--cwd <path>] [--ephemeral] <profile> <app> [args...]

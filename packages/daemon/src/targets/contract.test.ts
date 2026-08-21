@@ -28,6 +28,7 @@ const PROFILE: Profile = {
   status: 'active',
   statusReason: null,
   enabled: true,
+  sync: null,
   createdAt: new Date().toISOString(),
 };
 
@@ -249,6 +250,42 @@ describe.each(IMPLEMENTATIONS)('transport contract ($name)', ({ create }) => {
     for (const profile of profiles) {
       expect(Object.keys(profile)).not.toContain('home');
     }
+  });
+});
+
+describe('credential sync over transports', () => {
+  const sync = { id: '11111111-2222-4333-8444-555555555555', role: 'replica' as const };
+  const bundle = (token: string, rotatedAt: string) => ({
+    provider: 'claude' as const,
+    rotatedAt,
+    payload: { claudeAiOauth: { accessToken: token } },
+  });
+
+  it('the local transport neither advertises nor performs sync', async () => {
+    const transport = createLocalTransport({ profiles: fakeProfiles(), shimsDir: SHIMS_DIR });
+    expect(transport.target.capabilities).not.toContain('sync');
+    expect(transport.supports('sync')).toBe(false);
+    await expect(transport.syncPull(sync)).rejects.toMatchObject({ code: 'unsupported' });
+    await expect(
+      transport.syncPush(sync, bundle('t', new Date().toISOString())),
+    ).rejects.toMatchObject({ code: 'unsupported' });
+  });
+
+  it('the fake remote serves pull, applies strictly newer pushes, and rejects unknown ids', async () => {
+    const transport = createFakeRemoteTransport();
+    expect(transport.supports('sync')).toBe(true);
+    await expect(transport.syncPull(sync)).rejects.toMatchObject({ code: 'sync-not-enabled' });
+
+    transport.setBundle(sync.id, bundle('t1', '2026-08-20T10:00:00.000Z'));
+    expect(await transport.syncPull(sync)).toEqual(bundle('t1', '2026-08-20T10:00:00.000Z'));
+
+    expect(await transport.syncPush(sync, bundle('t2', '2026-08-20T11:00:00.000Z'))).toEqual({
+      applied: true,
+    });
+    expect(await transport.syncPush(sync, bundle('t0', '2026-08-20T09:00:00.000Z'))).toEqual({
+      applied: false,
+    });
+    expect(transport.getBundle(sync.id)?.payload).toEqual(bundle('t2', '').payload);
   });
 });
 

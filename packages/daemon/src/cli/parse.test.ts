@@ -206,6 +206,50 @@ describe('parseProfileArgv', () => {
       'unknown flag: --device-auth (provider login arguments go after `--`)',
     );
   });
+
+  it('parses the adopt form with --from-target in any flag order', () => {
+    expect(
+      parseProfileArgv(['add', 'claude', '--from-target', 'dev-box', '--label', 'here', 'work']),
+    ).toEqual({
+      action: 'adopt',
+      provider: 'claude',
+      target: 'dev-box',
+      remoteProfile: 'work',
+      label: 'here',
+    });
+    expect(parseProfileArgv(['add', 'codex', 'work', '--from-target', 'dev-box'])).toEqual({
+      action: 'adopt',
+      provider: 'codex',
+      target: 'dev-box',
+      remoteProfile: 'work',
+    });
+  });
+
+  it('rejects adopt forms missing a piece or mixing in login options', () => {
+    expect(() => parseProfileArgv(['add', 'claude', '--from-target', 'dev-box'])).toThrow(
+      /--from-target requires a remote <profile>/,
+    );
+    expect(() => parseProfileArgv(['add', 'claude', 'work'])).toThrow(
+      /a remote profile needs --from-target/,
+    );
+    expect(() =>
+      parseProfileArgv(['add', 'claude', '--from-target', 'dev-box', '--new', 'work']),
+    ).toThrow(/--from-target does not take --new/);
+    expect(() =>
+      parseProfileArgv(['add', 'claude', '--from-target', 'dev-box', 'work', '--', '-x']),
+    ).toThrow(/--from-target does not take --new or login arguments/);
+  });
+
+  it('parses sync-enable with exactly one profile reference', () => {
+    expect(parseProfileArgv(['sync-enable', 'work'])).toEqual({
+      action: 'sync-enable',
+      profile: 'work',
+    });
+    expect(() => parseProfileArgv(['sync-enable'])).toThrow(/sync-enable requires <profile>/);
+    expect(() => parseProfileArgv(['sync-enable', 'work', 'extra'])).toThrow(
+      /unexpected argument: extra/,
+    );
+  });
 });
 
 describe('resolveProfile', () => {

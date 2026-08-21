@@ -1,3 +1,5 @@
+import type { ProfileSync } from './profile.js';
+import type { ProviderId } from './provider.js';
 import type {
   ExecutionTarget,
   TargetCapability,
@@ -89,6 +91,24 @@ export interface PtyHandle {
   close(): Promise<void>;
 }
 
+/**
+ * A synced profile's credentials in transit. This is the only shape provider
+ * credentials may ever cross a transport in, and only inside the two sync
+ * messages — never in a session payload, HTTP response, event or log line.
+ */
+export interface CredentialBundle {
+  provider: ProviderId;
+  /** ISO-8601, derived from the credential file's mtime at read time. */
+  rotatedAt: string;
+  /** Provider-specific credential file subset; opaque outside that provider's adapter. */
+  payload: Record<string, unknown>;
+}
+
+export interface SyncPushResult {
+  /** False means the target already holds this rotation or a newer one. */
+  applied: boolean;
+}
+
 export interface TargetTransport {
   readonly target: ExecutionTarget;
   supports(capability: TargetCapability): boolean;
@@ -99,6 +119,10 @@ export interface TargetTransport {
   openPty(spec: PtySpec): Promise<PtyHandle>;
   /** Profiles as the target sees them — no homes, no credentials. */
   profiles(): Promise<TargetProfileSummary[]>;
+  /** Fetch the credential bundle of the target's profile with this sync id. */
+  syncPull(sync: ProfileSync): Promise<CredentialBundle>;
+  /** Offer a rotated bundle; the target applies it only when strictly newer. */
+  syncPush(sync: ProfileSync, bundle: CredentialBundle): Promise<SyncPushResult>;
   /**
    * Release connection-level resources. Handles opened through this transport
    * belong to their caller and must be closed by it.
@@ -125,6 +149,10 @@ export const TRANSPORT_ERROR_CODES = [
   'command-not-found',
   'spawn-failed',
   'timeout',
+  /** Both machines claim the owner role for one sync id, or bundle/profile providers disagree. */
+  'sync-conflict',
+  /** The target has no synced profile (or no credential file) for that sync id. */
+  'sync-not-enabled',
 ] as const;
 export type TransportErrorCode = (typeof TRANSPORT_ERROR_CODES)[number];
 

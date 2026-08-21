@@ -83,6 +83,112 @@ describe('profile service', () => {
     expect(fs.readFileSync(config.profilesFile, 'utf8')).toContain('\n  "version": 2,\n');
   });
 
+  it('enables sync once, survives a reload, and keeps sync out of create/update', async () => {
+    const config = tempConfig();
+    const service = createProfileService(config, createEventBus(), syncCapableAdapters());
+    const home = makeHome(config.dataDir, 'work', true);
+    const created = await service.create({ provider: 'claude', label: 'work', home });
+    expect(created.sync).toBeNull();
+
+    const enabled = service.enableSync(created.id);
+    expect(enabled.sync).toMatchObject({ role: 'owner' });
+    // Idempotent: the same sync id, no rotation of identity.
+    expect(service.enableSync(created.id).sync).toEqual(enabled.sync);
+
+    const reloaded = createProfileService(config, createEventBus(), syncCapableAdapters());
+    expect(reloaded.get(created.id)?.sync).toEqual(enabled.sync);
+  });
+
+  it('refuses sync for providers without credentialSync and for inactive profiles', async () => {
+    const config = tempConfig();
+    const service = createProfileService(config, createEventBus(), syncCapableAdapters());
+    const cursorProfile = await service.create({
+      provider: 'cursor',
+      label: 'no-sync',
+      home: makeHome(config.dataDir, 'cursor', true),
+    });
+    expect(() => service.enableSync(cursorProfile.id)).toThrow('does not support credential sync');
+
+    const broken = await service.create({
+      provider: 'claude',
+      label: 'broken',
+      home: makeHome(config.dataDir, 'broken', false),
+    });
+    expect(broken.status).toBe('error');
+    expect(() => service.enableSync(broken.id)).toThrow('Only active profiles');
+  });
+
+  it('creates replicas only via createReplica and rejects duplicate sync ids', async () => {
+    const config = tempConfig();
+    const service = createProfileService(config, createEventBus(), syncCapableAdapters());
+    const sync = { id: '11111111-2222-4333-8444-555555555555', role: 'replica' as const };
+    const replica = await service.createReplica({
+      provider: 'claude',
+      label: 'work',
+      home: makeHome(config.dataDir, 'replica', true),
+      sync,
+    });
+    expect(replica).toMatchObject({ status: 'active', sync });
+
+    await expect(
+      service.createReplica({
+        provider: 'claude',
+        label: 'work-2',
+        home: makeHome(config.dataDir, 'replica-2', true),
+        sync,
+      }),
+    ).rejects.toMatchObject({ code: 'already-synced' });
+  });
+
+  it('rolls back the in-memory sync state when the persist fails', async () => {
+    const config = tempConfig();
+    const service = createProfileService(config, createEventBus(), syncCapableAdapters());
+    const created = await service.create({
+      provider: 'claude',
+      label: 'work',
+      home: makeHome(config.dataDir, 'work', true),
+    });
+
+    // Make the next persist fail: the store path becomes a directory.
+    fs.rmSync(config.profilesFile);
+    fs.mkdirSync(config.profilesFile);
+    expect(() => service.enableSync(created.id)).toThrow();
+    expect(service.get(created.id)?.sync).toBeNull();
+
+    await expect(
+      service.createReplica({
+        provider: 'claude',
+        label: 'replica',
+        home: makeHome(config.dataDir, 'replica', true),
+        sync: { id: '11111111-2222-4333-8444-555555555555', role: 'replica' },
+      }),
+    ).rejects.toThrow();
+    expect(service.list().map((profile) => profile.label)).toEqual(['work']);
+  });
+
+  it('rejects a persisted store where two profiles share a sync id', () => {
+    const config = tempConfig();
+    const sync = { id: '11111111-2222-4333-8444-555555555555', role: 'owner' as const };
+    fs.writeFileSync(
+      config.profilesFile,
+      JSON.stringify({
+        version: 2,
+        profiles: [
+          storedProfile({ id: 'p1', label: 'first', home: '/tmp/first-home', sync }),
+          storedProfile({
+            id: 'p2',
+            label: 'second',
+            home: '/tmp/second-home',
+            sync: { ...sync, role: 'replica' },
+          }),
+        ],
+      }),
+    );
+    expect(() => createProfileService(config, createEventBus(), fakeAdapters())).toThrow(
+      'sync.id duplicates',
+    );
+  });
+
   it('rejects an invalid persisted store instead of replacing it', () => {
     const config = tempConfig();
     fs.writeFileSync(config.profilesFile, '{"version":3,"profiles":[]}');
@@ -516,6 +622,7 @@ function storedProfile(overrides: Partial<Profile> = {}): Profile {
     status: 'active',
     statusReason: null,
     enabled: true,
+    sync: null,
     createdAt: '2026-01-01T00:00:00.000Z',
     ...overrides,
   };
@@ -541,6 +648,21 @@ function fakeAdapters(): AdapterRegistry {
     claude: fakeAdapter('claude'),
     codex: fakeAdapter('codex'),
     cursor: fakeAdapter('cursor'),
+  };
+}
+
+/** fakeAdapters, but claude and codex carry the sync capability marker. */
+function syncCapableAdapters(): AdapterRegistry {
+  const base = fakeAdapters();
+  const support = {
+    credentialFile: (home: string) => path.join(home, 'credentials'),
+    readBundle: async () => null,
+    writeBundle: async () => 'stale' as const,
+  };
+  return {
+    ...base,
+    claude: { ...base.claude, credentialSync: support },
+    codex: { ...base.codex, credentialSync: support },
   };
 }
 

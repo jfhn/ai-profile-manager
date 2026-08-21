@@ -4,6 +4,7 @@ import path from 'node:path';
 import type { CollectResult, ProviderIdentity, UsageWindow } from '@apm/shared';
 import type { CollectContext, ProviderAdapter } from '../adapter.js';
 import { readJsonSync, readTailBounded, statOrNull, walkFilesBounded } from '../bounded.js';
+import { createCredentialSync } from '../credential-sync.js';
 import { fetchJson, refreshOnce } from '../oauth.js';
 import {
   failureKind,
@@ -71,6 +72,20 @@ export const codexAdapter: ProviderAdapter = {
   loginCommand: (home) => `CODEX_HOME=${home} codex login`,
   loginArgv: () => ['codex', 'login'],
   defaultHome: () => path.join(os.homedir(), '.codex'),
+  credentialSync: createCredentialSync({
+    provider: 'codex',
+    fileName: 'auth.json',
+    extract: (record) => {
+      if (!isRecord(record.tokens)) return null;
+      const lastRefresh = readString(record.last_refresh);
+      return { tokens: record.tokens, ...(lastRefresh ? { last_refresh: lastRefresh } : {}) };
+    },
+    merge: (current, payload) => ({
+      ...current,
+      tokens: payload.tokens,
+      ...(payload.last_refresh !== undefined ? { last_refresh: payload.last_refresh } : {}),
+    }),
+  }),
 };
 
 async function collectCodexUsage(ctx: CollectContext): Promise<CollectResult> {
@@ -404,6 +419,12 @@ async function fetchCodexUsage(
     return { usage: null, reason: 'Codex credentials are missing; run codex login' };
   const first = await usageRequest(ctx, credentials);
   if (first.status !== 401) return { usage: first.usage, reason: first.reason };
+  if (ctx.allowRefresh === false)
+    return {
+      usage: null,
+      reason:
+        'Codex usage endpoint rejected credentials; awaiting a credential sync from the owner machine',
+    };
   if (!credentials.refreshToken)
     return { usage: null, reason: 'Codex usage endpoint rejected credentials; run codex login' };
   const refreshed = await refreshOnce(refreshInFlight, ctx.home, () =>

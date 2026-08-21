@@ -791,6 +791,53 @@ describe('claude adapter', () => {
     });
   });
 
+  it('never refreshes with allowRefresh false: expired token reports auth, file untouched', async () => {
+    const { home, cache, global } = setup();
+    const file = writeRefreshableCredentials(home, now - 60_000);
+    const before = fs.readFileSync(file, 'utf8');
+    const calls: string[] = [];
+    const result = await claudeAdapter.collectUsage({
+      home,
+      defaultHome: home,
+      cacheDir: cache,
+      globalCacheDir: global,
+      allowNetwork: true,
+      allowRefresh: false,
+      now,
+      fetchImpl: async (input) => {
+        calls.push(String(input));
+        return new Response('', { status: 401 });
+      },
+    });
+    expect(calls).toEqual([]);
+    expect(result.failureKind).toBe('auth');
+    expect(result.error).toContain('awaiting a credential sync');
+    expect(fs.readFileSync(file, 'utf8')).toBe(before);
+  });
+
+  it('never refreshes with allowRefresh false when a valid-looking token is rejected', async () => {
+    const { home, cache, global } = setup();
+    const file = writeRefreshableCredentials(home, now + 60 * 60 * 1000);
+    const before = fs.readFileSync(file, 'utf8');
+    const calls: string[] = [];
+    const result = await claudeAdapter.collectUsage({
+      home,
+      defaultHome: home,
+      cacheDir: cache,
+      globalCacheDir: global,
+      allowNetwork: true,
+      allowRefresh: false,
+      now,
+      fetchImpl: async (input) => {
+        calls.push(String(input));
+        return new Response('', { status: 401 });
+      },
+    });
+    expect(calls).toEqual(['https://api.anthropic.com/api/oauth/usage']);
+    expect(result.failureKind).toBe('auth');
+    expect(fs.readFileSync(file, 'utf8')).toBe(before);
+  });
+
   it('aborts the write and uses the newer on-disk token when credentials change mid-refresh', async () => {
     const { home, cache, global } = setup();
     const file = writeRefreshableCredentials(home, now - 60_000);

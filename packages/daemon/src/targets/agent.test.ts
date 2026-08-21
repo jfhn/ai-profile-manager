@@ -131,3 +131,153 @@ describe('target agent teardown', () => {
     expect(alive(grandchild)).toBe(false);
   }, 60_000);
 });
+
+// ------------------------------------------------------------------- sync --
+
+const SYNC_ID = '11111111-2222-4333-8444-555555555555';
+const T1 = Date.parse('2026-08-20T10:00:00.000Z');
+const T2 = Date.parse('2026-08-20T11:00:00.000Z');
+
+/**
+ * A data dir holding one synced claude profile whose home has credentials.
+ * The store file's exact bytes are the read-only assertion: sync requests
+ * must never rewrite it, not even as a no-op re-serialization.
+ */
+function writeSyncFixture(role: 'owner' | 'replica' = 'owner'): {
+  dir: string;
+  storeFile: string;
+  credentialsFile: string;
+} {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'apm-agent-sync-'));
+  const home = path.join(dir, 'homes', 'claude-home');
+  fs.mkdirSync(home, { recursive: true });
+  const credentialsFile = path.join(home, '.credentials.json');
+  fs.writeFileSync(
+    credentialsFile,
+    JSON.stringify({ claudeAiOauth: { accessToken: 'agent-token-1' }, unrelated: true }),
+  );
+  fs.utimesSync(credentialsFile, T1 / 1000, T1 / 1000);
+  const storeFile = path.join(dir, 'profiles.json');
+  fs.writeFileSync(
+    storeFile,
+    JSON.stringify({
+      version: 2,
+      profiles: [
+        {
+          id: 'profile-sync-1',
+          provider: 'claude',
+          label: 'work',
+          home,
+          homeKind: 'managed',
+          identity: null,
+          status: 'active',
+          statusReason: null,
+          enabled: true,
+          sync: { id: SYNC_ID, role },
+          createdAt: '2026-08-01T00:00:00.000Z',
+        },
+      ],
+    }),
+  );
+  return { dir, storeFile, credentialsFile };
+}
+
+/** First JSON line the agent prints. */
+function firstResponse(child: ChildProcessWithoutNullStreams): Promise<Record<string, unknown>> {
+  return new Promise((resolve, reject) => {
+    let buffered = '';
+    const timer = setTimeout(() => reject(new Error(`no response: ${buffered}`)), 20_000);
+    child.stdout.setEncoding('utf8');
+    child.stdout.on('data', (chunk: string) => {
+      buffered += chunk;
+      const line = buffered.split('\n').find((candidate) => candidate.trim().length > 0);
+      if (line === undefined || !buffered.includes('\n')) return;
+      clearTimeout(timer);
+      try {
+        resolve(JSON.parse(line) as Record<string, unknown>);
+      } catch (error) {
+        reject(error instanceof Error ? error : new Error(String(error)));
+      }
+    });
+  });
+}
+
+function askAgent(dir: string, request: unknown): Promise<Record<string, unknown>> {
+  const child = startAgent(dir);
+  child.stdin.end(`${JSON.stringify(request)}\n`);
+  return firstResponse(child);
+}
+
+describe('target agent credential sync', () => {
+  it('serves sync-pull with the bundle and never rewrites the store file', async () => {
+    const { dir, storeFile } = writeSyncFixture('owner');
+    const storeBytes = fs.readFileSync(storeFile, 'utf8');
+
+    const response = await askAgent(dir, { type: 'sync-pull', syncId: SYNC_ID, role: 'replica' });
+    expect(response).toEqual({
+      type: 'sync-bundle',
+      bundle: {
+        provider: 'claude',
+        rotatedAt: new Date(T1).toISOString(),
+        payload: { claudeAiOauth: { accessToken: 'agent-token-1' } },
+      },
+    });
+    expect(fs.readFileSync(storeFile, 'utf8')).toBe(storeBytes);
+  }, 60_000);
+
+  it('answers sync-conflict when both sides claim owner and sync-not-enabled for unknown ids', async () => {
+    const { dir } = writeSyncFixture('owner');
+    expect(
+      await askAgent(dir, { type: 'sync-pull', syncId: SYNC_ID, role: 'owner' }),
+    ).toMatchObject({ type: 'error', code: 'sync-conflict' });
+    expect(
+      await askAgent(dir, {
+        type: 'sync-pull',
+        syncId: '99999999-9999-4999-8999-999999999999',
+        role: 'replica',
+      }),
+    ).toMatchObject({ type: 'error', code: 'sync-not-enabled' });
+  }, 60_000);
+
+  it('applies a strictly newer push, rejects stale and provider-mismatched ones', async () => {
+    const { dir, storeFile, credentialsFile } = writeSyncFixture('replica');
+    const storeBytes = fs.readFileSync(storeFile, 'utf8');
+    const bundle = (token: string, rotatedAtMs: number) => ({
+      provider: 'claude',
+      rotatedAt: new Date(rotatedAtMs).toISOString(),
+      payload: { claudeAiOauth: { accessToken: token } },
+    });
+
+    const applied = await askAgent(dir, {
+      type: 'sync-push',
+      syncId: SYNC_ID,
+      role: 'owner',
+      bundle: bundle('agent-token-2', T2),
+    });
+    expect(applied).toEqual({ type: 'sync-applied', applied: true });
+    const written = JSON.parse(fs.readFileSync(credentialsFile, 'utf8'));
+    expect(written).toEqual({ claudeAiOauth: { accessToken: 'agent-token-2' }, unrelated: true });
+    expect(Math.trunc(fs.statSync(credentialsFile).mtimeMs)).toBe(T2);
+
+    const stale = await askAgent(dir, {
+      type: 'sync-push',
+      syncId: SYNC_ID,
+      role: 'owner',
+      bundle: bundle('agent-token-1', T1),
+    });
+    expect(stale).toEqual({ type: 'sync-applied', applied: false });
+
+    const mismatched = await askAgent(dir, {
+      type: 'sync-push',
+      syncId: SYNC_ID,
+      role: 'owner',
+      bundle: {
+        provider: 'codex',
+        rotatedAt: new Date(T2).toISOString(),
+        payload: { tokens: { access_token: 'x' } },
+      },
+    });
+    expect(mismatched).toMatchObject({ type: 'error', code: 'sync-conflict' });
+    expect(fs.readFileSync(storeFile, 'utf8')).toBe(storeBytes);
+  }, 60_000);
+});

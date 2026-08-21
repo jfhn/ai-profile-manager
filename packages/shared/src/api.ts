@@ -113,6 +113,14 @@ export interface UpdateProfileRequest {
   enabled?: boolean;
 }
 
+/** POST /api/targets/:id/sync-adopt — create a replica of a remote profile. */
+export interface SyncAdoptRequest {
+  provider: ProviderId;
+  remoteProfileId: string;
+  /** Defaults to the remote profile's label, de-duplicated locally. */
+  label?: string;
+}
+
 /**
  * Wizard (prepare-login) flow — the app never performs logins itself:
  * 1. POST /api/wizard        -> pending profile + fresh managed home + login command

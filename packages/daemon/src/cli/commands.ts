@@ -23,6 +23,7 @@ import type {
   ApiError,
   CreateSessionRequest,
   OverviewResponse,
+  Profile,
   ProfilesCliResponse,
   StatusResponse,
   TargetProfilesCliResponse,
@@ -43,6 +44,7 @@ import {
   parseRunArgv,
   parseTargetsArgv,
   resolveProfile,
+  type ProfileAdoptInvocation,
   type RunInvocation,
 } from './parse.js';
 import { ApiRequestError, runProfileAdd } from './profile-add.js';
@@ -77,18 +79,67 @@ export async function profileCommand(argv: string[]): Promise<void> {
 
   const run = await daemonOrStart();
   try {
-    await runProfileAdd(
-      {
-        api: (method, endpoint, body) => apiRequest(run, method, endpoint, body),
-        runLogin: (loginArgv, env) => runLoginProcess(loginArgv, env),
-        log: (line) => console.log(line),
-        sleep,
-      },
-      invocation,
-    );
+    switch (invocation.action) {
+      case 'add':
+        await runProfileAdd(
+          {
+            api: (method, endpoint, body) => apiRequest(run, method, endpoint, body),
+            runLogin: (loginArgv, env) => runLoginProcess(loginArgv, env),
+            log: (line) => console.log(line),
+            sleep,
+          },
+          invocation,
+        );
+        return;
+      case 'sync-enable':
+        await runSyncEnable(run, invocation.profile);
+        return;
+      case 'adopt':
+        await runAdopt(run, invocation);
+        return;
+    }
   } catch (error: unknown) {
     fail(errorMessage(error));
   }
+}
+
+/**
+ * Prints exactly one JSON line: the adopt flow on another machine execs this
+ * command over SSH and parses that line for the sync id.
+ */
+async function runSyncEnable(run: RunFileData, profileRef: string): Promise<void> {
+  const overview = await apiRequest<OverviewResponse>(run, 'GET', '/api/overview');
+  const profile = resolveProfile(overview.profiles, profileRef, '');
+  const updated = await apiRequest<Profile>(
+    run,
+    'POST',
+    `/api/profiles/${encodeURIComponent(profile.id)}/sync-enable`,
+  );
+  if (!updated.sync) throw new CliError('the daemon returned a profile without sync state');
+  process.stdout.write(`${JSON.stringify({ syncId: updated.sync.id, role: updated.sync.role })}\n`);
+}
+
+async function runAdopt(run: RunFileData, invocation: ProfileAdoptInvocation): Promise<void> {
+  const response = await apiRequest<TargetProfilesResponse>(
+    run,
+    'GET',
+    `/api/targets/${encodeURIComponent(invocation.target)}/profiles`,
+  );
+  const remote = resolveProfile(response.profiles, invocation.remoteProfile, invocation.provider);
+  const profile = await apiRequest<Profile>(
+    run,
+    'POST',
+    `/api/targets/${encodeURIComponent(invocation.target)}/sync-adopt`,
+    {
+      provider: invocation.provider,
+      remoteProfileId: remote.id,
+      ...(invocation.label === undefined ? {} : { label: invocation.label }),
+    },
+  );
+  console.log(
+    `profile "${profile.label}" adopted from target "${invocation.target}" as a synced replica`,
+  );
+  console.log(`run it with: apm run ${profile.label} ${invocation.provider}`);
 }
 
 /**

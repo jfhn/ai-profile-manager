@@ -5,6 +5,7 @@ import type {
   DiscoveryCandidate,
   Profile,
   ProfileEnv,
+  ProfileSync,
   ProviderId,
   ProviderInfo,
   ServerEvent,
@@ -49,6 +50,18 @@ export interface ProfileService {
   confirmWizard(profileId: string, label: string): Promise<Profile>;
   /** Env binding a spawned process to this profile (CLAUDE_CONFIG_DIR / CODEX_HOME / ...). */
   envFor(profileId: string): ProfileEnv;
+  /** Make this profile a sync owner (assigns a sync id). Idempotent. */
+  enableSync(id: string): Profile;
+  /**
+   * Create a replica profile for an adopted remote credential set. The only
+   * way a replica comes to exist — create()/update() cannot set `sync`.
+   */
+  createReplica(req: {
+    provider: ProviderId;
+    label: string;
+    home: string;
+    sync: ProfileSync;
+  }): Promise<Profile>;
 }
 
 /** Options for a single usage refresh run. */
@@ -83,6 +96,14 @@ export interface SessionHost {
   recentDirs(): string[];
 }
 
+/** Credential sync scheduler: push-on-rotate, pull-on-auth-failure. */
+export interface SyncService {
+  start(): void;
+  stop(): void;
+  /** One push sweep over all synced profiles; start() runs this periodically. */
+  tick(): Promise<void>;
+}
+
 export interface AppContext {
   config: DaemonConfig;
   events: EventBus;
@@ -91,6 +112,8 @@ export interface AppContext {
   sessions: SessionHost;
   /** Execution targets and their transports; the local one is the default. */
   targets: TargetRegistry;
+  /** Credential sync between this machine and approved targets. */
+  sync: SyncService;
 }
 
 /** Error with an HTTP status + stable code; routes map it to ApiError. */

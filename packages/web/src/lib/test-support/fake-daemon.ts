@@ -55,6 +55,7 @@ export class FakeDaemon implements WizardApi {
       status: 'pending',
       statusReason: null,
       enabled: true,
+      sync: null,
       createdAt: '2026-01-01T00:00:00.000Z',
     };
     this.profiles = [...this.profiles, profile];

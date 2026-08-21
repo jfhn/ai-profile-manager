@@ -1,6 +1,7 @@
 import type {
   AdapterCapabilities,
   CollectResult,
+  CredentialBundle,
   ProfileEnv,
   ProviderId,
   ProviderIdentity,
@@ -28,6 +29,12 @@ export interface CollectContext {
    * sets it, so cooldowns still protect against background fetch spam.
    */
   force?: boolean;
+  /**
+   * When false the adapter must not rotate credentials: it skips token
+   * refreshes and reports the auth failure instead. Set for sync replicas —
+   * the owner machine is the sole background refresher.
+   */
+  allowRefresh?: boolean;
   /** Injectable fetch implementation for deterministic, network-free tests. */
   fetchImpl?: typeof fetch;
   /** Override the global statusline cache directory (tests only). */
@@ -63,4 +70,41 @@ export interface ProviderAdapter {
   loginArgv(): string[];
   /** Default global home for discovery (e.g. ~/.claude). */
   defaultHome(): string;
+  /**
+   * Cross-machine credential sync. Absent when the provider cannot sync
+   * (Cursor: rotated tokens live in process memory only) — absence is the
+   * capability check, so unsupported providers are excluded by construction.
+   */
+  credentialSync?: CredentialSyncSupport;
+}
+
+/** How a bundle may be applied — see writeBundle. */
+export type WriteBundleMode = 'if-newer' | 'if-differs';
+
+export interface CredentialSyncSupport {
+  /** Absolute path of the credential file inside a profile home. */
+  credentialFile(home: string): string;
+  /** Current bundle (payload + mtime as rotatedAt); null without a usable file. */
+  readBundle(home: string): Promise<CredentialBundle | null>;
+  /**
+   * Apply a bundle to the home's credential file, or report 'stale'.
+   *
+   * 'if-newer' (push path) applies only when bundle.rotatedAt is strictly
+   * newer than the file's mtime, which keeps steady-state ordering and stops
+   * echo loops. 'if-differs' (pull recovery path) applies whenever the payload
+   * differs from the on-disk subset — the local credential is known bad there,
+   * so timestamps must not block recovery. Applying sets the file's mtime to
+   * rotatedAt, making the mtime the rotation clock on every machine.
+   *
+   * `guard.expectPayload` additionally requires the on-disk payload to still
+   * equal that value (null: no usable file) inside the same snapshot the
+   * write decision uses — the pull path's proof that the local credential is
+   * still the one that failed.
+   */
+  writeBundle(
+    home: string,
+    bundle: CredentialBundle,
+    mode: WriteBundleMode,
+    guard?: { expectPayload: Record<string, unknown> | null },
+  ): Promise<'applied' | 'stale'>;
 }
