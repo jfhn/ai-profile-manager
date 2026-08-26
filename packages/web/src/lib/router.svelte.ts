@@ -1,6 +1,6 @@
-/** Hand-rolled hash routing: #/ · #/sessions · #/targets */
+/** Hand-rolled hash routing for the four top-level pages. */
 
-export const ROUTES = ['/', '/sessions', '/targets'] as const;
+export const ROUTES = ['/', '/sessions', '/tools', '/targets'] as const;
 export type RoutePath = (typeof ROUTES)[number];
 
 function readHash(): RoutePath {

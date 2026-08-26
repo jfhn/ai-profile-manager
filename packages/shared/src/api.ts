@@ -33,6 +33,31 @@ export interface ProviderInfo {
   defaultApp: string;
 }
 
+export interface CliToolBase {
+  provider: ProviderId;
+  label: string;
+}
+
+export interface InstalledCliTool extends CliToolBase {
+  state: 'installed';
+  executable: string;
+  version: string;
+}
+
+export type CliToolStatus =
+  | InstalledCliTool
+  | (CliToolBase & { state: 'missing' })
+  | (CliToolBase & { state: 'error'; executable: string; error: string });
+
+export interface CliToolsResponse {
+  tools: CliToolStatus[];
+}
+
+export interface UpdateCliToolResponse {
+  previousVersion: string;
+  tool: InstalledCliTool;
+}
+
 /** GET /api/overview — everything the dashboard needs in one round trip. */
 export interface OverviewResponse {
   providers: ProviderInfo[];

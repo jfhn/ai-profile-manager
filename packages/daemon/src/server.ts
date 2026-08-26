@@ -10,6 +10,7 @@ import { originAllowed } from './security.js';
 import { createEventBus } from './core/events.js';
 import { createProfileService } from './core/profiles.js';
 import { createUsageService } from './core/usage.js';
+import { createCliToolService } from './core/tools.js';
 import { registerCoreRoutes } from './core/routes.js';
 import { createSessionHost } from './sessions/host.js';
 import { attachTerminalWs } from './sessions/ws.js';
@@ -40,13 +41,14 @@ export async function createContext(config: DaemonConfig): Promise<AppContext> {
   const events = createEventBus();
   const profiles = createProfileService(config, events);
   const usage = createUsageService(config, events, profiles);
+  const tools = createCliToolService(process.env, [config.shimsDir]);
   // One local transport for the whole daemon; configured remotes are resolved
   // only through the same approved registry.
   const localTransport = createLocalTransport({ profiles, shimsDir: config.shimsDir });
   const targets = createTargetRegistry(localTransport, createConfiguredTransports(config));
   const sessions = createSessionHost(config, events, profiles, { targets });
   const sync = createSyncService(profiles, targets, usage, events);
-  return { config, events, profiles, usage, sessions, targets, sync };
+  return { config, events, profiles, usage, tools, sessions, targets, sync };
 }
 
 export async function startDaemon(config: DaemonConfig): Promise<DaemonHandle> {

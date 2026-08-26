@@ -1,6 +1,12 @@
 import Fastify, { type FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { AppContext, ProfileService, RefreshOptions, UsageService } from '../context.js';
+import type {
+  AppContext,
+  CliToolService,
+  ProfileService,
+  RefreshOptions,
+  UsageService,
+} from '../context.js';
 import { registerCoreRoutes } from './routes.js';
 
 const refresh = vi.fn(
@@ -10,13 +16,27 @@ const defaults = vi.fn(() => ({ claude: 'claude-work' }));
 const setDefault = vi.fn((provider: 'claude' | 'codex' | 'cursor', profileId: string | null) =>
   profileId === null ? {} : { [provider]: profileId },
 );
+const listTools = vi.fn(async () => [
+  { provider: 'codex' as const, label: 'Codex', state: 'missing' as const },
+]);
+const updateTool = vi.fn(async () => ({
+  previousVersion: 'codex-cli 1.0.0',
+  tool: {
+    provider: 'codex' as const,
+    label: 'Codex',
+    state: 'installed' as const,
+    executable: '/bin/codex',
+    version: 'codex-cli 2.0.0',
+  },
+}));
 let app: FastifyInstance;
 
 beforeAll(async () => {
   const usage = { refresh } as Partial<UsageService> as UsageService;
   const profiles = { defaults, setDefault } as Partial<ProfileService> as ProfileService;
+  const tools = { list: listTools, update: updateTool } as CliToolService;
   app = Fastify({ logger: false });
-  registerCoreRoutes(app, { usage, profiles } as Partial<AppContext> as AppContext);
+  registerCoreRoutes(app, { usage, profiles, tools } as Partial<AppContext> as AppContext);
   await app.ready();
 });
 
@@ -28,6 +48,8 @@ beforeEach(() => {
   refresh.mockClear();
   defaults.mockClear();
   setDefault.mockClear();
+  listTools.mockClear();
+  updateTool.mockClear();
 });
 
 describe('core routes', () => {
@@ -54,6 +76,20 @@ describe('core routes', () => {
     const response = await app.inject({ method: 'POST', url: '/api/usage/refresh' });
     expect(response.statusCode).toBe(204);
     expect(refresh.mock.calls).toEqual([[undefined, { force: true }]]);
+  });
+
+  it('lists tools and updates one validated provider', async () => {
+    const listed = await app.inject({ method: 'GET', url: '/api/tools' });
+    expect(listed.json()).toEqual({
+      tools: [{ provider: 'codex', label: 'Codex', state: 'missing' }],
+    });
+
+    const updated = await app.inject({ method: 'POST', url: '/api/tools/codex/update' });
+    expect(updated.statusCode).toBe(200);
+    expect(updateTool).toHaveBeenCalledWith('codex');
+
+    const unknown = await app.inject({ method: 'POST', url: '/api/tools/gemini/update' });
+    expect(unknown.statusCode).toBe(400);
   });
 
   it('gets and updates provider defaults through validated routes', async () => {

@@ -33,6 +33,8 @@ import type {
   TerminalClientMessage,
   TerminalServerMessage,
   TerminalSession,
+  CliToolsResponse,
+  UpdateCliToolResponse,
 } from '@apm/shared';
 import { ensureDirs, readLiveRunFile, resolveConfig, type RunFileData } from '../config.js';
 import { childProcessEnv } from '../process-env.js';
@@ -43,6 +45,7 @@ import {
   parseProfilesArgv,
   parseRunArgv,
   parseTargetsArgv,
+  parseToolsArgv,
   resolveProfile,
   type ProfileAdoptInvocation,
   type RunInvocation,
@@ -354,6 +357,47 @@ export async function targetsCommand(argv: string[]): Promise<void> {
       target.approved ? target.status : 'unapproved',
       target.capabilities.join(','),
     ]),
+  );
+}
+
+export async function toolsCommand(argv: string[]): Promise<void> {
+  let invocation;
+  try {
+    invocation = parseToolsArgv(argv);
+  } catch (error: unknown) {
+    fail(errorMessage(error));
+  }
+
+  const run = await daemonOrStart();
+  if (invocation.action === 'update') {
+    const result = await api<UpdateCliToolResponse>(
+      run,
+      'POST',
+      `/api/tools/${invocation.provider}/update`,
+    );
+    if (result.previousVersion === result.tool.version) {
+      console.log(`${result.tool.label} is up to date (${result.tool.version}).`);
+    } else {
+      console.log(
+        `${result.tool.label} updated from ${result.previousVersion} to ${result.tool.version}.`,
+      );
+    }
+    return;
+  }
+
+  const { tools } = await api<CliToolsResponse>(run, 'GET', '/api/tools');
+  printTable(
+    ['TOOL', 'STATUS', 'VERSION', 'EXECUTABLE'],
+    tools.map((tool) => {
+      switch (tool.state) {
+        case 'installed':
+          return [tool.label, 'installed', tool.version, tool.executable];
+        case 'missing':
+          return [tool.label, 'missing', '-', '-'];
+        case 'error':
+          return [tool.label, 'error', '-', tool.executable];
+      }
+    }),
   );
 }
 

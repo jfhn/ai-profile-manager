@@ -19,6 +19,7 @@ describe('web API response contract', () => {
       '/api/targets': { targets: [{ id: 'local' }] },
       '/api/targets/candidates': { candidates: [{ hostname: 'dev-box' }] },
       '/api/targets/dev-box/profiles': { profiles: [{ id: 'profile-1' }] },
+      '/api/tools': { tools: [{ provider: 'codex', state: 'missing' }] },
     };
     const fetchMock = vi.fn(async (input: string | URL | Request, _init?: RequestInit) =>
       jsonResponse(payloads[String(input)]),
@@ -31,9 +32,28 @@ describe('web API response contract', () => {
     expect(await api.targets()).toEqual([{ id: 'local' }]);
     expect(await api.targetCandidates()).toEqual([{ hostname: 'dev-box' }]);
     expect(await api.targetProfiles('dev-box')).toEqual([{ id: 'profile-1' }]);
+    expect(await api.tools()).toEqual([{ provider: 'codex', state: 'missing' }]);
 
     const headers = new Headers(fetchMock.mock.calls[0]?.[1]?.headers);
     expect(headers.get('authorization')).toBe('Bearer test-token');
+  });
+
+  it('updates one provider through a fixed authenticated endpoint', async () => {
+    const fetchMock = vi.fn(async () =>
+      jsonResponse({
+        previousVersion: 'codex-cli 1.0.0',
+        tool: { provider: 'codex', state: 'installed', version: 'codex-cli 2.0.0' },
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    const { api } = await import('./api');
+
+    await api.updateTool('codex');
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/tools/codex/update',
+      expect.objectContaining({ method: 'POST' }),
+    );
   });
 
   it('treats the profile refresh 204 as a completed command with no response body', async () => {
