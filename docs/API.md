@@ -27,6 +27,8 @@ Type definitions for every payload live in `packages/shared/src/api.ts`.
 | POST   | `/api/profiles/:id/refresh`      | Refresh usage for one profile now                                            |
 | POST   | `/api/usage/refresh`             | Refresh all enabled profiles now                                             |
 | GET    | `/api/usage`                     | Latest snapshot per profile                                                  |
+| GET    | `/api/tools`                     | Installed provider CLI versions and executable paths                         |
+| POST   | `/api/tools/:provider/update`    | Run one provider CLI's built-in updater on this machine                      |
 | GET    | `/api/discovery`                 | Unadopted provider homes (incl. global `~/.claude`, `~/.codex`, `~/.cursor`) |
 | POST   | `/api/wizard`                    | Start prepare-login flow (`StartWizardRequest`)                              |
 | GET    | `/api/wizard/:profileId`         | Wizard state: login command, credentials found, identity                     |
@@ -45,6 +47,10 @@ Type definitions for every payload live in `packages/shared/src/api.ts`.
 The wizard endpoints back both the dashboard modal and the headless CLI flow
 (`apm profile add <provider>` — see the README); the CLI adds no endpoints of
 its own.
+
+Tool updates are machine-scoped. The daemon accepts only a provider id and maps
+it to a fixed executable and `update` argument. It does not accept shell text,
+package names, URLs, versions, or elevation. Only one update runs at a time.
 
 Approval is the boundary in the target endpoints, and it is always explicit.
 `GET /api/targets/candidates` lists the machines this machine's tailnet already

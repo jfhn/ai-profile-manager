@@ -72,6 +72,13 @@ export function registerCoreRoutes(app: FastifyInstance, ctx: AppContext): void 
     return reply.code(204).send();
   });
 
+  app.get('/api/tools', async () => ({ tools: await ctx.tools.list() }));
+
+  app.post<{ Params: ProviderParams }>('/api/tools/:provider/update', async (request) => {
+    const provider = parseBody(providerIdSchema, request.params.provider);
+    return ctx.tools.update(provider);
+  });
+
   app.get('/api/discovery', async (): Promise<DiscoveryResponse> => ({
     candidates: await ctx.profiles.discovery(),
   }));

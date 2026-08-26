@@ -16,6 +16,7 @@
   const items: NavItem[] = [
     { path: '/', label: 'Dashboard', icon: 'dashboard' },
     { path: '/sessions', label: 'Sessions', icon: 'terminal' },
+    { path: '/tools', label: 'Tools', icon: 'layers' },
     { path: '/targets', label: 'Targets', icon: 'monitor' },
   ];
 

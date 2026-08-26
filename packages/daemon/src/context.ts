@@ -8,6 +8,8 @@ import type {
   ProfileSync,
   ProviderId,
   ProviderInfo,
+  CliToolStatus,
+  UpdateCliToolResponse,
   ServerEvent,
   TerminalSession,
   UpdateProfileRequest,
@@ -84,6 +86,11 @@ export interface UsageService {
   stop(): void;
 }
 
+export interface CliToolService {
+  list(): Promise<CliToolStatus[]>;
+  update(provider: ProviderId): Promise<UpdateCliToolResponse>;
+}
+
 export interface SessionHost {
   list(): TerminalSession[];
   create(req: CreateSessionRequest): Promise<TerminalSession>;
@@ -109,6 +116,7 @@ export interface AppContext {
   events: EventBus;
   profiles: ProfileService;
   usage: UsageService;
+  tools: CliToolService;
   sessions: SessionHost;
   /** Execution targets and their transports; the local one is the default. */
   targets: TargetRegistry;

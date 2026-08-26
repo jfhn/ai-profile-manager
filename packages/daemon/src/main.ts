@@ -10,6 +10,7 @@
  *                                                       adopt a synced replica of a remote profile
  *   apm profile sync-enable <profile>                   make a profile a credential-sync owner
  *   apm profiles [--json] [--refresh]                   list profiles and provider defaults
+ *   apm tools [update <claude|codex|cursor>]            list or update shared CLI tools
  *   apm targets [--json] [--profiles <target>]          list targets or one target's profiles
  *   apm run [--target <target>] [--cwd <path>] [--ephemeral] <profile> <app> [args...]
  *                                                       run an app bound to a profile
@@ -36,6 +37,7 @@ import {
   statusCommand,
   stopCommand,
   targetsCommand,
+  toolsCommand,
   urlCommand,
 } from './cli/commands.js';
 import { parseCommand, USAGE } from './cli/parse.js';
@@ -152,6 +154,8 @@ async function main(): Promise<void> {
       return runCommand(argv);
     case 'profiles':
       return profilesCommand(argv);
+    case 'tools':
+      return toolsCommand(argv);
     case 'targets':
       return targetsCommand(argv);
     case 'attach':

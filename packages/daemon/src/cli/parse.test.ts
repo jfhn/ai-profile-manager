@@ -7,6 +7,7 @@ import {
   parseProfilesArgv,
   parseRunArgv,
   parseTargetsArgv,
+  parseToolsArgv,
   resolveProfile,
 } from './parse.js';
 
@@ -148,6 +149,17 @@ describe('parseTargetsArgv', () => {
       '--profiles may be supplied only once',
     );
     expect(() => parseTargetsArgv(['--refresh'])).toThrow('unknown targets option');
+  });
+});
+
+describe('parseToolsArgv', () => {
+  it('lists by default and updates exactly one supported provider', () => {
+    expect(parseToolsArgv([])).toEqual({ action: 'list' });
+    expect(parseToolsArgv(['update', 'codex'])).toEqual({ action: 'update', provider: 'codex' });
+    expect(() => parseToolsArgv(['update', 'gemini'])).toThrow(/requires claude, codex, or cursor/);
+    expect(() => parseToolsArgv(['update', 'codex', 'latest'])).toThrow(
+      /unexpected argument: latest/,
+    );
   });
 });
 

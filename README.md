@@ -37,6 +37,8 @@ reference `dist/` yourself. From any directory:
 apm          # start (or reuse) the daemon, print its URL, open the dashboard
 apm url      # print the authenticated URL, open nothing
 apm profiles --json # stable profile/default/usage contract for integrations
+apm tools            # installed provider CLIs and their exact paths
+apm tools update codex # update one shared CLI with its own installer
 apm targets --json  # stable execution-target contract for integrations
 apm status
 apm stop
@@ -82,6 +84,8 @@ apm profiles --json --refresh
                           # refresh usage first, then print the contract
 apm targets               # local plus configured remote execution targets
 apm targets --json        # versioned machine contract for integrations
+apm tools                 # Claude, Codex and Cursor CLI versions on this machine
+apm tools update codex    # update the shared executable, not each profile
 apm targets --profiles devbox --json
                           # target-scoped profiles, without local home paths
 apm run work claude       # run claude bound to profile "work"
@@ -95,6 +99,11 @@ apm run --target devbox --cwd /srv/repo --ephemeral work claude
 apm attach claude-work-1  # reattach; detach with Ctrl-] or Ctrl-5
 apm sessions | status | stop
 ```
+
+Provider CLI installations are machine-wide. Profiles isolate credentials and
+configuration, but they resolve the same executable from `PATH`. The tools
+command calls that executable's built-in updater, so npm, native installer and
+Homebrew installs keep using their own update path.
 
 ### Sessions for arbitrary commands
 

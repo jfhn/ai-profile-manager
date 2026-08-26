@@ -13,7 +13,7 @@ import { APP_PROVIDERS, isProviderId, PROVIDER_IDS, type ProviderId } from '@apm
 export class CliError extends Error {}
 
 export const USAGE =
-  `usage: apm [start|profile|profiles|targets|run|attach|sessions|status|url|stop]\n` +
+  `usage: apm [start|profile|profiles|tools|targets|run|attach|sessions|status|url|stop]\n` +
   `  apm [start] [--port N] [--no-open] [--foreground]   start or reuse the daemon, open the UI\n` +
   `  apm url                                             print the authenticated URL, open nothing\n` +
   `  apm profile add <claude|codex|cursor> [--label <label>] [--new] [-- login-args...]\n` +
@@ -22,6 +22,7 @@ export const USAGE =
   `                                                      adopt a synced replica of a remote profile\n` +
   `  apm profile sync-enable <profile>                   make a profile a credential-sync owner\n` +
   `  apm profiles [--json] [--refresh]                   list profiles and provider defaults\n` +
+  `  apm tools [update <claude|codex|cursor>]            list or update shared CLI tools\n` +
   `  apm targets [--json] [--profiles <target>]          list targets or one target's profiles\n` +
   `  apm run [--target <target>] [--cwd <path>] [--ephemeral] <profile> <app> [args...]\n` +
   `                                                      run an app bound to a profile\n` +
@@ -36,6 +37,7 @@ const COMMANDS = new Set([
   'profile',
   'run',
   'profiles',
+  'tools',
   'targets',
   'attach',
   'sessions',
@@ -85,6 +87,23 @@ export interface ProfilesInvocation {
 export interface TargetsInvocation {
   json: boolean;
   profilesTarget?: string;
+}
+
+export type ToolsInvocation = { action: 'list' } | { action: 'update'; provider: ProviderId };
+
+const TOOLS_USAGE = 'usage: apm tools [update <claude|codex|cursor>]';
+
+export function parseToolsArgv(argv: string[]): ToolsInvocation {
+  if (argv.length === 0) return { action: 'list' };
+  if (argv[0] !== 'update') {
+    throw new CliError(`unknown tools subcommand: ${argv[0]}\n${TOOLS_USAGE}`);
+  }
+  const provider = argv[1];
+  if (!isProviderId(provider)) {
+    throw new CliError(`tools update requires claude, codex, or cursor\n${TOOLS_USAGE}`);
+  }
+  if (argv.length > 2) throw new CliError(`unexpected argument: ${argv[2]}\n${TOOLS_USAGE}`);
+  return { action: 'update', provider };
 }
 
 const PROFILES_USAGE = 'usage: apm profiles [--json] [--refresh]';

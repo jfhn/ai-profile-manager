@@ -2,6 +2,7 @@ import type {
   AddTargetRequest,
   ApiError,
   ConfirmWizardRequest,
+  CliToolsResponse,
   CreateProfileRequest,
   CreateSessionRequest,
   DefaultsResponse,
@@ -20,6 +21,7 @@ import type {
   TerminalSession,
   UpdateProfileRequest,
   UpdateDefaultProfileRequest,
+  UpdateCliToolResponse,
   WizardStateResponse,
 } from '@apm/shared';
 
@@ -127,6 +129,12 @@ export const api = {
       method: 'POST',
     }),
   refreshAll: () => request<void>('/api/usage/refresh', { method: 'POST' }),
+
+  tools: async () => (await request<CliToolsResponse>('/api/tools')).tools,
+  updateTool: (provider: ProviderId) =>
+    request<UpdateCliToolResponse>(`/api/tools/${encodeURIComponent(provider)}/update`, {
+      method: 'POST',
+    }),
 
   startWizard: (body: StartWizardRequest) =>
     request<WizardStateResponse>('/api/wizard', { method: 'POST', ...json(body) }),
