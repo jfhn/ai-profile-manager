@@ -207,6 +207,9 @@ apm profile copy claude:work --to devbox
 apm profile copy codex:personal --to devbox --to laptop
 ```
 
+The same action is available from a Claude or Codex profile's menu on the
+dashboard: choose **Copy to machines**, then select the destinations.
+
 `--to` is required and repeatable. Copying is opt-in; apm never enrolls every
 known machine by default. The command sends only the provider adapter's
 credential subset plus the profile provider and label. The target daemon puts

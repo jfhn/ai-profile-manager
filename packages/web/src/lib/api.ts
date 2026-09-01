@@ -10,6 +10,8 @@ import type {
   ExecutionTarget,
   OverviewResponse,
   Profile,
+  ProfileCopyRequest,
+  ProfileCopyResponse,
   ProviderId,
   RecentDirsResponse,
   SessionsResponse,
@@ -127,6 +129,11 @@ export const api = {
   refreshProfile: (id: string) =>
     request<void>(`/api/profiles/${encodeURIComponent(id)}/refresh`, {
       method: 'POST',
+    }),
+  copyProfile: (id: string, body: ProfileCopyRequest) =>
+    request<ProfileCopyResponse>(`/api/profiles/${encodeURIComponent(id)}/copy`, {
+      method: 'POST',
+      ...json(body),
     }),
   refreshAll: () => request<void>('/api/usage/refresh', { method: 'POST' }),
 
