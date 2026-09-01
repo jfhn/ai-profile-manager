@@ -29,6 +29,26 @@ const updateTool = vi.fn(async () => ({
     version: 'codex-cli 2.0.0',
   },
 }));
+const copyProfile = vi.fn(async (profileId: string, targetIds: string[]) => ({
+  profile: {
+    id: profileId,
+    provider: 'claude' as const,
+    label: 'work',
+    home: '/tmp/work',
+    homeKind: 'external' as const,
+    identity: null,
+    status: 'active' as const,
+    statusReason: null,
+    enabled: true,
+    sync: { id: '11111111-2222-4333-8444-555555555555', role: 'owner' as const },
+    createdAt: '2026-08-20T10:00:00.000Z',
+  },
+  results: targetIds.map((targetId) => ({
+    targetId,
+    status: 'failed' as const,
+    errorCode: 'unreachable',
+  })),
+}));
 let app: FastifyInstance;
 
 beforeAll(async () => {
@@ -36,7 +56,12 @@ beforeAll(async () => {
   const profiles = { defaults, setDefault } as Partial<ProfileService> as ProfileService;
   const tools = { list: listTools, update: updateTool } as CliToolService;
   app = Fastify({ logger: false });
-  registerCoreRoutes(app, { usage, profiles, tools } as Partial<AppContext> as AppContext);
+  registerCoreRoutes(app, {
+    usage,
+    profiles,
+    tools,
+    sync: { copyProfile },
+  } as Partial<AppContext> as AppContext);
   await app.ready();
 });
 
@@ -50,6 +75,7 @@ beforeEach(() => {
   setDefault.mockClear();
   listTools.mockClear();
   updateTool.mockClear();
+  copyProfile.mockClear();
 });
 
 describe('core routes', () => {
@@ -70,6 +96,30 @@ describe('core routes', () => {
 
     expect(response.statusCode).toBe(204);
     expect(refresh).toHaveBeenCalledWith(profileId, { force: true });
+  });
+
+  it('copies a profile to an explicit validated list of remote targets', async () => {
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/profiles/abc/copy',
+      payload: { targetIds: ['laptop', 'build-box'] },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(copyProfile).toHaveBeenCalledWith('abc', ['laptop', 'build-box']);
+    expect(response.json().results).toHaveLength(2);
+
+    for (const targetIds of [[], ['local'], ['laptop', 'laptop']]) {
+      expect(
+        (
+          await app.inject({
+            method: 'POST',
+            url: '/api/profiles/abc/copy',
+            payload: { targetIds },
+          })
+        ).statusCode,
+      ).toBe(400);
+    }
   });
 
   it('forces a refresh-all from POST /api/usage/refresh', async () => {

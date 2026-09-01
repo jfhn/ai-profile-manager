@@ -13,6 +13,8 @@ import path from 'node:path';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
+import { resolveConfig, writeRunFile } from '../config.js';
+import { startDaemon } from '../server.js';
 import { encodeAgentMessage } from './protocol.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -209,6 +211,55 @@ function askAgent(dir: string, request: unknown): Promise<Record<string, unknown
 }
 
 describe('target agent credential sync', () => {
+  it('enrolls a copied profile through the target daemon without exposing its home', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'apm-agent-enroll-'));
+    dataDir = dir;
+    const config = resolveConfig({ dataDir: dir, port: 0 });
+    const daemon = await startDaemon(config);
+    const address = daemon.app.server.address();
+    if (!address || typeof address === 'string') throw new Error('daemon has no TCP address');
+    config.port = address.port;
+    writeRunFile(config);
+    try {
+      const response = await askAgent(dir, {
+        type: 'sync-enroll',
+        syncId: SYNC_ID,
+        role: 'owner',
+        provider: 'claude',
+        label: 'work',
+        bundle: {
+          provider: 'claude',
+          rotatedAt: new Date(T1).toISOString(),
+          payload: { claudeAiOauth: { accessToken: 'enrolled-token' } },
+        },
+      });
+
+      expect(response).toMatchObject({
+        type: 'sync-enrolled',
+        profile: {
+          provider: 'claude',
+          label: 'work',
+          status: 'active',
+          enabled: true,
+        },
+      });
+      expect(JSON.stringify(response)).not.toContain('home');
+      expect(JSON.stringify(response)).not.toContain('enrolled-token');
+
+      const stored = JSON.parse(fs.readFileSync(path.join(dir, 'profiles.json'), 'utf8')) as {
+        profiles: Array<{ home: string; sync: { id: string; role: string } }>;
+      };
+      expect(stored.profiles).toHaveLength(1);
+      expect(stored.profiles[0]?.sync).toEqual({ id: SYNC_ID, role: 'replica' });
+      const credentials = JSON.parse(
+        fs.readFileSync(path.join(stored.profiles[0]?.home ?? '', '.credentials.json'), 'utf8'),
+      );
+      expect(credentials).toEqual({ claudeAiOauth: { accessToken: 'enrolled-token' } });
+    } finally {
+      await daemon.close();
+    }
+  }, 60_000);
+
   it('serves sync-pull with the bundle and never rewrites the store file', async () => {
     const { dir, storeFile } = writeSyncFixture('owner');
     const storeBytes = fs.readFileSync(storeFile, 'utf8');

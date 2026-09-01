@@ -24,6 +24,8 @@ Type definitions for every payload live in `packages/shared/src/api.ts`.
 | POST   | `/api/profiles`                  | Adopt an existing home as a profile (`CreateProfileRequest`)                 |
 | PATCH  | `/api/profiles/:id`              | Rename / enable / disable                                                    |
 | DELETE | `/api/profiles/:id?purge=`       | Remove profile; `purge=true` also deletes managed homes                      |
+| POST   | `/api/profiles/:id/sync-enable`  | Idempotently make a profile a credential-sync owner                          |
+| POST   | `/api/profiles/:id/copy`         | Enroll on selected targets (`ProfileCopyRequest`)                            |
 | POST   | `/api/profiles/:id/refresh`      | Refresh usage for one profile now                                            |
 | POST   | `/api/usage/refresh`             | Refresh all enabled profiles now                                             |
 | GET    | `/api/usage`                     | Latest snapshot per profile                                                  |
@@ -43,10 +45,22 @@ Type definitions for every payload live in `packages/shared/src/api.ts`.
 | POST   | `/api/targets`                   | Approve one machine as a target (`AddTargetRequest`)                         |
 | DELETE | `/api/targets/:id`               | Revoke a target; closes its connection                                       |
 | GET    | `/api/targets/:id/profiles`      | Profiles as that target reports them (`TargetProfilesResponse`)              |
+| POST   | `/api/targets/:id/sync-adopt`    | Adopt a target profile as a local synced replica                             |
+| POST   | `/api/sync/enroll`               | Internal target-agent enrollment into this daemon                            |
 
 The wizard endpoints back both the dashboard modal and the headless CLI flow
 (`apm profile add <provider>` — see the README); the CLI adds no endpoints of
 its own.
+
+`POST /api/profiles/:id/copy` requires a non-empty, unique list of approved
+remote target ids. It enables sync on the source, reads one bounded provider
+credential bundle, and enrolls exactly those targets. Its response contains
+the updated source profile plus per-target success summaries or stable error
+codes; it never contains the bundle. Partial success is deliberate. The
+loopback-only-in-purpose `/api/sync/enroll` is called by the SSH target agent
+with the target daemon's bearer token so that daemon remains the sole writer
+of its profile store. It is protected by the same loopback binding and token
+checks as every other API route.
 
 Tool updates are machine-scoped. The daemon accepts only a provider id and maps
 it to a fixed executable and `update` argument. It does not accept shell text,

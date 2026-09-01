@@ -4,6 +4,7 @@ import type {
   DefaultProfileIds,
   DiscoveryCandidate,
   Profile,
+  ProfileCopyResponse,
   ProfileEnv,
   ProfileSync,
   ProviderId,
@@ -109,6 +110,8 @@ export interface SyncService {
   stop(): void;
   /** One push sweep over all synced profiles; start() runs this periodically. */
   tick(): Promise<void>;
+  /** Enroll a local profile on exactly the selected approved remote targets. */
+  copyProfile(profileId: string, targetIds: string[]): Promise<ProfileCopyResponse>;
 }
 
 export interface AppContext {

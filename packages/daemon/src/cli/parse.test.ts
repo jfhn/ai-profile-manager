@@ -262,6 +262,30 @@ describe('parseProfileArgv', () => {
       /unexpected argument: extra/,
     );
   });
+
+  it('parses copy with one or more explicit targets and de-duplicates repeats', () => {
+    expect(parseProfileArgv(['copy', 'codex:work', '--to', 'laptop', '--to', 'build-box'])).toEqual(
+      {
+        action: 'copy',
+        profile: 'codex:work',
+        targets: ['laptop', 'build-box'],
+      },
+    );
+    expect(parseProfileArgv(['copy', 'work', '--to', 'laptop', '--to', 'laptop'])).toEqual({
+      action: 'copy',
+      profile: 'work',
+      targets: ['laptop'],
+    });
+  });
+
+  it('rejects copy without a profile, target, or valid --to option', () => {
+    expect(() => parseProfileArgv(['copy'])).toThrow(/copy requires <profile>/);
+    expect(() => parseProfileArgv(['copy', 'work'])).toThrow(/at least one --to/);
+    expect(() => parseProfileArgv(['copy', 'work', '--to'])).toThrow(/--to requires <target>/);
+    expect(() => parseProfileArgv(['copy', 'work', '--target', 'laptop'])).toThrow(
+      /unknown copy option/,
+    );
+  });
 });
 
 describe('resolveProfile', () => {

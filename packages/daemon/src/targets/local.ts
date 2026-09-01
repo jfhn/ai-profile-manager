@@ -204,6 +204,10 @@ export function createLocalTransport(deps: LocalTransportDeps): TargetTransport 
       throw fail('unsupported', 'The local target does not sync credentials with itself');
     },
 
+    async syncEnroll(): Promise<never> {
+      throw fail('unsupported', 'The local target does not sync credentials with itself');
+    },
+
     async close(): Promise<void> {
       // Nothing to disconnect: ptys belong to their callers.
     },

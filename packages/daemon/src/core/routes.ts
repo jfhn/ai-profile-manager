@@ -1,12 +1,14 @@
 import {
   confirmWizardRequestSchema,
   createProfileRequestSchema,
+  profileCopyRequestSchema,
   profileIdSchema,
   providerIdSchema,
   startWizardRequestSchema,
   updateDefaultProfileRequestSchema,
   updateProfileRequestSchema,
   type DiscoveryResponse,
+  type ProfileCopyResponse,
 } from '@apm/shared';
 import type { FastifyInstance } from 'fastify';
 import type { ZodType } from 'zod';
@@ -58,6 +60,15 @@ export function registerCoreRoutes(app: FastifyInstance, ctx: AppContext): void 
     const id = parseBody(profileIdSchema, request.params.id);
     return ctx.profiles.enableSync(id);
   });
+
+  app.post<{ Params: IdParams }>(
+    '/api/profiles/:id/copy',
+    async (request): Promise<ProfileCopyResponse> => {
+      const id = parseBody(profileIdSchema, request.params.id);
+      const body = parseBody(profileCopyRequestSchema, request.body);
+      return ctx.sync.copyProfile(id, body.targetIds);
+    },
+  );
 
   app.post<{ Params: IdParams }>('/api/profiles/:id/refresh', async (request, reply) => {
     const id = parseBody(profileIdSchema, request.params.id);

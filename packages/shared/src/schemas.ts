@@ -179,6 +179,29 @@ export const syncAdoptRequestSchema = z
   })
   .strict();
 
+/** POST /api/profiles/:id/copy — explicit, non-empty target selection. */
+export const profileCopyRequestSchema = z
+  .object({
+    targetIds: z
+      .array(remoteTargetIdSchema)
+      .min(1)
+      .max(64)
+      .refine((ids) => new Set(ids).size === ids.length, {
+        message: 'target ids must be unique',
+      }),
+  })
+  .strict();
+
+/** Private loopback request made by a target agent to its own daemon. */
+export const syncEnrollRequestSchema = z
+  .object({
+    syncId: z.string().uuid(),
+    provider: providerIdSchema,
+    label,
+    bundle: credentialBundleSchema,
+  })
+  .strict();
+
 /** Persisted profile store shape (profiles.json). */
 export const profileSchema = z.object({
   id: profileIdSchema,

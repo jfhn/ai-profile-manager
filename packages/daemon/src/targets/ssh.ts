@@ -16,6 +16,7 @@ import {
   type PtyHandle,
   type PtySpec,
   type SyncPushResult,
+  type SyncEnrollment,
   type TargetCapability,
   type TargetProfileSummary,
   type TargetSignal,
@@ -31,6 +32,9 @@ import {
 
 const CONNECT_TIMEOUT_SECONDS = 10;
 const RESPONSE_TIMEOUT_MS = 15_000;
+// Enrollment may cold-start the target daemon (whose own startup budget is
+// 15s), so it needs room beyond an ordinary one-shot agent response.
+const ENROLL_RESPONSE_TIMEOUT_MS = 30_000;
 const CLOSE_TIMEOUT_MS = 2_000;
 
 export interface SshTargetOptions {
@@ -116,6 +120,22 @@ export function createSshTransport(options: SshTargetOptions): TargetTransport {
       return { applied: response.applied };
     },
 
+    async syncEnroll(enrollment: SyncEnrollment): Promise<TargetProfileSummary> {
+      const response = await syncOneShot(
+        {
+          type: 'sync-enroll',
+          syncId: enrollment.sync.id,
+          role: enrollment.sync.role,
+          provider: enrollment.provider,
+          label: enrollment.label,
+          bundle: enrollment.bundle,
+        },
+        'sync-enrolled',
+        ENROLL_RESPONSE_TIMEOUT_MS,
+      );
+      return response.profile;
+    },
+
     async close(): Promise<void> {
       if (closed) return;
       closed = true;
@@ -131,13 +151,14 @@ export function createSshTransport(options: SshTargetOptions): TargetTransport {
    * that. Any other spawn-failed is a genuine sync failure on a current
    * agent and passes through untouched.
    */
-  async function syncOneShot<T extends 'sync-bundle' | 'sync-applied'>(
+  async function syncOneShot<T extends 'sync-bundle' | 'sync-applied' | 'sync-enrolled'>(
     request: AgentRequest,
     expected: T,
+    timeoutMs = RESPONSE_TIMEOUT_MS,
   ): Promise<Extract<AgentResponse, { type: T }>> {
     guard();
     try {
-      return await oneShot(request, expected);
+      return await oneShot(request, expected, timeoutMs);
     } catch (error: unknown) {
       if (error instanceof TransportError && isLegacySyncRejection(error)) {
         throw failure('unsupported', `Target "${target.id}" does not support credential sync`);
@@ -147,8 +168,12 @@ export function createSshTransport(options: SshTargetOptions): TargetTransport {
   }
 
   async function oneShot<
-    T extends 'ready' | 'profiles' | 'result' | 'sync-bundle' | 'sync-applied',
-  >(request: AgentRequest, expected: T): Promise<Extract<AgentResponse, { type: T }>> {
+    T extends 'ready' | 'profiles' | 'result' | 'sync-bundle' | 'sync-applied' | 'sync-enrolled',
+  >(
+    request: AgentRequest,
+    expected: T,
+    timeoutMs = RESPONSE_TIMEOUT_MS,
+  ): Promise<Extract<AgentResponse, { type: T }>> {
     guard();
     const child = openAgent();
     return new Promise((resolve, reject) => {
@@ -156,7 +181,7 @@ export function createSshTransport(options: SshTargetOptions): TargetTransport {
       const timer = setTimeout(() => {
         child.kill();
         rejectOnce(failure('timeout', `Target "${target.id}" did not respond in time`));
-      }, RESPONSE_TIMEOUT_MS);
+      }, timeoutMs);
       const lines = readline.createInterface({ input: child.stdout, crlfDelay: Infinity });
 
       function rejectOnce(error: TransportError): void {

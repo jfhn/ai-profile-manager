@@ -10,7 +10,7 @@ import { createProfileService } from '../core/profiles.js';
 import { createLocalTransport } from './local.js';
 import { createTargetRegistry } from './registry.js';
 import { createFakeRemoteTransport } from './test-support/fake-remote.js';
-import { adoptProfile, createSyncService } from './sync.js';
+import { adoptProfile, createSyncService, enrollProfile } from './sync.js';
 
 const SYNC_ID = '11111111-2222-4333-8444-555555555555';
 const T0 = Date.parse('2026-08-20T09:00:00.000Z');
@@ -349,6 +349,107 @@ describe('credential sync service', () => {
     expect(logged.some((line) => line.includes('dropped'))).toBe(true);
     expect(logged.join('\n')).not.toContain('sk-SECRET');
     expect(logged.join('\n')).toContain('unreachable');
+  });
+});
+
+describe('profile copy flow', () => {
+  it('copies only to selected targets, isolates failures, and enables sync on the source', async () => {
+    const config = tempConfig();
+    const events = createEventBus();
+    const profiles = createProfileService(config, events);
+    const home = writeClaudeHome(config.dataDir, 'owner-home', 'copy-token', T1);
+    const source = await profiles.create({ provider: 'claude', label: 'work', home });
+    const selected = createFakeRemoteTransport({ id: 'selected' });
+    const failed = createFakeRemoteTransport({ id: 'failed' });
+    failed.scriptSyncFailure('unreachable', 'remote echoed sk-SECRET-material');
+    const unselected = createFakeRemoteTransport({ id: 'unselected' });
+    const targets = createTargetRegistry(
+      createLocalTransport({ profiles, shimsDir: config.shimsDir }),
+      [selected, failed, unselected],
+    );
+    const service = createSyncService(profiles, targets, fakeUsage(), events);
+
+    const response = await service.copyProfile(source.id, ['selected', 'failed']);
+
+    expect(response.profile.sync).toMatchObject({ role: 'owner' });
+    expect(response.results).toEqual([
+      {
+        targetId: 'selected',
+        status: 'copied',
+        profile: {
+          id: 'selected-copy-1',
+          provider: 'claude',
+          label: 'work',
+          status: 'active',
+          enabled: true,
+        },
+      },
+      { targetId: 'failed', status: 'failed', errorCode: 'unreachable' },
+    ]);
+    expect(selected.syncEnrollments).toHaveLength(1);
+    expect(selected.syncEnrollments[0]?.enrollment.bundle).toEqual(claudeBundle('copy-token', T1));
+    expect(unselected.syncEnrollments).toHaveLength(0);
+    expect(JSON.stringify(response)).not.toContain('copy-token');
+    expect(JSON.stringify(response)).not.toContain('sk-SECRET');
+  });
+
+  it('registers an inbound copy as one managed replica and safely retries it', async () => {
+    const config = tempConfig();
+    const events = createEventBus();
+    const profiles = createProfileService(config, events);
+    const firstRequest = {
+      syncId: SYNC_ID,
+      provider: 'claude' as const,
+      label: 'work',
+      bundle: claudeBundle('first-token', T1),
+    };
+
+    const first = await enrollProfile({ config, profiles }, firstRequest);
+    const retried = await enrollProfile(
+      { config, profiles },
+      { ...firstRequest, label: 'new-source-label', bundle: claudeBundle('rotated-token', T2) },
+    );
+
+    expect(retried.id).toBe(first.id);
+    expect(profiles.list()).toHaveLength(1);
+    expect(first).toMatchObject({
+      provider: 'claude',
+      label: 'work',
+      homeKind: 'managed',
+      status: 'active',
+      sync: { id: SYNC_ID, role: 'replica' },
+    });
+    expect(fs.readdirSync(config.homesDir)).toHaveLength(1);
+    const written = JSON.parse(fs.readFileSync(path.join(first.home, '.credentials.json'), 'utf8'));
+    expect(written).toEqual({ claudeAiOauth: { accessToken: 'rotated-token' } });
+  });
+
+  it('rejects unsupported or mismatched inbound credential bundles without creating a home', async () => {
+    const config = tempConfig();
+    const profiles = createProfileService(config, createEventBus());
+    await expect(
+      enrollProfile(
+        { config, profiles },
+        {
+          syncId: SYNC_ID,
+          provider: 'cursor',
+          label: 'work',
+          bundle: { ...claudeBundle('token', T1), provider: 'cursor' },
+        },
+      ),
+    ).rejects.toMatchObject({ code: 'sync-unsupported' });
+    await expect(
+      enrollProfile(
+        { config, profiles },
+        {
+          syncId: SYNC_ID,
+          provider: 'codex',
+          label: 'work',
+          bundle: claudeBundle('token', T1),
+        },
+      ),
+    ).rejects.toMatchObject({ code: 'provider-mismatch' });
+    expect(fs.readdirSync(config.homesDir)).toEqual([]);
   });
 });
 

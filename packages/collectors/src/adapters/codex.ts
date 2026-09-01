@@ -77,11 +77,20 @@ export const codexAdapter: ProviderAdapter = {
     fileName: 'auth.json',
     extract: (record) => {
       if (!isRecord(record.tokens)) return null;
+      const authMode = readString(record.auth_mode);
+      // Current Codex writes this discriminator for managed ChatGPT OAuth.
+      // Legacy token files omitted it and are safely normalized on export.
+      if (authMode !== null && authMode !== 'chatgpt') return null;
       const lastRefresh = readString(record.last_refresh);
-      return { tokens: record.tokens, ...(lastRefresh ? { last_refresh: lastRefresh } : {}) };
+      return {
+        auth_mode: authMode ?? 'chatgpt',
+        tokens: record.tokens,
+        ...(lastRefresh ? { last_refresh: lastRefresh } : {}),
+      };
     },
     merge: (current, payload) => ({
       ...current,
+      auth_mode: payload.auth_mode,
       tokens: payload.tokens,
       ...(payload.last_refresh !== undefined ? { last_refresh: payload.last_refresh } : {}),
     }),

@@ -21,6 +21,8 @@ export const USAGE =
   `  apm profile add <claude|codex> --from-target <target> [--label <label>] <profile>\n` +
   `                                                      adopt a synced replica of a remote profile\n` +
   `  apm profile sync-enable <profile>                   make a profile a credential-sync owner\n` +
+  `  apm profile copy <profile> --to <target> [--to <target>...]\n` +
+  `                                                      copy credentials to selected targets\n` +
   `  apm profiles [--json] [--refresh]                   list profiles and provider defaults\n` +
   `  apm tools [update <claude|codex|cursor>]            list or update shared CLI tools\n` +
   `  apm targets [--json] [--profiles <target>]          list targets or one target's profiles\n` +
@@ -244,13 +246,26 @@ export interface ProfileSyncEnableInvocation {
   profile: string;
 }
 
+/** `apm profile copy <profile> --to <target>...` — enroll selected replicas. */
+export interface ProfileCopyInvocation {
+  action: 'copy';
+  /** Local profile id, label, or provider-qualified label. */
+  profile: string;
+  /** Approved target ids; --to is repeatable. */
+  targets: string[];
+}
+
 export type ProfileInvocation =
-  ProfileAddInvocation | ProfileAdoptInvocation | ProfileSyncEnableInvocation;
+  | ProfileAddInvocation
+  | ProfileAdoptInvocation
+  | ProfileSyncEnableInvocation
+  | ProfileCopyInvocation;
 
 const PROFILE_USAGE =
   'usage: apm profile add <claude|codex|cursor> [--label <label>] [--new] [-- login-args...]\n' +
   '       apm profile add <claude|codex> --from-target <target> [--label <label>] <profile>\n' +
-  '       apm profile sync-enable <profile>';
+  '       apm profile sync-enable <profile>\n' +
+  '       apm profile copy <profile> --to <target> [--to <target>...]';
 
 export function parseProfileArgv(argv: string[]): ProfileInvocation {
   const rest = [...argv];
@@ -266,6 +281,28 @@ export function parseProfileArgv(argv: string[]): ProfileInvocation {
       throw new CliError(`unexpected argument: ${rest[0]}\n${PROFILE_USAGE}`);
     }
     return { action: 'sync-enable', profile };
+  }
+  if (action === 'copy') {
+    const profile = rest.shift();
+    if (profile === undefined || profile.startsWith('-')) {
+      throw new CliError(`copy requires <profile>\n${PROFILE_USAGE}`);
+    }
+    const targets: string[] = [];
+    while (rest.length > 0) {
+      const option = rest.shift();
+      if (option !== '--to') {
+        throw new CliError(`unknown copy option: ${option}\n${PROFILE_USAGE}`);
+      }
+      const target = rest.shift();
+      if (target === undefined || target.startsWith('-')) {
+        throw new CliError(`--to requires <target>\n${PROFILE_USAGE}`);
+      }
+      if (!targets.includes(target)) targets.push(target);
+    }
+    if (targets.length === 0) {
+      throw new CliError(`copy requires at least one --to <target>\n${PROFILE_USAGE}`);
+    }
+    return { action: 'copy', profile, targets };
   }
   if (action !== 'add') {
     throw new CliError(`unknown profile subcommand: ${action}\n${PROFILE_USAGE}`);

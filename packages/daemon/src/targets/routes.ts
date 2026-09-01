@@ -33,6 +33,7 @@ import {
   LOCAL_TARGET_ID,
   addTargetRequestSchema,
   syncAdoptRequestSchema,
+  syncEnrollRequestSchema,
   type CommandResult,
   type CommandSpec,
   type ExecOptions,
@@ -48,7 +49,7 @@ import { readConfiguredTargets, writeConfiguredTargets, type ConfiguredTarget } 
 import { findPeer, mergeCandidates, readTailnetPeers } from './discovery.js';
 import { toApiFailure } from './errors.js';
 import { createSshTransport } from './ssh.js';
-import { adoptProfile } from './sync.js';
+import { adoptProfile, enrollProfile } from './sync.js';
 
 export interface TargetRouteDeps {
   /**
@@ -80,6 +81,17 @@ export function registerTargetRoutes(
   app.get('/api/targets/candidates', async (): Promise<TargetCandidatesResponse> => {
     const peers = await readTailnetPeers(execOnHub);
     return { candidates: mergeCandidates(peers, ctx.targets.list()) };
+  });
+
+  // Private in purpose (normal clients never need it), authenticated like all
+  // API routes: the local SSH agent uses it so the daemon remains the sole
+  // writer of profiles.json while importing an encrypted-transport bundle.
+  app.post('/api/sync/enroll', async (req, reply): Promise<Profile> => {
+    const parsed = syncEnrollRequestSchema.safeParse(req.body ?? {});
+    if (!parsed.success) throw new ApiFailure(400, 'bad-request', formatIssues(parsed.error));
+    const profile = await enrollProfile(ctx, parsed.data);
+    reply.code(201);
+    return profile;
   });
 
   app.get<{ Params: { id: string } }>(

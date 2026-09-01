@@ -93,7 +93,7 @@ export interface PtyHandle {
 
 /**
  * A synced profile's credentials in transit. This is the only shape provider
- * credentials may ever cross a transport in, and only inside the two sync
+ * credentials may ever cross a transport in, and only inside the three sync
  * messages — never in a session payload, HTTP response, event or log line.
  */
 export interface CredentialBundle {
@@ -107,6 +107,18 @@ export interface CredentialBundle {
 export interface SyncPushResult {
   /** False means the target already holds this rotation or a newer one. */
   applied: boolean;
+}
+
+/**
+ * The one-time enrollment message used to create a synced replica on a
+ * selected target. It carries only the profile label/provider and the
+ * provider's credential bundle — never chats, caches, or the source home.
+ */
+export interface SyncEnrollment {
+  sync: ProfileSync;
+  provider: ProviderId;
+  label: string;
+  bundle: CredentialBundle;
 }
 
 export interface TargetTransport {
@@ -123,6 +135,8 @@ export interface TargetTransport {
   syncPull(sync: ProfileSync): Promise<CredentialBundle>;
   /** Offer a rotated bundle; the target applies it only when strictly newer. */
   syncPush(sync: ProfileSync, bundle: CredentialBundle): Promise<SyncPushResult>;
+  /** Create (or idempotently refresh) a replica for this sync id on the target. */
+  syncEnroll(enrollment: SyncEnrollment): Promise<TargetProfileSummary>;
   /**
    * Release connection-level resources. Handles opened through this transport
    * belong to their caller and must be closed by it.

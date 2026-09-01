@@ -78,6 +78,8 @@ apm                       # start (or reuse) the daemon and open the dashboard
 apm url                   # print the authenticated dashboard URL, open nothing
 apm profile add claude    # log in to a fresh managed profile, no dashboard needed
 apm profile add cursor    # same flow for Cursor
+apm profile copy codex:work --to devbox --to laptop
+                          # copy OAuth credentials to selected approved targets
 apm profiles              # human-readable profiles and provider defaults
 apm profiles --json       # versioned machine contract, JSON only on stdout
 apm profiles --json --refresh
@@ -142,8 +144,8 @@ apm profile add codex -- --device-auth   # extra args go to the provider login
 ```
 
 Provider authentication stays with the provider CLI, including its own
-browser or device requirements — apm never creates provider accounts or
-copies credentials:
+browser or device requirements — apm never creates provider accounts. The
+explicit cross-machine copy command described below is separate from login:
 
 - **Claude Code** always needs a browser _somewhere_: over SSH the login
   prints a URL you open on any device, and a code to paste back into the
@@ -195,9 +197,37 @@ their configured id:
 }
 ```
 
+### Copying a profile to selected machines
+
+Claude and Codex OAuth profiles can be copied from the machine that already
+has the login to one or more approved targets in a single action:
+
+```sh
+apm profile copy claude:work --to devbox
+apm profile copy codex:personal --to devbox --to laptop
+```
+
+`--to` is required and repeatable. Copying is opt-in; apm never enrolls every
+known machine by default. The command sends only the provider adapter's
+credential subset plus the profile provider and label. The target daemon puts
+it in a fresh owner-only managed home and registers an active replica; it does
+not receive chats, session history, caches, projects, or the rest of the
+source profile directory. A duplicate label is suffixed on the target, and an
+existing provider default is left unchanged (the copy becomes the default
+only when the target has no eligible default for that provider).
+
+No second provider login is needed. Existing batch-mode SSH authentication is
+the only transport authentication step. The target must have this version of
+apm installed and available on its SSH login `PATH`; apm starts its target
+daemon if necessary. Cursor and file-less/API-key authentication are not
+copyable by this flow. After enrollment, the existing credential sync keeps
+Claude/Codex OAuth rotations moving between the linked profiles.
+
 SSH uses batch mode and runs the fixed `apm __target-agent` entry point; set up
 SSH authentication separately and make `apm` available on the remote login
-PATH. The target machine must have the selected profile and tool configured.
+PATH. Profiles can either already exist there or be enrolled with `apm profile
+copy`; the provider tool itself must be installed there before the profile can
+be used.
 Setting `approved` to `false` keeps the declaration visible to the registry but
 prevents it from running anything; revoking on the Targets page removes the
 entry and closes the connection immediately. In an attached terminal, press
@@ -212,8 +242,9 @@ State lives in `~/.local/share/apm` (override with `APM_DATA_DIR`, which is
 resolved to an absolute path at startup): profiles in `profiles.json`, approved
 remote declarations in `targets.json`, usage snapshots in SQLite, and managed
 provider homes under `homes/`. Raw credentials stay inside provider homes; apm
-never copies them, never refreshes OAuth tokens, and never sends them to the
-browser or another target.
+never sends them to the browser or returns them from its API. They cross to an
+approved target only for an explicit profile-copy or credential-sync action,
+inside the bounded SSH agent protocol.
 
 External tools can resolve per-provider defaults, exact profile homes and usage
 without adopting apm's PTY lifecycle. The versioned CLI contract and its

@@ -6,10 +6,7 @@
  * session host directly, so a shell attach and a browser tab are two views of
  * the same session.
  */
-import fs from 'node:fs';
-import path from 'node:path';
 import { spawn } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
 import { StringDecoder } from 'node:string_decoder';
 import WebSocket from 'ws';
 import {
@@ -20,10 +17,10 @@ import {
   usageSnapshotSchema,
 } from '@apm/shared';
 import type {
-  ApiError,
   CreateSessionRequest,
   OverviewResponse,
   Profile,
+  ProfileCopyResponse,
   ProfilesCliResponse,
   StatusResponse,
   TargetProfilesCliResponse,
@@ -36,7 +33,7 @@ import type {
   CliToolsResponse,
   UpdateCliToolResponse,
 } from '@apm/shared';
-import { ensureDirs, readLiveRunFile, resolveConfig, type RunFileData } from '../config.js';
+import { readLiveRunFile, resolveConfig, type RunFileData } from '../config.js';
 import { childProcessEnv } from '../process-env.js';
 import { DetachEscapeParser } from './detach-escape.js';
 import {
@@ -50,9 +47,9 @@ import {
   type ProfileAdoptInvocation,
   type RunInvocation,
 } from './parse.js';
-import { ApiRequestError, runProfileAdd } from './profile-add.js';
+import { daemonOrStart, apiRequest } from './daemon-client.js';
+import { runProfileAdd } from './profile-add.js';
 
-const DAEMON_START_TIMEOUT_MS = 15_000;
 const DAEMON_STOP_TIMEOUT_MS = 10_000;
 const ESCAPE_SEQUENCE_TIMEOUT_MS = 30;
 const LOCAL_TERMINAL_RESTORE =
@@ -100,9 +97,37 @@ export async function profileCommand(argv: string[]): Promise<void> {
       case 'adopt':
         await runAdopt(run, invocation);
         return;
+      case 'copy':
+        await runCopy(run, invocation.profile, invocation.targets);
+        return;
     }
   } catch (error: unknown) {
     fail(errorMessage(error));
+  }
+}
+
+async function runCopy(run: RunFileData, profileRef: string, targetIds: string[]): Promise<void> {
+  const overview = await apiRequest<OverviewResponse>(run, 'GET', '/api/overview');
+  const profile = resolveProfile(overview.profiles, profileRef, '');
+  const response = await apiRequest<ProfileCopyResponse>(
+    run,
+    'POST',
+    `/api/profiles/${encodeURIComponent(profile.id)}/copy`,
+    { targetIds },
+  );
+  for (const result of response.results) {
+    if (result.status === 'copied') {
+      console.log(
+        `copied ${response.profile.provider} profile "${response.profile.label}" to target ` +
+          `"${result.targetId}" as "${result.profile.label}"`,
+      );
+    } else {
+      console.error(
+        `failed to copy profile "${response.profile.label}" to target ` +
+          `"${result.targetId}" (${result.errorCode})`,
+      );
+      process.exitCode = 1;
+    }
   }
 }
 
@@ -643,44 +668,6 @@ async function attachSession(run: RunFileData, session: TerminalSession): Promis
 
 // ------------------------------------------------------------- daemon glue --
 
-/** Return the live daemon, starting a detached one if there is none. */
-async function daemonOrStart(): Promise<RunFileData> {
-  const config = resolveConfig();
-  const live = readLiveRunFile(config);
-  if (live) return live;
-
-  ensureDirs(config);
-  const entry = fileURLToPath(new URL('../main.js', import.meta.url));
-  if (!fs.existsSync(entry)) {
-    fail(`daemon entry point not found at ${entry} — build the daemon first`);
-  }
-
-  const logFile = path.join(config.logsDir, 'daemon.log');
-  const log = fs.openSync(logFile, 'a');
-  let pid: number | undefined;
-  try {
-    const child = spawn(process.execPath, [entry, '__daemon'], {
-      detached: true,
-      stdio: ['ignore', log, log],
-    });
-    child.on('error', () => {
-      /* surfaced by the run-file timeout below */
-    });
-    child.unref();
-    pid = child.pid;
-  } finally {
-    fs.closeSync(log);
-  }
-
-  const deadline = Date.now() + DAEMON_START_TIMEOUT_MS;
-  while (Date.now() < deadline) {
-    const run = readLiveRunFile(config);
-    if (run && (pid === undefined || run.pid === pid)) return run;
-    await sleep(200);
-  }
-  fail(`daemon did not come up within ${DAEMON_START_TIMEOUT_MS / 1000}s — see ${logFile}`);
-}
-
 async function api<T>(
   run: RunFileData,
   method: string,
@@ -692,49 +679,6 @@ async function api<T>(
   } catch (error: unknown) {
     return fail(errorMessage(error));
   }
-}
-
-/** Like api(), but throws instead of exiting so callers can branch on failures. */
-async function apiRequest<T>(
-  run: RunFileData,
-  method: string,
-  endpoint: string,
-  body?: unknown,
-): Promise<T> {
-  let response: Response;
-  try {
-    response = await fetch(`http://${run.host}:${run.port}${endpoint}`, {
-      method,
-      headers: {
-        authorization: `Bearer ${run.token}`,
-        ...(body === undefined ? {} : { 'content-type': 'application/json' }),
-      },
-      body: body === undefined ? undefined : JSON.stringify(body),
-    });
-  } catch (error: unknown) {
-    throw new CliError(
-      `cannot reach the daemon at ${run.host}:${run.port} (${errorMessage(error)})`,
-    );
-  }
-
-  const text = await response.text();
-  let payload: unknown = null;
-  if (text.length > 0) {
-    try {
-      payload = JSON.parse(text);
-    } catch {
-      payload = null;
-    }
-  }
-
-  if (!response.ok) {
-    const apiError = payload as ApiError | null;
-    throw new ApiRequestError(
-      apiError?.error?.message ?? `${method} ${endpoint} failed with ${response.status}`,
-      apiError?.error?.code ?? null,
-    );
-  }
-  return payload as T;
 }
 
 // ------------------------------------------------------------------ output --

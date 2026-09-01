@@ -3,6 +3,7 @@ import type { AdapterCapabilities, ProviderId, ProviderIdentity } from './provid
 import type { UsageSnapshot } from './usage.js';
 import type { TerminalSession } from './sessions.js';
 import type { ExecutionTarget, TargetCandidate, TargetId, TargetProfileSummary } from './target.js';
+import type { CredentialBundle } from './transport.js';
 
 /**
  * REST API contract (see docs/API.md for the full prose spec).
@@ -144,6 +145,32 @@ export interface SyncAdoptRequest {
   remoteProfileId: string;
   /** Defaults to the remote profile's label, de-duplicated locally. */
   label?: string;
+}
+
+/** POST /api/profiles/:id/copy — enroll this profile on selected targets. */
+export interface ProfileCopyRequest {
+  targetIds: TargetId[];
+}
+
+export type ProfileCopyTargetResult =
+  | { targetId: TargetId; status: 'copied'; profile: TargetProfileSummary }
+  | { targetId: TargetId; status: 'failed'; errorCode: string };
+
+export interface ProfileCopyResponse {
+  /** The local profile after sync has been enabled (owner or existing replica). */
+  profile: Profile;
+  results: ProfileCopyTargetResult[];
+}
+
+/**
+ * Internal loopback API used by the SSH target agent. The response is a
+ * normal Profile, but this request's credential bundle must never be logged.
+ */
+export interface SyncEnrollRequest {
+  syncId: string;
+  provider: ProviderId;
+  label: string;
+  bundle: CredentialBundle;
 }
 
 /**

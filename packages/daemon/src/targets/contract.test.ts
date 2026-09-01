@@ -269,6 +269,14 @@ describe('credential sync over transports', () => {
     await expect(
       transport.syncPush(sync, bundle('t', new Date().toISOString())),
     ).rejects.toMatchObject({ code: 'unsupported' });
+    await expect(
+      transport.syncEnroll({
+        sync,
+        provider: 'claude',
+        label: 'work',
+        bundle: bundle('t', new Date().toISOString()),
+      }),
+    ).rejects.toMatchObject({ code: 'unsupported' });
   });
 
   it('the fake remote serves pull, applies strictly newer pushes, and rejects unknown ids', async () => {
@@ -285,6 +293,26 @@ describe('credential sync over transports', () => {
     expect(await transport.syncPush(sync, bundle('t0', '2026-08-20T09:00:00.000Z'))).toEqual({
       applied: false,
     });
+    expect(transport.getBundle(sync.id)?.payload).toEqual(bundle('t2', '').payload);
+  });
+
+  it('the fake remote enrolls once and treats a retry as an idempotent refresh', async () => {
+    const transport = createFakeRemoteTransport();
+    const first = await transport.syncEnroll({
+      sync,
+      provider: 'claude',
+      label: 'work',
+      bundle: bundle('t1', '2026-08-20T10:00:00.000Z'),
+    });
+    const retried = await transport.syncEnroll({
+      sync,
+      provider: 'claude',
+      label: 'renamed-at-source',
+      bundle: bundle('t2', '2026-08-20T11:00:00.000Z'),
+    });
+
+    expect(retried).toEqual(first);
+    expect(transport.syncEnrollments).toHaveLength(1);
     expect(transport.getBundle(sync.id)?.payload).toEqual(bundle('t2', '').payload);
   });
 });
