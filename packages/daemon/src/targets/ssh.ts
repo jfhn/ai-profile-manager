@@ -16,6 +16,7 @@ import {
   type PtyHandle,
   type PtySpec,
   type SyncPushResult,
+  type SyncEnrollment,
   type TargetCapability,
   type TargetProfileSummary,
   type TargetSignal,
@@ -31,6 +32,9 @@ import {
 
 const CONNECT_TIMEOUT_SECONDS = 10;
 const RESPONSE_TIMEOUT_MS = 15_000;
+// Enrollment may cold-start the target daemon (whose own startup budget is
+// 15s), so it needs room beyond an ordinary one-shot agent response.
+const ENROLL_RESPONSE_TIMEOUT_MS = 30_000;
 const CLOSE_TIMEOUT_MS = 2_000;
 
 export interface SshTargetOptions {
@@ -38,6 +42,38 @@ export interface SshTargetOptions {
   label: string;
   address: string;
   approved: boolean;
+}
+
+/** OpenSSH owns fingerprint display, confirmation, and known_hosts writes. */
+export async function verifySshHost(target: ExecutionTarget): Promise<boolean> {
+  const address = target.identity.address;
+  if (target.kind !== 'remote' || !target.approved || target.transport !== 'ssh' || !address) {
+    throw new Error(`SSH verification is unavailable for target "${target.id}"`);
+  }
+  return new Promise((resolve) => {
+    const child = spawn(
+      'ssh',
+      [
+        '-T',
+        '-o',
+        'BatchMode=no',
+        '-o',
+        'StrictHostKeyChecking=ask',
+        '-o',
+        'PasswordAuthentication=no',
+        '-o',
+        'KbdInteractiveAuthentication=no',
+        '-o',
+        `ConnectTimeout=${CONNECT_TIMEOUT_SECONDS}`,
+        '--',
+        address,
+        'true',
+      ],
+      { shell: false, stdio: 'inherit' },
+    );
+    child.on('error', () => resolve(false));
+    child.on('close', (code) => resolve(code === 0));
+  });
 }
 
 export function createSshTransport(options: SshTargetOptions): TargetTransport {
@@ -116,6 +152,22 @@ export function createSshTransport(options: SshTargetOptions): TargetTransport {
       return { applied: response.applied };
     },
 
+    async syncEnroll(enrollment: SyncEnrollment): Promise<TargetProfileSummary> {
+      const response = await syncOneShot(
+        {
+          type: 'sync-enroll',
+          syncId: enrollment.sync.id,
+          role: enrollment.sync.role,
+          provider: enrollment.provider,
+          label: enrollment.label,
+          bundle: enrollment.bundle,
+        },
+        'sync-enrolled',
+        ENROLL_RESPONSE_TIMEOUT_MS,
+      );
+      return response.profile;
+    },
+
     async close(): Promise<void> {
       if (closed) return;
       closed = true;
@@ -131,13 +183,14 @@ export function createSshTransport(options: SshTargetOptions): TargetTransport {
    * that. Any other spawn-failed is a genuine sync failure on a current
    * agent and passes through untouched.
    */
-  async function syncOneShot<T extends 'sync-bundle' | 'sync-applied'>(
+  async function syncOneShot<T extends 'sync-bundle' | 'sync-applied' | 'sync-enrolled'>(
     request: AgentRequest,
     expected: T,
+    timeoutMs = RESPONSE_TIMEOUT_MS,
   ): Promise<Extract<AgentResponse, { type: T }>> {
     guard();
     try {
-      return await oneShot(request, expected);
+      return await oneShot(request, expected, timeoutMs);
     } catch (error: unknown) {
       if (error instanceof TransportError && isLegacySyncRejection(error)) {
         throw failure('unsupported', `Target "${target.id}" does not support credential sync`);
@@ -147,16 +200,24 @@ export function createSshTransport(options: SshTargetOptions): TargetTransport {
   }
 
   async function oneShot<
-    T extends 'ready' | 'profiles' | 'result' | 'sync-bundle' | 'sync-applied',
-  >(request: AgentRequest, expected: T): Promise<Extract<AgentResponse, { type: T }>> {
+    T extends 'ready' | 'profiles' | 'result' | 'sync-bundle' | 'sync-applied' | 'sync-enrolled',
+  >(
+    request: AgentRequest,
+    expected: T,
+    timeoutMs = RESPONSE_TIMEOUT_MS,
+  ): Promise<Extract<AgentResponse, { type: T }>> {
     guard();
     const child = openAgent();
     return new Promise((resolve, reject) => {
+      let diagnostics = '';
+      child.stderr.on('data', (chunk: Buffer) => {
+        diagnostics = (diagnostics + chunk.toString('utf8')).slice(-8192);
+      });
       let settled = false;
       const timer = setTimeout(() => {
         child.kill();
         rejectOnce(failure('timeout', `Target "${target.id}" did not respond in time`));
-      }, RESPONSE_TIMEOUT_MS);
+      }, timeoutMs);
       const lines = readline.createInterface({ input: child.stdout, crlfDelay: Infinity });
 
       function rejectOnce(error: TransportError): void {
@@ -182,9 +243,18 @@ export function createSshTransport(options: SshTargetOptions): TargetTransport {
         resolve(response as Extract<AgentResponse, { type: T }>);
       });
       child.on('error', () => rejectOnce(unreachable()));
-      child.stdin.on('error', () => rejectOnce(unreachable()));
+      // SSH stderr is complete at close; EPIPE alone cannot identify the failure.
+      child.stdin.on('error', () => {});
       child.on('close', () => {
-        if (!settled) rejectOnce(unreachable());
+        if (!settled)
+          rejectOnce(
+            /Host key verification failed|REMOTE HOST IDENTIFICATION HAS CHANGED/.test(diagnostics)
+              ? failure(
+                  'host-key-verification-failed',
+                  `SSH host verification failed for "${target.id}"`,
+                )
+              : unreachable(),
+          );
       });
       child.stdin.end(encodeAgentMessage(request));
     });
@@ -204,7 +274,7 @@ export function createSshTransport(options: SshTargetOptions): TargetTransport {
         'apm',
         '__target-agent',
       ],
-      { shell: false, stdio: ['pipe', 'pipe', 'pipe'] },
+      { shell: false, stdio: ['pipe', 'pipe', 'pipe'], env: { ...process.env, LC_ALL: 'C' } },
     );
     // Authentication diagnostics stay on the daemon side and cannot block the
     // child by filling an unread pipe.

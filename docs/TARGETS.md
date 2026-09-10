@@ -39,6 +39,7 @@ Missing capabilities fail with `TransportError('unsupported')`.
 | `profiles()`             | List safe profile summaries from that target              |
 | `syncPull(sync)`         | Fetch a synced profile's credential bundle                |
 | `syncPush(sync, bundle)` | Offer a rotated bundle; applied only when strictly newer  |
+| `syncEnroll(enrollment)` | Create or idempotently refresh a selected target replica  |
 | `close()`                | Release the connection and its live PTYs                  |
 
 Commands are structured values:
@@ -70,9 +71,9 @@ Transport errors use shared codes: `target-not-found`, `target-not-approved`,
 ## Profiles and credentials
 
 Credentials cross the transport boundary in exactly one shape: the
-`CredentialBundle` inside the two sync messages, between machines that
-approved each other, over SSH. They never appear in session payloads, HTTP
-responses, events or logs. Everything else below is unchanged.
+`CredentialBundle` inside the three sync messages, between machines connected
+through an explicitly approved SSH target. They never appear in session
+payloads, HTTP responses, events or logs. Everything else below is unchanged.
 
 `profiles()` returns only id, provider, label, status and enabled state. A
 command names profile ids. The selected target resolves those ids and injects
@@ -115,12 +116,29 @@ Mechanics (`packages/daemon/src/targets/sync.ts` and
   clock skew and wrong last-writer picks.
 - The remote agent answers `sync-pull`/`sync-push` from a read-only store
   view and only ever writes the profile's credential file through the
-  provider adapter. Store mutations happen solely in each machine's own
-  daemon. Two machines both claiming the owner role answer `sync-conflict`.
+  provider adapter. `sync-enroll` hands the bounded bundle to the target's
+  loopback daemon, which creates the managed replica. Store mutations happen
+  solely in each machine's own daemon. Two machines both claiming the owner
+  role answer `sync-conflict`.
 
-Setup requires apm on both machines and mutual approval in each machine's
-`targets.json` (each side pushes to the other). Enable on the owner, adopt on
-the replica:
+The simple source-side setup requires this version of apm on both machines,
+batch-mode SSH access, and the destination approved as a target on the source.
+One command both enables sync on the source and enrolls the selected replicas:
+
+```sh
+owner$  apm profile copy claude:work --to replica-box --to laptop
+```
+
+Selection is always explicit and repeatable; there is no default broadcast or
+second confirmation. The enrollment carries the provider, label, sync id and
+credential subset only. It never copies chats, histories, caches, session
+state, project data, or arbitrary files from the profile home. Repeating the
+same copy is idempotent and offers only a newer rotation to the existing
+replica. Existing target defaults remain in place; a replica is promoted only
+when that provider had no eligible default.
+
+The older destination-side adopt flow remains available. Enable on the owner,
+then adopt on the replica (the replica must approve the owner as a target):
 
 ```sh
 owner$    apm profile sync-enable work
@@ -133,7 +151,7 @@ managed home and creates the local replica profile.
 
 Security note: this legalizes no new reach. An approved SSH peer could
 already read credential files through the exec channel; sync replaces that
-ad-hoc possibility with a schema-validated, size-capped message pair. SSH
+ad-hoc possibility with schema-validated, size-capped messages. SSH
 `authorized_keys` remains the authentication boundary. Worst case of the
 remaining write race (a provider CLI rotates in the same instant a bundle is
 applied): the profile reports an auth failure and the owner logs in again —

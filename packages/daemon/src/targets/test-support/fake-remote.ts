@@ -11,6 +11,7 @@ import {
   type PtyHandle,
   type PtySpec,
   type SyncPushResult,
+  type SyncEnrollment,
   type TargetCapability,
   type TargetProfileSummary,
   type TargetSignal,
@@ -53,11 +54,18 @@ export interface FakeSyncPush {
   applied: boolean;
 }
 
+export interface FakeSyncEnrollment {
+  enrollment: SyncEnrollment;
+  profile: TargetProfileSummary;
+}
+
 export interface FakeRemoteTransport extends TargetTransport {
   readonly execs: FakeExecCall[];
   readonly ptys: FakePty[];
   /** Every syncPush received, in order. */
   readonly syncPushes: FakeSyncPush[];
+  /** Every first-time sync enrollment received, in order. */
+  readonly syncEnrollments: FakeSyncEnrollment[];
   scriptExec(argv: readonly string[], result: Partial<CommandResult>): void;
   scriptFailure(argv: readonly string[], code: TransportErrorCode, message?: string): void;
   /** The bundle syncPull answers for this sync id; push replaces it when newer. */
@@ -85,9 +93,11 @@ export function createFakeRemoteTransport(options: FakeRemoteOptions = {}): Fake
   const ptys: FakePty[] = [];
   const results = new Map<string, Partial<CommandResult>>();
   const failures = new Map<string, TransportError>();
-  const profiles = options.profiles ?? [];
+  const profiles = [...(options.profiles ?? [])];
   const bundles = new Map<string, CredentialBundle>();
   const syncPushes: FakeSyncPush[] = [];
+  const syncEnrollments: FakeSyncEnrollment[] = [];
+  const enrolledProfiles = new Map<string, TargetProfileSummary>();
   let syncFailure: TransportError | null = null;
   let online = options.online ?? true;
   let closed = false;
@@ -187,6 +197,7 @@ export function createFakeRemoteTransport(options: FakeRemoteOptions = {}): Fake
     execs,
     ptys,
     syncPushes,
+    syncEnrollments,
     supports: (capability) => target.capabilities.includes(capability),
     async probe(): Promise<TargetStatus> {
       target.status = closed || !online ? 'offline' : 'online';
@@ -237,6 +248,30 @@ export function createFakeRemoteTransport(options: FakeRemoteOptions = {}): Fake
       if (applied) bundles.set(sync.id, bundle);
       syncPushes.push({ sync, bundle, applied });
       return { applied };
+    },
+    async syncEnroll(enrollment: SyncEnrollment): Promise<TargetProfileSummary> {
+      guard('sync');
+      if (syncFailure) throw syncFailure;
+      const existing = enrolledProfiles.get(enrollment.sync.id);
+      if (existing) {
+        const current = bundles.get(enrollment.sync.id);
+        if (!current || Date.parse(enrollment.bundle.rotatedAt) > Date.parse(current.rotatedAt)) {
+          bundles.set(enrollment.sync.id, enrollment.bundle);
+        }
+        return { ...existing };
+      }
+      const profile: TargetProfileSummary = {
+        id: `${id}-copy-${syncEnrollments.length + 1}`,
+        provider: enrollment.provider,
+        label: enrollment.label,
+        status: 'active',
+        enabled: true,
+      };
+      profiles.push(profile);
+      enrolledProfiles.set(enrollment.sync.id, profile);
+      bundles.set(enrollment.sync.id, enrollment.bundle);
+      syncEnrollments.push({ enrollment, profile });
+      return { ...profile };
     },
     async close(): Promise<void> {
       closed = true;

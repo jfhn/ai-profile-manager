@@ -9,6 +9,8 @@
  *   apm profile add <claude|codex> --from-target <target> [--label <label>] <profile>
  *                                                       adopt a synced replica of a remote profile
  *   apm profile sync-enable <profile>                   make a profile a credential-sync owner
+ *   apm profile copy <profile> --to <target> [--to <target>...]
+ *                                                       copy credentials to selected targets
  *   apm profiles [--json] [--refresh]                   list profiles and provider defaults
  *   apm tools [update <claude|codex|cursor>]            list or update shared CLI tools
  *   apm targets [--json] [--profiles <target>]          list targets or one target's profiles

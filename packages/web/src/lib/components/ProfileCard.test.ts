@@ -1,4 +1,4 @@
-import type { Profile, UsageSnapshot } from '@apm/shared';
+import type { Profile, ProfileCopyRequest, ProfileCopyResponse, UsageSnapshot } from '@apm/shared';
 import { fireEvent, render, screen, waitFor } from '@testing-library/svelte';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { profileView } from '../runway';
@@ -14,6 +14,9 @@ const mocks = vi.hoisted(() => ({
   daemon: null as unknown as FakeDaemon,
   refreshedProfiles: [] as string[],
   setDefault: null as unknown as ReturnType<typeof vi.fn>,
+  copyProfile: null as unknown as ReturnType<typeof vi.fn>,
+  verifyHost: vi.fn(),
+  confirmHost: vi.fn(),
 }));
 
 // The card pulls in the real api module transitively (via stores and toasts),
@@ -34,6 +37,9 @@ vi.mock('../api', () => ({
     },
     setDefault: (provider: string, body: { profileId: string | null }) =>
       mocks.setDefault(provider, body),
+    copyProfile: (id: string, body: ProfileCopyRequest) => mocks.copyProfile(id, body),
+    verifyHost: mocks.verifyHost,
+    confirmHost: mocks.confirmHost,
     overview: async () => ({
       providers: [],
       profiles: mocks.daemon.profiles,
@@ -55,16 +61,40 @@ beforeEach(() => {
   vi.useFakeTimers({ shouldAdvanceTime: true });
   mocks.daemon = new FakeDaemon();
   mocks.refreshedProfiles = [];
+  mocks.verifyHost.mockReset();
+  mocks.confirmHost.mockReset();
   mocks.setDefault = vi.fn(async (provider: string, body: { profileId: string | null }) => ({
     defaultProfileIds: { [provider]: body.profileId },
   }));
+  mocks.copyProfile = vi.fn(
+    async (profileId: string, body: ProfileCopyRequest): Promise<ProfileCopyResponse> => {
+      const profile = mocks.daemon.profile(profileId);
+      if (!profile) throw new Error('Profile not found');
+      return {
+        profile: { ...profile, sync: { id: 'sync-1', role: 'owner' } },
+        results: body.targetIds.map((targetId) => ({
+          targetId,
+          status: 'copied' as const,
+          profile: {
+            id: `${targetId}-profile`,
+            provider: profile.provider,
+            label: profile.label,
+            status: 'active' as const,
+            enabled: true,
+          },
+        })),
+      };
+    },
+  );
   app.usage = {};
   app.defaultProfileIds = {};
+  app.targets = [];
   // Seeded first so the profile under test is neither the only pending one nor
   // the first id the fake hands out. A card that resumed a hard-coded or
   // otherwise wrong profile would now talk to the decoy and fail.
   decoy = mocks.daemon.seedPending('claude');
   pending = mocks.daemon.seedPending('claude');
+  app.profiles = mocks.daemon.profiles;
 });
 
 afterEach(() => {
@@ -199,6 +229,161 @@ describe('ProfileCard: the default star', () => {
     renderCard(pending);
     expect(screen.queryByRole('button', { name: 'Set default' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Default' })).toBeNull();
+  });
+});
+
+describe('ProfileCard: copying credentials to machines', () => {
+  it('shows the SSH fingerprint and retries only after explicit trust', async () => {
+    const active: Profile = { ...pending, status: 'active', label: 'work' };
+    app.targets = [
+      mocks.daemon.seedTarget({ id: 'server', label: 'Server', capabilities: ['sync'] }),
+    ];
+    mocks.copyProfile.mockResolvedValueOnce({
+      profile: active,
+      results: [
+        { targetId: 'server', status: 'failed', errorCode: 'host-key-verification-failed' },
+      ],
+    });
+    mocks.verifyHost.mockResolvedValue({
+      state: 'confirmation',
+      challengeId: 'challenge',
+      address: 'server.tailnet.ts.net',
+      prompt: 'ED25519 key fingerprint is SHA256:example',
+    });
+    mocks.confirmHost.mockResolvedValue(undefined);
+    renderCard(active);
+    await fireEvent.click(screen.getByRole('button', { name: 'Actions for work' }));
+    await fireEvent.click(screen.getByRole('menuitem', { name: 'Copy to machines' }));
+    await fireEvent.click(screen.getByRole('checkbox', { name: /Server/ }));
+    await fireEvent.click(screen.getByRole('button', { name: 'Copy to 1 machine' }));
+    await fireEvent.click(await screen.findByRole('button', { name: 'Verify Server' }));
+    await screen.findByText('ED25519 key fingerprint is SHA256:example');
+    expect(mocks.confirmHost).not.toHaveBeenCalled();
+    expect(mocks.copyProfile).toHaveBeenCalledTimes(1);
+    await fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    await waitFor(() =>
+      expect(mocks.confirmHost).toHaveBeenCalledWith('server', {
+        challengeId: 'challenge',
+        accept: false,
+      }),
+    );
+    expect(mocks.copyProfile).toHaveBeenCalledTimes(1);
+    await fireEvent.click(screen.getByRole('button', { name: 'Verify Server' }));
+    await fireEvent.click(await screen.findByRole('button', { name: 'Trust and retry' }));
+    await waitFor(() =>
+      expect(mocks.confirmHost).toHaveBeenLastCalledWith('server', {
+        challengeId: 'challenge',
+        accept: true,
+      }),
+    );
+    await waitFor(() => expect(mocks.copyProfile).toHaveBeenCalledTimes(2));
+  });
+
+  it('copies to explicit compatible selections and retries only a failed machine', async () => {
+    const active: Profile = { ...pending, status: 'active', label: 'work' };
+    mocks.daemon.profiles = mocks.daemon.profiles.map((profile) =>
+      profile.id === active.id ? active : profile,
+    );
+    app.profiles = mocks.daemon.profiles;
+
+    mocks.daemon.seedTarget({ id: 'local', label: 'This machine' });
+    mocks.daemon.seedTarget({
+      id: 'dev-box',
+      label: 'Development box',
+      capabilities: ['exec', 'pty', 'signal', 'profiles', 'sync'],
+      identity: {
+        hostname: 'dev-box',
+        address: 'dev-box.tailnet.ts.net',
+        fingerprint: null,
+      },
+    });
+    mocks.daemon.seedTarget({
+      id: 'laptop',
+      label: 'Laptop',
+      capabilities: ['exec', 'pty', 'signal', 'profiles', 'sync'],
+      status: 'offline',
+    });
+    mocks.daemon.seedTarget({ id: 'legacy', label: 'Legacy machine' });
+    app.targets = mocks.daemon.targets;
+
+    mocks.copyProfile.mockResolvedValueOnce({
+      profile: { ...active, sync: { id: 'sync-1', role: 'owner' } },
+      results: [
+        {
+          targetId: 'dev-box',
+          status: 'copied',
+          profile: {
+            id: 'remote-work',
+            provider: 'claude',
+            label: 'work',
+            status: 'active',
+            enabled: true,
+          },
+        },
+        { targetId: 'laptop', status: 'failed', errorCode: 'unreachable' },
+      ],
+    });
+
+    renderCard(active);
+    await fireEvent.click(screen.getByRole('button', { name: 'Actions for work' }));
+    await fireEvent.click(screen.getByRole('menuitem', { name: 'Copy to machines' }));
+
+    expect(screen.getByRole('dialog', { name: 'Copy work' })).toBeDefined();
+    expect(screen.queryByText('Legacy machine')).toBeNull();
+    expect(screen.queryByText('This machine')).toBeNull();
+
+    const devBox = screen.getByRole<HTMLInputElement>('checkbox', { name: /Development box/ });
+    const laptop = screen.getByRole<HTMLInputElement>('checkbox', { name: /Laptop/ });
+    const copyNone = screen.getByRole('button', { name: 'Copy profile' });
+    expect(devBox.checked).toBe(false);
+    expect(laptop.checked).toBe(false);
+    expect(copyNone.hasAttribute('disabled')).toBe(true);
+
+    await fireEvent.click(devBox);
+    await fireEvent.click(laptop);
+    await fireEvent.click(screen.getByRole('button', { name: 'Copy to 2 machines' }));
+
+    await waitFor(() =>
+      expect(mocks.copyProfile).toHaveBeenNthCalledWith(1, active.id, {
+        targetIds: ['dev-box', 'laptop'],
+      }),
+    );
+    expect(await screen.findByText('Copied as work')).toBeDefined();
+    expect(screen.getByText('Machine unavailable')).toBeDefined();
+    expect(devBox.checked).toBe(false);
+    expect(laptop.checked).toBe(true);
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Retry failed' }));
+    await waitFor(() =>
+      expect(mocks.copyProfile).toHaveBeenNthCalledWith(2, active.id, { targetIds: ['laptop'] }),
+    );
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Copy work' })).toBeNull());
+  });
+
+  it('links to target setup when no compatible machine is registered', async () => {
+    const active: Profile = { ...pending, status: 'active', label: 'work' };
+    renderCard(active);
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Actions for work' }));
+    await fireEvent.click(screen.getByRole('menuitem', { name: 'Copy to machines' }));
+
+    expect(screen.getByText('No compatible targets')).toBeDefined();
+    expect(screen.getByRole('link', { name: 'Manage targets' }).getAttribute('href')).toBe(
+      '#/targets',
+    );
+  });
+
+  it('does not offer credential copying for Cursor profiles', async () => {
+    const cursor: Profile = {
+      ...pending,
+      provider: 'cursor',
+      status: 'active',
+      label: 'cursor-work',
+    };
+    renderCard(cursor);
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Actions for cursor-work' }));
+    expect(screen.queryByRole('menuitem', { name: 'Copy to machines' })).toBeNull();
   });
 });
 

@@ -6,6 +6,7 @@
   import { toast, toastError } from '../toasts.svelte';
   import Badge from './Badge.svelte';
   import ConfirmDialog from './ConfirmDialog.svelte';
+  import CopyProfileModal from './CopyProfileModal.svelte';
   import IconButton from './IconButton.svelte';
   import Menu from './Menu.svelte';
   import type { MenuItem } from './Menu.svelte';
@@ -32,6 +33,7 @@
   let renameValue = $state('');
   let renameBusy = $state(false);
   let removing = $state(false);
+  let copying = $state(false);
   let removeBusy = $state(false);
   let purge = $state(false);
   /** The login wizard was reopened for this pending profile — never automatic. */
@@ -50,6 +52,9 @@
   const isDefault = $derived(app.defaultProfileIds[profile.provider] === profile.id);
   /** Only launchable profiles carry the star — the daemon rejects the rest. */
   const starrable = $derived(profile.enabled && profile.status === 'active');
+  const copyable = $derived(
+    profile.status === 'active' && (profile.provider === 'claude' || profile.provider === 'codex'),
+  );
   let settingDefault = $state(false);
 
   async function makeDefault(): Promise<void> {
@@ -135,6 +140,7 @@
     ...(profile.status === 'pending'
       ? [{ label: 'Resume login', onSelect: () => (resuming = true) }]
       : []),
+    ...(copyable ? [{ label: 'Copy to machines', onSelect: () => (copying = true) }] : []),
     { label: 'Rename', onSelect: openRename },
     { label: profile.enabled ? 'Disable' : 'Enable', onSelect: () => void toggleEnabled() },
     {
@@ -329,6 +335,10 @@
 
 {#if resuming}
   <WizardModal resumeProfileId={profile.id} onclose={() => (resuming = false)} />
+{/if}
+
+{#if copying}
+  <CopyProfileModal {profile} onclose={() => (copying = false)} />
 {/if}
 
 {#if removing}

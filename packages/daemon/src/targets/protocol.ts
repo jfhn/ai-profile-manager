@@ -17,6 +17,7 @@ import {
   type ExitStatus,
   type ProfileSync,
   type PtySpec,
+  type SyncEnrollment,
   type TargetProfileSummary,
   type TransportErrorCode,
 } from '@apm/shared';
@@ -56,6 +57,14 @@ export const agentRequestSchema = z.discriminatedUnion('type', [
     role: z.enum(['owner', 'replica']),
     bundle: credentialBundleSchema,
   }),
+  z.object({
+    type: z.literal('sync-enroll'),
+    syncId: z.string().uuid(),
+    role: z.enum(['owner', 'replica']),
+    provider: providerIdSchema,
+    label: z.string().trim().min(1).max(64),
+    bundle: credentialBundleSchema,
+  }),
 ]);
 
 export type AgentRequest =
@@ -68,7 +77,11 @@ export type AgentRequest =
   | { type: 'signal'; signal: (typeof TARGET_SIGNALS)[number] }
   | { type: 'close' }
   | { type: 'sync-pull'; syncId: string; role: ProfileSync['role'] }
-  | { type: 'sync-push'; syncId: string; role: ProfileSync['role']; bundle: CredentialBundle };
+  | { type: 'sync-push'; syncId: string; role: ProfileSync['role']; bundle: CredentialBundle }
+  | ({ type: 'sync-enroll'; syncId: string; role: ProfileSync['role'] } & Omit<
+      SyncEnrollment,
+      'sync'
+    >);
 
 export type AgentResponse =
   | { type: 'ready'; handleId?: string }
@@ -78,7 +91,8 @@ export type AgentResponse =
   | ({ type: 'exit' } & ExitStatus)
   | { type: 'error'; code: TransportErrorCode; message: string }
   | { type: 'sync-bundle'; bundle: CredentialBundle }
-  | { type: 'sync-applied'; applied: boolean };
+  | { type: 'sync-applied'; applied: boolean }
+  | { type: 'sync-enrolled'; profile: TargetProfileSummary };
 
 const targetProfileSchema = z.object({
   id: profileIdSchema,
@@ -140,6 +154,7 @@ export const agentResponseSchema = z.discriminatedUnion('type', [
   }),
   z.object({ type: z.literal('sync-bundle'), bundle: credentialBundleSchema }),
   z.object({ type: z.literal('sync-applied'), applied: z.boolean() }),
+  z.object({ type: z.literal('sync-enrolled'), profile: targetProfileSchema }),
 ]);
 
 export function encodeAgentMessage(message: AgentRequest | AgentResponse): string {

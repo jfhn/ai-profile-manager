@@ -23,8 +23,11 @@ import {
   type CredentialBundle,
   type ExecutionTarget,
   type Profile,
+  type ProfileCopyResponse,
+  type ProfileCopyTargetResult,
   type ProfileSync,
   type ProviderId,
+  type SyncEnrollRequest,
   type TargetTransport,
 } from '@apm/shared';
 import type { DaemonConfig } from '../config.js';
@@ -162,8 +165,74 @@ export function createSyncService(
     }
   }
 
+  /**
+   * Source-side one-click copy. Reading happens once, then only the explicitly
+   * selected targets receive an enrollment request. Failures are isolated so
+   * a multi-target copy reports exactly which machines succeeded.
+   */
+  async function copyProfile(profileId: string, targetIds: string[]): Promise<ProfileCopyResponse> {
+    const current = profiles.get(profileId);
+    if (!current) throw new ApiFailure(404, 'not-found', 'Profile not found');
+    if (current.status !== 'active') {
+      throw new ApiFailure(409, 'not-active', 'Only active profiles can be copied');
+    }
+    const credentialSync = adapterRegistry[current.provider]?.credentialSync;
+    if (!credentialSync) {
+      throw new ApiFailure(
+        400,
+        'sync-unsupported',
+        `Provider ${current.provider} does not support credential copying`,
+      );
+    }
+
+    let bundle: CredentialBundle | null;
+    try {
+      bundle = await credentialSync.readBundle(current.home);
+    } catch {
+      throw new ApiFailure(409, 'credentials-unavailable', 'Profile credentials could not be read');
+    }
+    if (!bundle) {
+      throw new ApiFailure(409, 'credentials-unavailable', 'Profile has no copyable credentials');
+    }
+    if (bundle.provider !== current.provider) {
+      throw new ApiFailure(409, 'provider-mismatch', 'Credential provider does not match profile');
+    }
+
+    const profile = profiles.enableSync(current.id);
+    const sync = profile.sync;
+    if (!sync) {
+      throw new ApiFailure(500, 'sync-not-enabled', 'Profile sync could not be enabled');
+    }
+
+    const results = await Promise.all(
+      targetIds.map(async (targetId): Promise<ProfileCopyTargetResult> => {
+        try {
+          const transport = targets.transportFor(targetId);
+          if (transport.target.kind !== 'remote' || !transport.supports('sync')) {
+            return { targetId, status: 'failed', errorCode: 'unsupported' };
+          }
+          const copied = await transport.syncEnroll({
+            sync,
+            provider: profile.provider,
+            label: profile.label,
+            bundle,
+          });
+          return { targetId, status: 'copied', profile: copied };
+        } catch (error: unknown) {
+          return {
+            targetId,
+            status: 'failed',
+            errorCode: isTransportError(error) ? error.code : 'copy-failed',
+          };
+        }
+      }),
+    );
+    return { profile, results };
+  }
+
   return {
     tick,
+    copyProfile,
 
     start() {
       if (timer) return;
@@ -196,6 +265,54 @@ export function createSyncService(
       unsubscribe = null;
     },
   };
+}
+
+/**
+ * Register an inbound copy through the target machine's own daemon, which is
+ * the sole writer of its profile store. Repeating the same enrollment is
+ * idempotent and only offers a newer credential rotation.
+ */
+export async function enrollProfile(
+  ctx: { config: DaemonConfig; profiles: ProfileService },
+  request: SyncEnrollRequest,
+  adapterRegistry: AdapterRegistry = defaultAdapters,
+): Promise<Profile> {
+  const credentialSync = adapterRegistry[request.provider]?.credentialSync;
+  if (!credentialSync) {
+    throw new ApiFailure(
+      400,
+      'sync-unsupported',
+      `Provider ${request.provider} does not support credential sync`,
+    );
+  }
+  if (request.bundle.provider !== request.provider) {
+    throw new ApiFailure(409, 'provider-mismatch', 'Credential provider does not match profile');
+  }
+
+  const existing = ctx.profiles.list().find((candidate) => candidate.sync?.id === request.syncId);
+  if (existing) {
+    if (existing.provider !== request.provider || existing.sync?.role !== 'replica') {
+      throw new ApiFailure(409, 'sync-conflict', 'The sync id belongs to a conflicting profile');
+    }
+    await credentialSync.writeBundle(existing.home, request.bundle, 'if-newer');
+    return existing;
+  }
+
+  const home = path.join(ctx.config.homesDir, crypto.randomUUID());
+  fs.mkdirSync(ctx.config.homesDir, { recursive: true, mode: 0o700 });
+  fs.mkdirSync(home, { recursive: false, mode: 0o700 });
+  try {
+    await credentialSync.writeBundle(home, request.bundle, 'if-newer');
+    return await ctx.profiles.createReplica({
+      provider: request.provider,
+      label: request.label,
+      home,
+      sync: { id: request.syncId, role: 'replica' },
+    });
+  } catch (error) {
+    fs.rmSync(home, { recursive: true, force: true });
+    throw error;
+  }
 }
 
 /**

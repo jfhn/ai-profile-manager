@@ -28,11 +28,12 @@
  * hand-edited file keeps working exactly as before.
  */
 import type { FastifyInstance } from 'fastify';
-import type { z } from 'zod';
+import { z } from 'zod';
 import {
   LOCAL_TARGET_ID,
   addTargetRequestSchema,
   syncAdoptRequestSchema,
+  syncEnrollRequestSchema,
   type CommandResult,
   type CommandSpec,
   type ExecOptions,
@@ -48,7 +49,8 @@ import { readConfiguredTargets, writeConfiguredTargets, type ConfiguredTarget } 
 import { findPeer, mergeCandidates, readTailnetPeers } from './discovery.js';
 import { toApiFailure } from './errors.js';
 import { createSshTransport } from './ssh.js';
-import { adoptProfile } from './sync.js';
+import { adoptProfile, enrollProfile } from './sync.js';
+import { createHostVerification } from './host-verification.js';
 
 export interface TargetRouteDeps {
   /**
@@ -74,12 +76,53 @@ export function registerTargetRoutes(
       ? deps.exec(spec, options)
       : ctx.targets.transportFor(LOCAL_TARGET_ID).exec(spec, options);
   const createTransport = deps.createTransport ?? createSshTransport;
+  const verification = createHostVerification();
+  app.addHook('onClose', async () => verification.close());
+
+  app.post<{ Params: { id: string } }>('/api/targets/:id/host-verification', async (req) => {
+    try {
+      return await verification.begin(ctx.targets.transportFor(req.params.id).target);
+    } catch (error) {
+      throw toApiFailure(error);
+    }
+  });
+  app.post<{ Params: { id: string } }>(
+    '/api/targets/:id/host-verification/confirm',
+    async (req, reply) => {
+      const body = z
+        .object({ challengeId: z.string().uuid(), accept: z.boolean() })
+        .strict()
+        .safeParse(req.body);
+      if (!body.success) throw new ApiFailure(400, 'bad-request', 'Invalid SSH confirmation');
+      try {
+        await verification.confirm(
+          ctx.targets.transportFor(req.params.id).target,
+          body.data.challengeId,
+          body.data.accept,
+        );
+      } catch (error) {
+        throw toApiFailure(error);
+      }
+      return reply.code(204).send();
+    },
+  );
 
   app.get('/api/targets', async (): Promise<TargetsResponse> => ({ targets: ctx.targets.list() }));
 
   app.get('/api/targets/candidates', async (): Promise<TargetCandidatesResponse> => {
     const peers = await readTailnetPeers(execOnHub);
     return { candidates: mergeCandidates(peers, ctx.targets.list()) };
+  });
+
+  // Private in purpose (normal clients never need it), authenticated like all
+  // API routes: the local SSH agent uses it so the daemon remains the sole
+  // writer of profiles.json while importing an encrypted-transport bundle.
+  app.post('/api/sync/enroll', async (req, reply): Promise<Profile> => {
+    const parsed = syncEnrollRequestSchema.safeParse(req.body ?? {});
+    if (!parsed.success) throw new ApiFailure(400, 'bad-request', formatIssues(parsed.error));
+    const profile = await enrollProfile(ctx, parsed.data);
+    reply.code(201);
+    return profile;
   });
 
   app.get<{ Params: { id: string } }>(

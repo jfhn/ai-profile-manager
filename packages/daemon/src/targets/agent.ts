@@ -14,7 +14,9 @@ import { adapters } from '@apm/collectors';
 import {
   credentialBundleSchema,
   isTransportError,
+  type Profile,
   type PtyHandle,
+  type SyncEnrollRequest,
   type TransportErrorCode,
 } from '@apm/shared';
 import { killProcessGroup } from './local.js';
@@ -28,6 +30,7 @@ import {
   type AgentResponse,
 } from './protocol.js';
 import { createLocalTransport } from './local.js';
+import { apiRequest, daemonOrStart } from '../cli/daemon-client.js';
 
 /** The pty this agent is serving, if any — the thing teardown has to reach. */
 let livePty: PtyHandle | null = null;
@@ -82,16 +85,30 @@ export async function runTargetAgent(): Promise<void> {
 
   const config = resolveConfig();
 
-  // Sync requests never construct a ProfileService: its construction may
+  // Pull/push requests never construct a ProfileService: its construction may
   // persist migrations, and an agent-side store write would race a running
   // daemon's in-memory copy. serveSync reads the store and touches only the
-  // profile's credential file through the provider adapter.
+  // profile's credential file through the provider adapter. Enrollment below
+  // goes through the local daemon precisely because it mutates the store.
   if (parsed.type === 'sync-pull' || parsed.type === 'sync-push') {
     try {
       await serveSync(parsed, config.profilesFile);
     } catch (error: unknown) {
       if (isTransportError(error)) sendError(error.code, error.message);
       else sendError('spawn-failed', error instanceof Error ? error.message : String(error));
+    } finally {
+      input.close();
+    }
+    return;
+  }
+
+  if (parsed.type === 'sync-enroll') {
+    try {
+      await serveSyncEnroll(parsed);
+    } catch {
+      // Do not echo daemon or filesystem errors across the transport: they may
+      // contain target-local paths or values. The source gets a stable code.
+      sendError('spawn-failed', 'The target could not register the copied profile');
     } finally {
       input.close();
     }
@@ -125,6 +142,29 @@ export async function runTargetAgent(): Promise<void> {
     input.close();
     await transport.close();
   }
+}
+
+async function serveSyncEnroll(
+  request: Extract<AgentRequest, { type: 'sync-enroll' }>,
+): Promise<void> {
+  const run = await daemonOrStart();
+  const body: SyncEnrollRequest = {
+    syncId: request.syncId,
+    provider: request.provider,
+    label: request.label,
+    bundle: request.bundle,
+  };
+  const profile = await apiRequest<Profile>(run, 'POST', '/api/sync/enroll', body);
+  send({
+    type: 'sync-enrolled',
+    profile: {
+      id: profile.id,
+      provider: profile.provider,
+      label: profile.label,
+      status: profile.status,
+      enabled: profile.enabled,
+    },
+  });
 }
 
 async function serveSync(

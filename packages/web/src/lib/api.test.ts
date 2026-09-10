@@ -56,6 +56,24 @@ describe('web API response contract', () => {
     );
   });
 
+  it('copies a profile only to the explicitly selected targets', async () => {
+    const fetchMock = vi.fn(async () =>
+      jsonResponse({ profile: { id: 'profile-1' }, results: [] }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    const { api } = await import('./api');
+
+    await api.copyProfile('profile /1', { targetIds: ['dev-box', 'laptop'] });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/profiles/profile%20%2F1/copy',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ targetIds: ['dev-box', 'laptop'] }),
+      }),
+    );
+  });
+
   it('treats the profile refresh 204 as a completed command with no response body', async () => {
     vi.stubGlobal(
       'fetch',

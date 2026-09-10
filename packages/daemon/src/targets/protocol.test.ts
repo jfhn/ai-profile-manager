@@ -106,6 +106,16 @@ describe('target agent protocol', () => {
     const push: AgentRequest = { type: 'sync-push', syncId, role: 'owner', bundle };
     expect(agentRequestSchema.parse(JSON.parse(encodeAgentMessage(push)))).toEqual(push);
 
+    const enroll: AgentRequest = {
+      type: 'sync-enroll',
+      syncId,
+      role: 'owner',
+      provider: 'claude',
+      label: 'work',
+      bundle,
+    };
+    expect(agentRequestSchema.parse(JSON.parse(encodeAgentMessage(enroll)))).toEqual(enroll);
+
     expect(agentResponseSchema.parse({ type: 'sync-bundle', bundle })).toEqual({
       type: 'sync-bundle',
       bundle,
@@ -113,6 +123,17 @@ describe('target agent protocol', () => {
     expect(agentResponseSchema.parse({ type: 'sync-applied', applied: false })).toEqual({
       type: 'sync-applied',
       applied: false,
+    });
+    const profile = {
+      id: 'copied-profile',
+      provider: 'claude',
+      label: 'work',
+      status: 'active',
+      enabled: true,
+    } as const;
+    expect(agentResponseSchema.parse({ type: 'sync-enrolled', profile })).toEqual({
+      type: 'sync-enrolled',
+      profile,
     });
 
     // Not a UUID: rejected before it can reach store matching.

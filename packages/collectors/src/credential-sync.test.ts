@@ -173,6 +173,7 @@ describe('credential sync (codex)', () => {
     writeFileAt(
       file,
       {
+        auth_mode: 'chatgpt',
         OPENAI_API_KEY: 'machine-local-key',
         tokens: { access_token: 'old', refresh_token: 'old-r' },
         last_refresh: new Date(T0).toISOString(),
@@ -185,6 +186,7 @@ describe('credential sync (codex)', () => {
       provider: 'codex',
       rotatedAt: new Date(T1).toISOString(),
       payload: {
+        auth_mode: 'chatgpt',
         tokens: { access_token: 'old', refresh_token: 'old-r' },
         last_refresh: new Date(T0).toISOString(),
       },
@@ -194,17 +196,37 @@ describe('credential sync (codex)', () => {
       provider: 'codex',
       rotatedAt: new Date(T2).toISOString(),
       payload: {
+        auth_mode: 'chatgpt',
         tokens: { access_token: 'new', refresh_token: 'new-r' },
         last_refresh: new Date(T2).toISOString(),
       },
     };
     expect(await sync.writeBundle(dir, rotated, 'if-newer')).toBe('applied');
     expect(JSON.parse(fs.readFileSync(file, 'utf8'))).toEqual({
+      auth_mode: 'chatgpt',
       OPENAI_API_KEY: 'machine-local-key',
       tokens: { access_token: 'new', refresh_token: 'new-r' },
       last_refresh: new Date(T2).toISOString(),
     });
     expect(Math.trunc(fs.statSync(file).mtimeMs)).toBe(T2);
+  });
+
+  it('normalizes legacy token files to explicit ChatGPT auth on a fresh home', async () => {
+    const source = home();
+    writeFileAt(
+      path.join(source, 'auth.json'),
+      { tokens: { access_token: 'old', refresh_token: 'old-r' } },
+      T1,
+    );
+    const bundle = await sync.readBundle(source);
+    expect(bundle?.payload).toMatchObject({ auth_mode: 'chatgpt' });
+
+    const target = home();
+    expect(await sync.writeBundle(target, bundle!, 'if-newer')).toBe('applied');
+    expect(JSON.parse(fs.readFileSync(path.join(target, 'auth.json'), 'utf8'))).toEqual({
+      auth_mode: 'chatgpt',
+      tokens: { access_token: 'old', refresh_token: 'old-r' },
+    });
   });
 });
 
