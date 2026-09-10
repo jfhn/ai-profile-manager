@@ -19,6 +19,8 @@ so open dashboards can refetch current state. Terminal data uses WebSockets.
 Remote commands cross only approved target transports.
 For profile copies, the CLI can invoke the SSH transport's host-verification
 prompt. OpenSSH records the accepted key before the CLI retries through the API.
+The browser can answer the same OpenSSH prompt through a short-lived challenge
+in `targets/host-verification.ts`. Acceptance stays bound to that live connection.
 
 Profiles contain provider config homes, not CLI installations. Sessions add the
 selected config-home variable to a process and resolve the provider CLI from

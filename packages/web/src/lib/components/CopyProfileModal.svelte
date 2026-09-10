@@ -1,5 +1,10 @@
 <script lang="ts">
-  import type { ExecutionTarget, Profile, ProfileCopyTargetResult } from '@apm/shared';
+  import type {
+    ExecutionTarget,
+    Profile,
+    ProfileCopyTargetResult,
+    SshHostVerification,
+  } from '@apm/shared';
   import { api, errorMessage } from '../api';
   import { app, LOCAL_TARGET_ID } from '../stores.svelte';
   import { toast, toastError } from '../toasts.svelte';
@@ -19,6 +24,45 @@
   let results = $state<ProfileCopyTargetResult[]>([]);
   let requestError = $state<string | null>(null);
   let busy = $state(false);
+  let confirmation = $state<
+    (Extract<SshHostVerification, { state: 'confirmation' }> & { targetId: string }) | null
+  >(null);
+
+  async function verifyHost(targetId: string): Promise<void> {
+    if (busy) return;
+    busy = true;
+    requestError = null;
+    let verified = false;
+    try {
+      const result = await api.verifyHost(targetId);
+      if (result.state === 'confirmation') confirmation = { ...result, targetId };
+      else verified = true;
+    } catch (error) {
+      requestError = errorMessage(error);
+    } finally {
+      busy = false;
+    }
+    if (verified) await copy();
+  }
+
+  async function confirmHost(accept: boolean): Promise<void> {
+    if (!confirmation || busy) return;
+    busy = true;
+    try {
+      await api.confirmHost(confirmation.targetId, {
+        challengeId: confirmation.challengeId,
+        accept,
+      });
+      confirmation = null;
+    } catch (error) {
+      confirmation = null;
+      requestError = errorMessage(error);
+      return;
+    } finally {
+      busy = false;
+    }
+    if (accept) await copy();
+  }
 
   /** Only explicitly approved remotes advertising the enrollment capability are offered. */
   const targets = $derived(
@@ -157,99 +201,133 @@
   }
 </script>
 
-<Modal
-  title={`Copy ${profile.label}`}
-  subtitle={`Send ${app.providerLabel(profile.provider)} credentials to selected machines`}
-  width={520}
-  {onclose}
->
-  <div class="content">
-    <p class="scope-note">
-      Only provider credentials are sent over your existing SSH connection. Each destination gets a
-      managed profile; chats, history, projects, caches, and other files stay here.
+{#if confirmation}
+  <Modal
+    title={`Trust ${app.targetLabel(confirmation.targetId)}?`}
+    subtitle={confirmation.address}
+    onclose={() => void confirmHost(false)}
+    width={560}
+  >
+    <p>
+      Compare this fingerprint with the machine you intend to connect to. Trusting it saves the key
+      for future SSH connections.
     </p>
-
-    {#if targets.length === 0}
-      <div class="empty surface">
-        <p class="empty-title">No compatible targets</p>
-        <p>
-          Add an approved remote machine with a current version of apm, then copy this profile from
-          here.
-        </p>
-      </div>
-    {:else}
-      <div class="picker-head">
-        <span class="label">Machines</span>
-        <button
-          type="button"
-          class="select-link"
-          onclick={selected.length === targets.length ? clearSelection : selectAll}
-        >
-          {selected.length === targets.length ? 'Clear' : 'Select all'}
-        </button>
-      </div>
-
-      <div class="targets surface">
-        {#each targets as target (target.id)}
-          {@const result = resultFor(target.id)}
-          <label class="target" class:selected={selected.includes(target.id)}>
-            <input
-              type="checkbox"
-              checked={selected.includes(target.id)}
-              onchange={(event) => toggle(target.id, event.currentTarget.checked)}
-            />
-            <StatusDot tone={targetTone(target)} />
-            <span class="names">
-              <span class="name truncate">{target.label}</span>
-              <span class="address mono truncate">{target.identity.address ?? target.id}</span>
-            </span>
-            <Badge tone={target.status === 'online' ? 'success' : 'neutral'}>{target.status}</Badge>
-            {#if result?.status === 'copied'}
-              <span class="result success">Copied as {result.profile.label}</span>
-            {:else if result?.status === 'failed'}
-              <span class="result failed">{failureMessage(result.errorCode)}</span>
-            {/if}
-          </label>
-        {/each}
-      </div>
-
-      {#if incompatibleCount > 0}
-        <p class="hint">
-          {incompatibleCount} registered {incompatibleCount === 1 ? 'machine is' : 'machines are'}
-          hidden because credential copying is unavailable there.
-        </p>
-      {/if}
-    {/if}
-
-    {#if requestError}
-      <p class="request-error" role="alert">{requestError}</p>
-    {/if}
-    {#if results.some((result) => result.status === 'failed' && result.errorCode === 'host-key-verification-failed')}
-      <p class="hint">
-        Run the same profile copy from an interactive APM terminal command to verify the SSH
-        fingerprint.
-      </p>
-    {/if}
-  </div>
-
-  {#snippet footer()}
-    <Button variant="ghost" onclick={onclose}>Cancel</Button>
-    {#if targets.length === 0}
-      <Button variant="primary" href="#/targets">Manage targets</Button>
-    {:else}
-      <Button
-        variant="primary"
-        loading={busy}
-        disabled={selected.length === 0}
-        onclick={() => void copy()}
+    <pre class="fingerprint">{confirmation.prompt}</pre>
+    {#snippet footer()}
+      <Button variant="ghost" disabled={busy} onclick={() => void confirmHost(false)}>Cancel</Button
       >
-        {submitLabel}
-      </Button>
-    {/if}
-  {/snippet}
-</Modal>
+      <Button variant="primary" loading={busy} onclick={() => void confirmHost(true)}
+        >Trust and retry</Button
+      >
+    {/snippet}
+  </Modal>
+{:else}
+  <Modal
+    title={`Copy ${profile.label}`}
+    subtitle={`Send ${app.providerLabel(profile.provider)} credentials to selected machines`}
+    width={520}
+    {onclose}
+  >
+    <div class="content">
+      <p class="scope-note">
+        Only provider credentials are sent over your existing SSH connection. Each destination gets
+        a managed profile; chats, history, projects, caches, and other files stay here.
+      </p>
+
+      {#if targets.length === 0}
+        <div class="empty surface">
+          <p class="empty-title">No compatible targets</p>
+          <p>
+            Add an approved remote machine with a current version of apm, then copy this profile
+            from here.
+          </p>
+        </div>
+      {:else}
+        <div class="picker-head">
+          <span class="label">Machines</span>
+          <button
+            type="button"
+            class="select-link"
+            onclick={selected.length === targets.length ? clearSelection : selectAll}
+          >
+            {selected.length === targets.length ? 'Clear' : 'Select all'}
+          </button>
+        </div>
+
+        <div class="targets surface">
+          {#each targets as target (target.id)}
+            {@const result = resultFor(target.id)}
+            <label class="target" class:selected={selected.includes(target.id)}>
+              <input
+                type="checkbox"
+                checked={selected.includes(target.id)}
+                onchange={(event) => toggle(target.id, event.currentTarget.checked)}
+              />
+              <StatusDot tone={targetTone(target)} />
+              <span class="names">
+                <span class="name truncate">{target.label}</span>
+                <span class="address mono truncate">{target.identity.address ?? target.id}</span>
+              </span>
+              <Badge tone={target.status === 'online' ? 'success' : 'neutral'}
+                >{target.status}</Badge
+              >
+              {#if result?.status === 'copied'}
+                <span class="result success">Copied as {result.profile.label}</span>
+              {:else if result?.status === 'failed'}
+                <span class="result failed">{failureMessage(result.errorCode)}</span>
+              {/if}
+            </label>
+          {/each}
+        </div>
+
+        {#if incompatibleCount > 0}
+          <p class="hint">
+            {incompatibleCount} registered {incompatibleCount === 1 ? 'machine is' : 'machines are'}
+            hidden because credential copying is unavailable there.
+          </p>
+        {/if}
+      {/if}
+
+      {#if requestError}
+        <p class="request-error" role="alert">{requestError}</p>
+      {/if}
+      {#each results as result (result.targetId)}
+        {#if result.status === 'failed' && result.errorCode === 'host-key-verification-failed'}
+          <Button loading={busy} onclick={() => void verifyHost(result.targetId)}
+            >Verify {app.targetLabel(result.targetId)}</Button
+          >
+        {/if}
+      {/each}
+    </div>
+
+    {#snippet footer()}
+      <Button variant="ghost" onclick={onclose}>Cancel</Button>
+      {#if targets.length === 0}
+        <Button variant="primary" href="#/targets">Manage targets</Button>
+      {:else}
+        <Button
+          variant="primary"
+          loading={busy}
+          disabled={selected.length === 0}
+          onclick={() => void copy()}
+        >
+          {submitLabel}
+        </Button>
+      {/if}
+    {/snippet}
+  </Modal>
+{/if}
 
 <style>
+  .fingerprint {
+    margin-top: 12px;
+    padding: 12px;
+    background: var(--fill-4);
+    border-radius: var(--radius-sm);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    font-size: 12px;
+  }
   .content {
     display: flex;
     flex-direction: column;

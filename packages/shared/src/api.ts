@@ -152,6 +152,15 @@ export interface ProfileCopyRequest {
   targetIds: TargetId[];
 }
 
+export type SshHostVerification =
+  | { state: 'verified' }
+  | { state: 'confirmation'; challengeId: string; address: string; prompt: string };
+
+export interface ConfirmSshHostRequest {
+  challengeId: string;
+  accept: boolean;
+}
+
 export type ProfileCopyTargetResult =
   | { targetId: TargetId; status: 'copied'; profile: TargetProfileSummary }
   | { targetId: TargetId; status: 'failed'; errorCode: string };

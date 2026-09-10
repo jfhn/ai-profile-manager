@@ -15,6 +15,8 @@ const mocks = vi.hoisted(() => ({
   refreshedProfiles: [] as string[],
   setDefault: null as unknown as ReturnType<typeof vi.fn>,
   copyProfile: null as unknown as ReturnType<typeof vi.fn>,
+  verifyHost: vi.fn(),
+  confirmHost: vi.fn(),
 }));
 
 // The card pulls in the real api module transitively (via stores and toasts),
@@ -36,6 +38,8 @@ vi.mock('../api', () => ({
     setDefault: (provider: string, body: { profileId: string | null }) =>
       mocks.setDefault(provider, body),
     copyProfile: (id: string, body: ProfileCopyRequest) => mocks.copyProfile(id, body),
+    verifyHost: mocks.verifyHost,
+    confirmHost: mocks.confirmHost,
     overview: async () => ({
       providers: [],
       profiles: mocks.daemon.profiles,
@@ -57,6 +61,8 @@ beforeEach(() => {
   vi.useFakeTimers({ shouldAdvanceTime: true });
   mocks.daemon = new FakeDaemon();
   mocks.refreshedProfiles = [];
+  mocks.verifyHost.mockReset();
+  mocks.confirmHost.mockReset();
   mocks.setDefault = vi.fn(async (provider: string, body: { profileId: string | null }) => ({
     defaultProfileIds: { [provider]: body.profileId },
   }));
@@ -227,6 +233,52 @@ describe('ProfileCard: the default star', () => {
 });
 
 describe('ProfileCard: copying credentials to machines', () => {
+  it('shows the SSH fingerprint and retries only after explicit trust', async () => {
+    const active: Profile = { ...pending, status: 'active', label: 'work' };
+    app.targets = [
+      mocks.daemon.seedTarget({ id: 'server', label: 'Server', capabilities: ['sync'] }),
+    ];
+    mocks.copyProfile.mockResolvedValueOnce({
+      profile: active,
+      results: [
+        { targetId: 'server', status: 'failed', errorCode: 'host-key-verification-failed' },
+      ],
+    });
+    mocks.verifyHost.mockResolvedValue({
+      state: 'confirmation',
+      challengeId: 'challenge',
+      address: 'server.tailnet.ts.net',
+      prompt: 'ED25519 key fingerprint is SHA256:example',
+    });
+    mocks.confirmHost.mockResolvedValue(undefined);
+    renderCard(active);
+    await fireEvent.click(screen.getByRole('button', { name: 'Actions for work' }));
+    await fireEvent.click(screen.getByRole('menuitem', { name: 'Copy to machines' }));
+    await fireEvent.click(screen.getByRole('checkbox', { name: /Server/ }));
+    await fireEvent.click(screen.getByRole('button', { name: 'Copy to 1 machine' }));
+    await fireEvent.click(await screen.findByRole('button', { name: 'Verify Server' }));
+    await screen.findByText('ED25519 key fingerprint is SHA256:example');
+    expect(mocks.confirmHost).not.toHaveBeenCalled();
+    expect(mocks.copyProfile).toHaveBeenCalledTimes(1);
+    await fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    await waitFor(() =>
+      expect(mocks.confirmHost).toHaveBeenCalledWith('server', {
+        challengeId: 'challenge',
+        accept: false,
+      }),
+    );
+    expect(mocks.copyProfile).toHaveBeenCalledTimes(1);
+    await fireEvent.click(screen.getByRole('button', { name: 'Verify Server' }));
+    await fireEvent.click(await screen.findByRole('button', { name: 'Trust and retry' }));
+    await waitFor(() =>
+      expect(mocks.confirmHost).toHaveBeenLastCalledWith('server', {
+        challengeId: 'challenge',
+        accept: true,
+      }),
+    );
+    await waitFor(() => expect(mocks.copyProfile).toHaveBeenCalledTimes(2));
+  });
+
   it('copies to explicit compatible selections and retries only a failed machine', async () => {
     const active: Profile = { ...pending, status: 'active', label: 'work' };
     mocks.daemon.profiles = mocks.daemon.profiles.map((profile) =>

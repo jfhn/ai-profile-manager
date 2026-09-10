@@ -212,8 +212,9 @@ dashboard: choose **Copy to machines**, then select the destinations.
 
 If SSH has not verified the destination hostname, an interactive `apm profile
 copy` shows OpenSSH's fingerprint confirmation and retries after acceptance.
-Changed keys remain blocked. In the dashboard or a script, host verification
-is reported as a separate error; run the copy in a terminal to confirm the key.
+Changed keys remain blocked. In the dashboard, choose **Verify** on the failed
+machine, compare the displayed fingerprint, then **Trust and retry**. The
+confirmation expires after two minutes. Scripts report a host-verification error.
 
 `--to` is required and repeatable. Copying is opt-in; apm never enrolls every
 known machine by default. The command sends only the provider adapter's

@@ -67,6 +67,13 @@ it to a fixed executable and `update` argument. It does not accept shell text,
 package names, URLs, versions, or elevation. Only one update runs at a time.
 
 Approval is the boundary in the target endpoints, and it is always explicit.
+
+For an approved SSH target, `POST /api/targets/:id/host-verification` returns
+`SshHostVerification`: either `verified` or a fingerprint confirmation with a
+challenge id. `POST /api/targets/:id/host-verification/confirm` accepts
+`ConfirmSshHostRequest` and returns 204. Challenges expire after two minutes
+and can be answered once. OpenSSH saves the key only after acceptance on the
+same live connection. Changed keys remain blocked.
 `GET /api/targets/candidates` lists the machines this machine's tailnet already
 lets it see (`tailscale status --json`, run here) and grants nothing: a
 candidate carries a hostname, a MagicDNS name, online state, OS and whether it

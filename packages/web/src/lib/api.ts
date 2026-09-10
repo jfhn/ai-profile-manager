@@ -1,5 +1,7 @@
 import type {
   AddTargetRequest,
+  ConfirmSshHostRequest,
+  SshHostVerification,
   ApiError,
   ConfirmWizardRequest,
   CliToolsResponse,
@@ -161,6 +163,15 @@ export const api = {
   recentDirs: () => request<RecentDirsResponse>('/api/recent-dirs'),
 
   targets: async () => (await request<TargetsResponse>('/api/targets')).targets,
+  verifyHost: (id: string) =>
+    request<SshHostVerification>(`/api/targets/${encodeURIComponent(id)}/host-verification`, {
+      method: 'POST',
+    }),
+  confirmHost: (id: string, body: ConfirmSshHostRequest) =>
+    request<void>(`/api/targets/${encodeURIComponent(id)}/host-verification/confirm`, {
+      method: 'POST',
+      ...json(body),
+    }),
   /** Machines on this hub's tailnet. Listing them approves nothing. */
   targetCandidates: async () =>
     (await request<TargetCandidatesResponse>('/api/targets/candidates')).candidates,
