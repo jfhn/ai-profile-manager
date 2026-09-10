@@ -82,6 +82,8 @@
 
   function failureMessage(code: string): string {
     switch (code) {
+      case 'host-key-verification-failed':
+        return 'SSH host verification failed';
       case 'unreachable':
       case 'closed':
       case 'timeout':
@@ -221,6 +223,12 @@
 
     {#if requestError}
       <p class="request-error" role="alert">{requestError}</p>
+    {/if}
+    {#if results.some((result) => result.status === 'failed' && result.errorCode === 'host-key-verification-failed')}
+      <p class="hint">
+        Run the same profile copy from an interactive APM terminal command to verify the SSH
+        fingerprint.
+      </p>
     {/if}
   </div>
 

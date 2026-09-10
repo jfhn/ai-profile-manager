@@ -49,6 +49,7 @@ import {
 } from './parse.js';
 import { daemonOrStart, apiRequest } from './daemon-client.js';
 import { runProfileAdd } from './profile-add.js';
+import { verifySshHost } from '../targets/ssh.js';
 
 const DAEMON_STOP_TIMEOUT_MS = 10_000;
 const ESCAPE_SEQUENCE_TIMEOUT_MS = 30;
@@ -115,7 +116,27 @@ async function runCopy(run: RunFileData, profileRef: string, targetIds: string[]
     `/api/profiles/${encodeURIComponent(profile.id)}/copy`,
     { targetIds },
   );
-  for (const result of response.results) {
+  for (let result of response.results) {
+    if (
+      result.status === 'failed' &&
+      result.errorCode === 'host-key-verification-failed' &&
+      process.stdin.isTTY &&
+      process.stderr.isTTY
+    ) {
+      const { targets } = await apiRequest<TargetsResponse>(run, 'GET', '/api/targets');
+      const target = targets.find((candidate) => candidate.id === result.targetId);
+      if (target && (await verifySshHost(target))) {
+        const retry = await apiRequest<ProfileCopyResponse>(
+          run,
+          'POST',
+          `/api/profiles/${encodeURIComponent(profile.id)}/copy`,
+          { targetIds: [target.id] },
+        );
+        const retried = retry.results[0];
+        if (!retried) throw new Error(`Copy response omitted target "${target.id}"`);
+        result = retried;
+      }
+    }
     if (result.status === 'copied') {
       console.log(
         `copied ${response.profile.provider} profile "${response.profile.label}" to target ` +

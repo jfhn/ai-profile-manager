@@ -11,6 +11,7 @@ const API_ERRORS: Record<TransportErrorCode, { status: number; code: string }> =
   'target-not-approved': { status: 403, code: 'target-not-approved' },
   unsupported: { status: 400, code: 'target-unsupported' },
   unreachable: { status: 502, code: 'target-unreachable' },
+  'host-key-verification-failed': { status: 502, code: 'host-key-verification-failed' },
   unauthorized: { status: 502, code: 'target-unauthorized' },
   closed: { status: 409, code: 'target-closed' },
   'profile-not-found': { status: 404, code: 'profile-not-found' },

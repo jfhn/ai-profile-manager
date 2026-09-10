@@ -44,6 +44,38 @@ export interface SshTargetOptions {
   approved: boolean;
 }
 
+/** OpenSSH owns fingerprint display, confirmation, and known_hosts writes. */
+export async function verifySshHost(target: ExecutionTarget): Promise<boolean> {
+  const address = target.identity.address;
+  if (target.kind !== 'remote' || !target.approved || target.transport !== 'ssh' || !address) {
+    throw new Error(`SSH verification is unavailable for target "${target.id}"`);
+  }
+  return new Promise((resolve) => {
+    const child = spawn(
+      'ssh',
+      [
+        '-T',
+        '-o',
+        'BatchMode=no',
+        '-o',
+        'StrictHostKeyChecking=ask',
+        '-o',
+        'PasswordAuthentication=no',
+        '-o',
+        'KbdInteractiveAuthentication=no',
+        '-o',
+        `ConnectTimeout=${CONNECT_TIMEOUT_SECONDS}`,
+        '--',
+        address,
+        'true',
+      ],
+      { shell: false, stdio: 'inherit' },
+    );
+    child.on('error', () => resolve(false));
+    child.on('close', (code) => resolve(code === 0));
+  });
+}
+
 export function createSshTransport(options: SshTargetOptions): TargetTransport {
   const capabilities: TargetCapability[] = ['exec', 'pty', 'signal', 'profiles', 'sync'];
   const target: ExecutionTarget = {
@@ -177,6 +209,10 @@ export function createSshTransport(options: SshTargetOptions): TargetTransport {
     guard();
     const child = openAgent();
     return new Promise((resolve, reject) => {
+      let diagnostics = '';
+      child.stderr.on('data', (chunk: Buffer) => {
+        diagnostics = (diagnostics + chunk.toString('utf8')).slice(-8192);
+      });
       let settled = false;
       const timer = setTimeout(() => {
         child.kill();
@@ -207,9 +243,18 @@ export function createSshTransport(options: SshTargetOptions): TargetTransport {
         resolve(response as Extract<AgentResponse, { type: T }>);
       });
       child.on('error', () => rejectOnce(unreachable()));
-      child.stdin.on('error', () => rejectOnce(unreachable()));
+      // SSH stderr is complete at close; EPIPE alone cannot identify the failure.
+      child.stdin.on('error', () => {});
       child.on('close', () => {
-        if (!settled) rejectOnce(unreachable());
+        if (!settled)
+          rejectOnce(
+            /Host key verification failed|REMOTE HOST IDENTIFICATION HAS CHANGED/.test(diagnostics)
+              ? failure(
+                  'host-key-verification-failed',
+                  `SSH host verification failed for "${target.id}"`,
+                )
+              : unreachable(),
+          );
       });
       child.stdin.end(encodeAgentMessage(request));
     });
@@ -229,7 +274,7 @@ export function createSshTransport(options: SshTargetOptions): TargetTransport {
         'apm',
         '__target-agent',
       ],
-      { shell: false, stdio: ['pipe', 'pipe', 'pipe'] },
+      { shell: false, stdio: ['pipe', 'pipe', 'pipe'], env: { ...process.env, LC_ALL: 'C' } },
     );
     // Authentication diagnostics stay on the daemon side and cannot block the
     // child by filling an unread pipe.

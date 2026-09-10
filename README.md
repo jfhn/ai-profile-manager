@@ -210,6 +210,11 @@ apm profile copy codex:personal --to devbox --to laptop
 The same action is available from a Claude or Codex profile's menu on the
 dashboard: choose **Copy to machines**, then select the destinations.
 
+If SSH has not verified the destination hostname, an interactive `apm profile
+copy` shows OpenSSH's fingerprint confirmation and retries after acceptance.
+Changed keys remain blocked. In the dashboard or a script, host verification
+is reported as a separate error; run the copy in a terminal to confirm the key.
+
 `--to` is required and repeatable. Copying is opt-in; apm never enrolls every
 known machine by default. The command sends only the provider adapter's
 credential subset plus the profile provider and label. The target daemon puts

@@ -17,6 +17,8 @@ The CLI and browser call the authenticated loopback API. Profile mutations and
 usage changes pass through daemon services. The daemon emits server-sent events
 so open dashboards can refetch current state. Terminal data uses WebSockets.
 Remote commands cross only approved target transports.
+For profile copies, the CLI can invoke the SSH transport's host-verification
+prompt. OpenSSH records the accepted key before the CLI retries through the API.
 
 Profiles contain provider config homes, not CLI installations. Sessions add the
 selected config-home variable to a process and resolve the provider CLI from

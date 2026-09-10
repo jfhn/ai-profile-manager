@@ -153,6 +153,7 @@ export const TRANSPORT_ERROR_CODES = [
   'unsupported',
   /** The target could not be reached at all. */
   'unreachable',
+  'host-key-verification-failed',
   /** The target refused our identity. */
   'unauthorized',
   /** The transport was closed (or the handle was). */
