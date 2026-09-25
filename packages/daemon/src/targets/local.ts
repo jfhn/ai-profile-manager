@@ -32,7 +32,7 @@ import {
   type TargetTransport,
 } from '@apm/shared';
 import type { ProfileService } from '../context.js';
-import { profileShimDirectory } from '../core/profilePaths.js';
+import { codexControlSocketFits, profileShimDirectory } from '../core/profilePaths.js';
 import { childProcessEnv } from '../process-env.js';
 
 const DEFAULT_TERM = 'xterm-256color';
@@ -109,7 +109,20 @@ export function createLocalTransport(deps: LocalTransportDeps): TargetTransport 
     if (!isExecutable(command, env.PATH)) {
       throw fail('command-not-found', `Command not found: ${command}`);
     }
-    return { command, args: spec.argv.slice(1), cwd, env };
+    const args = spec.argv.slice(1);
+    const codexHome = Object.hasOwn(profileEnv, 'CODEX_HOME') ? env.CODEX_HOME : undefined;
+    if (
+      process.platform !== 'win32' &&
+      path.basename(command) === 'codex' &&
+      codexHome &&
+      !args.includes('--no-daemon')
+    ) {
+      // Codex resolves CODEX_HOME before opening this socket, so a short symlink cannot help.
+      if (!codexControlSocketFits(fs.realpathSync(codexHome))) {
+        args.unshift('--no-daemon');
+      }
+    }
+    return { command, args, cwd, env };
   }
 
   return {

@@ -15,8 +15,6 @@
  * tried once and then passed over instead of starving better candidates.
  */
 import fs from 'node:fs';
-import path from 'node:path';
-import crypto from 'node:crypto';
 import { adapters as defaultAdapters, stablePayloadKey } from '@apm/collectors';
 import {
   isTransportError,
@@ -39,6 +37,7 @@ import {
   type UsageService,
 } from '../context.js';
 import type { AdapterRegistry } from '../core/profiles.js';
+import { createManagedHome } from '../core/profilePaths.js';
 import { toApiFailure } from './errors.js';
 import type { TargetRegistry } from './registry.js';
 
@@ -298,9 +297,7 @@ export async function enrollProfile(
     return existing;
   }
 
-  const home = path.join(ctx.config.homesDir, crypto.randomUUID());
-  fs.mkdirSync(ctx.config.homesDir, { recursive: true, mode: 0o700 });
-  fs.mkdirSync(home, { recursive: false, mode: 0o700 });
+  const { home } = createManagedHome(ctx.config, request.provider);
   try {
     await credentialSync.writeBundle(home, request.bundle, 'if-newer');
     return await ctx.profiles.createReplica({
@@ -385,9 +382,7 @@ export async function adoptProfile(
     );
   }
 
-  const home = path.join(ctx.config.homesDir, crypto.randomUUID());
-  fs.mkdirSync(ctx.config.homesDir, { recursive: true, mode: 0o700 });
-  fs.mkdirSync(home, { recursive: false, mode: 0o700 });
+  const { home } = createManagedHome(ctx.config, params.provider);
   try {
     await credentialSync.writeBundle(home, bundle, 'if-newer');
     return await ctx.profiles.createReplica({
