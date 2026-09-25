@@ -258,6 +258,24 @@ never sends them to the browser or returns them from its API. They cross to an
 approved target only for an explicit profile-copy or credential-sync action,
 inside the bounded SSH agent protocol.
 
+### Migrate older Codex homes
+
+After pulling an update, rebuild APM and move managed Codex homes with old
+UUID-length directory names:
+
+```sh
+apm stop
+pnpm install:cli
+node scripts/migrate-codex-homes.mjs
+apm start --no-open
+```
+
+Run these commands from the repository. The migration leaves an alias at each
+old path for existing absolute links and can be run again. It refuses a running
+APM daemon, an existing Codex control socket, or a new path that is still too
+long. Stop any Codex daemon using an old home before running it. If a socket
+remains after the daemon has stopped, inspect that stale socket before retrying.
+
 External tools can resolve per-provider defaults, exact profile homes and usage
 without adopting apm's PTY lifecycle. The versioned CLI contract and its
 missing-default semantics are documented in

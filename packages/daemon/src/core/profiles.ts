@@ -18,6 +18,7 @@ import { ApiFailure, type EventBus, type ProfileService } from '../context.js';
 import { createManagedHome, profileCacheDirectory, profileShimDirectory } from './profilePaths.js';
 
 export type AdapterRegistry = Readonly<Record<ProviderId, ProviderAdapter>>;
+const LEGACY_MANAGED_HOME = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/;
 
 interface ProfileStoreFile {
   version: 2;
@@ -378,6 +379,11 @@ export function createProfileService(
           );
         }
         fs.rmSync(profile.home, { recursive: true, force: true });
+        for (const entry of fs.readdirSync(config.homesDir, { withFileTypes: true })) {
+          if (!entry.isSymbolicLink() || !LEGACY_MANAGED_HOME.test(entry.name)) continue;
+          const alias = path.join(config.homesDir, entry.name);
+          if (fs.readlinkSync(alias) === profile.home) fs.unlinkSync(alias);
+        }
       }
       fs.rmSync(profileCacheDirectory(config.cacheDir, profile.id), {
         recursive: true,
