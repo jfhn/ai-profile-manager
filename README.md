@@ -250,7 +250,8 @@ running or to see its recorded exit.
 State lives in `~/.local/share/apm` (override with `APM_DATA_DIR`, which is
 resolved to an absolute path at startup): profiles in `profiles.json`, approved
 remote declarations in `targets.json`, usage snapshots in SQLite, and managed
-provider homes under `homes/`. Raw credentials stay inside provider homes; apm
+provider homes under `homes/`. Codex home names are short enough for its Unix
+socket. Raw credentials stay inside provider homes; apm
 never sends them to the browser or returns them from its API. They cross to an
 approved target only for an explicit profile-copy or credential-sync action,
 inside the bounded SSH agent protocol.

@@ -26,6 +26,7 @@ Profiles contain provider config homes, not CLI installations. Sessions add the
 selected config-home variable to a process and resolve the provider CLI from
 the machine's `PATH`. Tool updates therefore run once per machine through the
 provider executable's built-in updater.
+Managed Codex homes use short names under `homes/` so its Unix control socket fits.
 
 Start reading at `packages/shared/src/api.ts`, then
 `packages/daemon/src/server.ts`, and finally `packages/web/src/App.svelte`.

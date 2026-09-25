@@ -12,7 +12,7 @@ export interface DaemonConfig {
   targetsFile: string;
   /** SQLite database for usage snapshots. */
   usageDb: string;
-  /** Managed profile homes live under here, one dir per profile id. */
+  /** Managed profile homes. */
   homesDir: string;
   /** Per-profile collector caches (OAuth usage cache etc.). */
   cacheDir: string;

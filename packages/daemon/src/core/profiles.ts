@@ -15,9 +15,10 @@ import {
 } from '@apm/shared';
 import type { DaemonConfig } from '../config.js';
 import { ApiFailure, type EventBus, type ProfileService } from '../context.js';
-import { profileCacheDirectory, profileShimDirectory } from './profilePaths.js';
+import { createManagedHome, profileCacheDirectory, profileShimDirectory } from './profilePaths.js';
 
 export type AdapterRegistry = Readonly<Record<ProviderId, ProviderAdapter>>;
+const LEGACY_MANAGED_HOME = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/;
 
 interface ProfileStoreFile {
   version: 2;
@@ -378,6 +379,13 @@ export function createProfileService(
           );
         }
         fs.rmSync(profile.home, { recursive: true, force: true });
+        if (profile.provider === 'codex') {
+          for (const entry of fs.readdirSync(config.homesDir, { withFileTypes: true })) {
+            if (!entry.isSymbolicLink() || !LEGACY_MANAGED_HOME.test(entry.name)) continue;
+            const alias = path.join(config.homesDir, entry.name);
+            if (fs.readlinkSync(alias) === profile.home) fs.unlinkSync(alias);
+          }
+        }
       }
       fs.rmSync(profileCacheDirectory(config.cacheDir, profile.id), {
         recursive: true,
@@ -423,10 +431,7 @@ export function createProfileService(
 
     async startWizard(provider: ProviderId) {
       const adapter = adapterFor(provider);
-      const id = crypto.randomUUID();
-      const home = path.join(config.homesDir, id);
-      fs.mkdirSync(config.homesDir, { recursive: true, mode: 0o700 });
-      fs.mkdirSync(home, { recursive: false, mode: 0o700 });
+      const { id, home } = createManagedHome(config, provider);
       const profile: Profile = {
         id,
         provider,
