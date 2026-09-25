@@ -19,12 +19,6 @@ export function createManagedHome(
   provider: ProviderId,
 ): { id: string; home: string } {
   fs.mkdirSync(config.homesDir, { recursive: true, mode: 0o700 });
-  if (provider === 'codex') {
-    const candidate = path.join(fs.realpathSync(config.homesDir), '0'.repeat(16));
-    if (!codexControlSocketFits(candidate)) {
-      throw new Error(`Codex home path is too long: ${candidate}`);
-    }
-  }
   for (;;) {
     const id = crypto.randomUUID();
     const name = provider === 'codex' ? id.replaceAll('-', '').slice(0, 16) : id;
