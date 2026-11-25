@@ -58,7 +58,10 @@ export async function startDaemon(config: DaemonConfig): Promise<DaemonHandle> {
 
   // ---- security gates -----------------------------------------------------
   app.addHook('onRequest', async (req, reply) => {
-    if (!req.url.startsWith('/api')) return; // static assets are public; WS handled separately
+    // Gate on the matched route, not req.url: the router decodes the path, so
+    // `/%61pi/status` reaches the /api/status handler. @fastify/static's
+    // wildcard is the only public route.
+    if (req.routeOptions.url === '/*') return;
 
     if (!originAllowed(req.headers.origin)) {
       return reply.code(403).send(err('forbidden-origin', 'Cross-origin requests are not allowed'));
