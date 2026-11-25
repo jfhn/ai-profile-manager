@@ -1,6 +1,13 @@
-import type { Profile, ProfileCopyRequest, ProfileCopyResponse, UsageSnapshot } from '@apm/shared';
+import type {
+  Profile,
+  ProfileCopyRequest,
+  ProfileCopyResponse,
+  ProviderId,
+  UsageSnapshot,
+} from '@apm/shared';
 import { fireEvent, render, screen, waitFor } from '@testing-library/svelte';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
+import type { api } from '../api';
 import { profileView } from '../runway';
 import { app } from '../stores.svelte';
 import { FakeDaemon, loginCommand } from '../test-support/fake-daemon';
@@ -13,8 +20,8 @@ import ProfileCard from './ProfileCard.svelte';
 const mocks = vi.hoisted(() => ({
   daemon: null as unknown as FakeDaemon,
   refreshedProfiles: [] as string[],
-  setDefault: null as unknown as ReturnType<typeof vi.fn>,
-  copyProfile: null as unknown as ReturnType<typeof vi.fn>,
+  setDefault: null as unknown as Mock<typeof api.setDefault>,
+  copyProfile: null as unknown as Mock<typeof api.copyProfile>,
   verifyHost: vi.fn(),
   confirmHost: vi.fn(),
 }));
@@ -35,7 +42,7 @@ vi.mock('../api', () => ({
     refreshProfile: async (id: string) => {
       mocks.refreshedProfiles.push(id);
     },
-    setDefault: (provider: string, body: { profileId: string | null }) =>
+    setDefault: (provider: ProviderId, body: { profileId: string | null }) =>
       mocks.setDefault(provider, body),
     copyProfile: (id: string, body: ProfileCopyRequest) => mocks.copyProfile(id, body),
     verifyHost: mocks.verifyHost,
