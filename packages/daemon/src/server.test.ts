@@ -37,6 +37,17 @@ describe('daemon product surface', () => {
     ]);
   });
 
+  it('requires the token on every route except static files', async () => {
+    for (const [method, url] of [
+      ['GET', '/api/overview'],
+      ['GET', '/%61pi/overview'],
+      ['POST', '/nope'],
+    ] as const) {
+      const response = await daemon.app.inject({ method, url });
+      expect(response.statusCode, `${method} ${url}`).toBe(401);
+    }
+  });
+
   it('does not register the removed service API', async () => {
     const response = await daemon.app.inject({
       method: 'GET',
