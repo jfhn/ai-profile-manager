@@ -17,6 +17,10 @@ export default tseslint.config(
     rules: { 'no-undef': 'off' },
   },
   {
+    files: ['scripts/**/*.mjs'],
+    languageOptions: { globals: { Buffer: 'readonly', console: 'readonly', process: 'readonly' } },
+  },
+  {
     rules: {
       '@typescript-eslint/no-unused-vars': [
         'error',

@@ -5,7 +5,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   LOCAL_TARGET_ID,
   TARGET_CAPABILITIES,
@@ -73,12 +73,15 @@ describe('local transport', () => {
   let shimsDir: string;
 
   beforeEach(() => {
+    // Unbound runs inherit the shell's env, and an apm-managed shell sets this.
+    vi.stubEnv('CLAUDE_CONFIG_DIR', undefined);
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'apm-local-'));
     shimsDir = path.join(dir, 'shims');
     transport = createLocalTransport({ profiles: profiles(), shimsDir });
   });
 
   afterEach(async () => {
+    vi.unstubAllEnvs();
     await transport.close();
     fs.rmSync(dir, { recursive: true, force: true });
   });
