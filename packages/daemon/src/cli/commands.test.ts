@@ -223,7 +223,7 @@ describe('profilesContract', () => {
 
     const unknownProvider = singleProfileOverview('claude-work');
     (unknownProvider.profiles[0] as { provider: string }).provider = 'openai';
-    expect(() => profilesContract(unknownProvider)).toThrow(/Invalid enum value/);
+    expect(() => profilesContract(unknownProvider)).toThrow(/Invalid option/);
   });
 
   it('downgrades malformed or mismatched usage to null', () => {
@@ -297,7 +297,7 @@ describe('target integration contracts', () => {
         ...response,
         targets: [{ ...response.targets[0], capabilities: ['future-capability'] }],
       }),
-    ).toThrow(/Invalid enum value/);
+    ).toThrow(/Invalid option/);
   });
 
   it('emits target-scoped profiles without homes and preserves opaque ids', () => {
