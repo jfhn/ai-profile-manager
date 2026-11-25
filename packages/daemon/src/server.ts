@@ -58,11 +58,9 @@ export async function startDaemon(config: DaemonConfig): Promise<DaemonHandle> {
 
   // ---- security gates -----------------------------------------------------
   app.addHook('onRequest', async (req, reply) => {
-    // Decide on the matched route, never on req.url. The router decodes and
-    // normalises the path, so `/%61pi/status` and the absolute-form target
-    // `http://127.0.0.1/api/status` both reach /api handlers. @fastify/static's
-    // wildcard is the only public route; every other route, including ones
-    // added later, needs the token. WS upgrades are checked in sessions/ws.ts.
+    // Gate on the matched route, not req.url: the router decodes the path, so
+    // `/%61pi/status` reaches the /api/status handler. @fastify/static's
+    // wildcard is the only public route.
     if (req.routeOptions.url === '/*') return;
 
     if (!originAllowed(req.headers.origin)) {

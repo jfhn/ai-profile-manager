@@ -37,11 +37,11 @@ describe('daemon product surface', () => {
     ]);
   });
 
-  it('requires the token on every route except static files', async () => {
+  it('rejects requests without the token, including encoded and unmatched paths', async () => {
     for (const [method, url] of [
       ['GET', '/api/overview'],
       ['GET', '/%61pi/overview'],
-      ['POST', '/nope'],
+      ['POST', '/nope'], // GET would match the static wildcard once web/dist is built
     ] as const) {
       const response = await daemon.app.inject({ method, url });
       expect(response.statusCode, `${method} ${url}`).toBe(401);
